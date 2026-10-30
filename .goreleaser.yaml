@@ -1,0 +1,47 @@
+version: 2
+
+project_name: agentbox
+
+builds:
+  - id: agentbox
+    main: ./cmd/agentbox
+    binary: agentbox
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }} -X main.commit={{ .FullCommit }}
+    # Reproducible archives: file times come from the commit, not the runner.
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+# The checksum file is signed with cosign's keyless flow: the certificate
+# binds the signature to this repository's release workflow and the tag.
+# Verification is described in README.md.
+signs:
+  - cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args:
+      - sign-blob
+      - --bundle=${signature}
+      - --yes
+      - ${artifact}
+
+release:
+  prerelease: auto
+
+changelog:
+  use: github

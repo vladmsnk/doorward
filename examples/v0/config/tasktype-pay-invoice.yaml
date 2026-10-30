@@ -1,0 +1,38 @@
+apiVersion: agentbox/v0
+kind: TaskType
+metadata:
+  name: pay-invoice
+  description: Pay one invoice the user picked in the billing app.
+spec:
+  object:
+    type: invoice
+    id_pattern: "^inv_[A-Za-z0-9]{6,32}$"
+  # Only the billing app may start this task; an agent cannot.
+  initiators: [billing-app]
+  ttl: 15m
+  permissions:
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments, pay_invoice]
+      constraints:
+        # Resolved to `equals: <the invoice ID>` when the grant is issued.
+        /invoice_id: { task_object: true }
+    - locations: [https://payments.example.internal]
+      actions: [pay_invoice]
+      constraints:
+        /amount: { min: 0.01, max: 5000 }
+        /currency: { one_of: [EUR, USD] }
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [lookup_account]
+  limits:
+    # Shared by every grant of the task, however it is delegated.
+    - name: payout-total
+      kind: sum
+      field: /amount
+      actions: [pay_invoice]
+      max: 5000
+    - name: calls
+      kind: count
+      max: 50
+  delegation:
+    max_depth: 1
+    recipients: [ledger-agent]

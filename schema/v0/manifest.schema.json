@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/manifest.schema.json",
+  "title": "Manifest",
+  "description": "The operations one resource exposes through the box's points of enforcement: the list of tools L1 asks the company for. It assigns each operation its sensitivity tier and says where its constrainable arguments are.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "$ref": "common.schema.json#/$defs/apiVersion" },
+    "kind": { "const": "Manifest" },
+    "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "required": ["audience", "protocol", "operations"],
+      "properties": {
+        "audience": { "$ref": "common.schema.json#/$defs/audience" },
+        "protocol": { "enum": ["http", "mcp"] },
+        "operations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "protocol": { "const": "http" } } },
+      "then": {
+        "properties": {
+          "operations": {
+            "items": {
+              "required": ["http"],
+              "properties": {
+                "params": { "additionalProperties": { "required": ["in"] } }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "operations": {
+            "items": {
+              "properties": {
+                "http": false,
+                "params": { "additionalProperties": { "properties": { "in": false } } }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "operation": {
+      "type": "object",
+      "required": ["name", "sensitivity"],
+      "properties": {
+        "name": { "$ref": "common.schema.json#/$defs/operation" },
+        "description": { "type": "string", "maxLength": 1024 },
+        "sensitivity": { "$ref": "common.schema.json#/$defs/sensitivity" },
+        "http": {
+          "type": "object",
+          "required": ["method", "path"],
+          "properties": {
+            "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+            "path": {
+              "description": "Path template; {name} segments are path parameters.",
+              "type": "string",
+              "pattern": "^/[^\\s?#]*$"
+            }
+          },
+          "additionalProperties": false
+        },
+        "params": {
+          "description": "Arguments that constraints may refer to, keyed by their JSON Pointer in the call's arguments.",
+          "type": "object",
+          "propertyNames": { "$ref": "common.schema.json#/$defs/pointer" },
+          "additionalProperties": { "$ref": "#/$defs/param" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "param": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["string", "number", "integer", "boolean"] },
+        "in": {
+          "description": "Where an HTTP argument comes from. MCP arguments have no location.",
+          "enum": ["path", "query", "body"]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

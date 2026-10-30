@@ -1,0 +1,20 @@
+apiVersion: agentbox/v0
+kind: Manifest
+metadata:
+  name: ledger-mcp
+  description: The ledger's MCP server. Tool names are the operation names.
+spec:
+  audience: https://ledger.example.internal/mcp
+  protocol: mcp
+  operations:
+    - name: lookup_account
+      sensitivity: low
+      params:
+        /account_id: { type: string }
+
+    - name: post_entry
+      sensitivity: high
+      params:
+        /account_id: { type: string }
+        /amount: { type: number }
+        /memo: { type: string }

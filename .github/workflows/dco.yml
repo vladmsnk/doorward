@@ -1,0 +1,22 @@
+name: DCO
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  sign-off:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Every commit is signed off
+        run: >-
+          scripts/check-dco.sh
+          ${{ github.event.pull_request.base.sha }}
+          ${{ github.event.pull_request.head.sha }}

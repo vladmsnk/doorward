@@ -1,0 +1,15 @@
+apiVersion: agentbox/v0
+kind: Boundary
+metadata:
+  name: ledger-agent
+  description: Looks up ledger accounts on behalf of other agents. Read only.
+spec:
+  owner:
+    team: finance-platform
+  task_types: [pay-invoice]
+  max_sensitivity: low
+  max_ttl: 10m
+  permissions:
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [lookup_account]
+  # No delegation block: this agent cannot pass anything on.

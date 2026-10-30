@@ -1,0 +1,251 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/decision.schema.json",
+  "title": "Decision",
+  "description": "Record of one authorization decision, carrying every element level L1 asks for: who acts, on whose behalf, where the decision was made, where it was enforced, and what was asked. The request is kept apart from the principal on purpose: what the agent asked for is not what it is allowed.",
+  "type": "object",
+  "required": ["id", "time", "request", "outcome", "checks", "pdp", "pep"],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/id" },
+    "time": {
+      "description": "When the decision was made, by the box's trusted time source. Always UTC with millisecond precision, so the record has one serialization for the hash chain.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "request": {
+      "description": "The decision core's input, an AuthZEN 1.0 evaluation request, as the point of enforcement sent it.",
+      "type": "object",
+      "required": ["subject", "action", "resource"],
+      "properties": {
+        "subject": { "$ref": "#/$defs/entity" },
+        "action": {
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "properties": { "type": "object" }
+          },
+          "additionalProperties": false
+        },
+        "resource": { "$ref": "#/$defs/entity" },
+        "context": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "principal": {
+      "description": "Who acted and for whom, as established from the verified grant. Absent when no grant could be verified.",
+      "type": "object",
+      "required": ["user", "agent"],
+      "properties": {
+        "user": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "agent": { "$ref": "common.schema.json#/$defs/name" },
+        "actors": {
+          "description": "Agents earlier in the delegation chain, nearest first.",
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/name" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "grant": {
+      "description": "The grant the decision was made against.",
+      "type": "object",
+      "required": ["id", "root", "depth", "task"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "root": { "$ref": "common.schema.json#/$defs/id" },
+        "parent": { "$ref": "common.schema.json#/$defs/id" },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "task": {
+          "type": "object",
+          "required": ["id", "type"],
+          "properties": {
+            "id": { "$ref": "common.schema.json#/$defs/id" },
+            "type": { "$ref": "common.schema.json#/$defs/name" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "action_hash": {
+      "description": "Digest of the canonical form of the call (RFC 8785). It links grant, request, decision and result, and is what an approval is bound to.",
+      "$ref": "common.schema.json#/$defs/digest"
+    },
+    "sensitivity": { "$ref": "common.schema.json#/$defs/sensitivity" },
+    "outcome": { "enum": ["allow", "deny", "approval_required"] },
+    "reasons": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/reason" }
+    },
+    "checks": {
+      "description": "Every check the core ran, in order, with its result.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/check" },
+      "minItems": 1
+    },
+    "pdp": {
+      "description": "Where the decision was made.",
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/name" },
+        "version": { "type": "string", "minLength": 1 },
+        "policy_version": { "$ref": "common.schema.json#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "pep": {
+      "description": "Where the decision was enforced.",
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/name" },
+        "kind": { "enum": ["gateway", "ext_authz", "sdk", "broker"] }
+      },
+      "additionalProperties": false
+    },
+    "limits": {
+      "description": "What an allowed call drew from each budget.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "consumed", "remaining"],
+        "properties": {
+          "name": { "$ref": "common.schema.json#/$defs/name" },
+          "consumed": { "type": "number", "minimum": 0 },
+          "remaining": { "type": "number", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    },
+    "approval": {
+      "description": "The approval request opened for this call.",
+      "type": "object",
+      "required": ["request"],
+      "properties": {
+        "request": { "$ref": "common.schema.json#/$defs/id" }
+      },
+      "additionalProperties": false
+    },
+    "chain": {
+      "description": "Position in the hash-chained journal. The first record has no prev.",
+      "type": "object",
+      "required": ["seq", "hash"],
+      "properties": {
+        "seq": { "type": "integer", "minimum": 0 },
+        "prev": { "$ref": "common.schema.json#/$defs/digest" },
+        "hash": { "$ref": "common.schema.json#/$defs/digest" }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "seq": { "const": 0 } } },
+      "then": { "not": { "required": ["prev"] } },
+      "else": { "required": ["prev"] }
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "description": "An allowed call is always tied to a verified grant, a principal and a canonical action.",
+      "if": { "properties": { "outcome": { "const": "allow" } } },
+      "then": { "required": ["principal", "grant", "action_hash"] }
+    },
+    {
+      "description": "A refusal says why, and spends no budget: limits are drawn last, only for an allowed call.",
+      "if": { "properties": { "outcome": { "const": "deny" } } },
+      "then": {
+        "required": ["reasons"],
+        "properties": { "reasons": { "minItems": 1 }, "limits": false }
+      }
+    },
+    {
+      "description": "A call that needs approval names the approval request and spends no budget yet.",
+      "if": { "properties": { "outcome": { "const": "approval_required" } } },
+      "then": {
+        "required": ["approval", "action_hash"],
+        "properties": { "limits": false }
+      }
+    }
+  ],
+  "$defs": {
+    "entity": {
+      "description": "AuthZEN subject or resource.",
+      "type": "object",
+      "required": ["type", "id"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "properties": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "reason": {
+      "type": "object",
+      "required": ["code"],
+      "properties": {
+        "code": {
+          "description": "Why the call was refused or held. Custom codes start with x-.",
+          "anyOf": [
+            {
+              "enum": [
+                "request_malformed",
+                "grant_missing",
+                "grant_malformed",
+                "grant_signature_invalid",
+                "grant_expired",
+                "grant_not_yet_valid",
+                "grant_revoked",
+                "pop_missing",
+                "pop_invalid",
+                "pop_replayed",
+                "audience_mismatch",
+                "action_not_granted",
+                "field_missing",
+                "constraint_violated",
+                "sensitivity_exceeded",
+                "delegation_invalid",
+                "policy_denied",
+                "limit_exceeded",
+                "approval_required",
+                "time_untrusted",
+                "internal_error"
+              ]
+            },
+            { "type": "string", "pattern": "^x-[a-z0-9_]+$" }
+          ]
+        },
+        "message": { "type": "string", "maxLength": 1024 },
+        "field": {
+          "description": "The argument that did not match the grant, for 'request ⊆ grant' refusals.",
+          "$ref": "common.schema.json#/$defs/pointer"
+        }
+      },
+      "additionalProperties": false
+    },
+    "check": {
+      "type": "object",
+      "required": ["name", "result"],
+      "properties": {
+        "name": {
+          "enum": [
+            "request",
+            "signature",
+            "status",
+            "pop",
+            "audience",
+            "time",
+            "delegation",
+            "subset",
+            "sensitivity",
+            "policy",
+            "limits"
+          ]
+        },
+        "result": { "enum": ["pass", "fail", "skip"] },
+        "detail": { "type": "string", "maxLength": 1024 }
+      },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/grant.schema.json",
+  "title": "Grant",
+  "description": "Claims of an agent grant: a short-lived JWT the STS issues for one task, bound to the sidecar's key and placed in the task's grant tree. The agent's model never sees it.",
+  "type": "object",
+  "required": [
+    "iss",
+    "sub",
+    "aud",
+    "iat",
+    "exp",
+    "jti",
+    "act",
+    "authorization_details",
+    "task",
+    "root",
+    "depth",
+    "flow"
+  ],
+  "properties": {
+    "iss": {
+      "description": "The STS that issued the grant.",
+      "type": "string",
+      "format": "uri"
+    },
+    "sub": {
+      "description": "The user on whose behalf the agent acts. sub and act are kept separate.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "aud": {
+      "description": "Resource servers that accept the grant.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/audience" },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "iat": { "$ref": "#/$defs/numericDate" },
+    "nbf": { "$ref": "#/$defs/numericDate" },
+    "exp": { "$ref": "#/$defs/numericDate" },
+    "jti": { "$ref": "common.schema.json#/$defs/id" },
+    "act": {
+      "description": "The agent acting now; prior agents of a delegation chain are nested inside (RFC 8693 §4.1).",
+      "$ref": "#/$defs/actor"
+    },
+    "cnf": {
+      "description": "Key the grant is bound to (RFC 9449 §6.1). Every grant from the box's own STS carries one; it is optional here only for clients that cannot hold a key, such as hosted agents run by a vendor.",
+      "type": "object",
+      "required": ["jkt"],
+      "properties": {
+        "jkt": {
+          "description": "JWK SHA-256 thumbprint (RFC 7638), base64url.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "authorization_details": {
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/authorizationDetail" },
+      "minItems": 1
+    },
+    "task": {
+      "description": "The task this grant serves, as the initiating application declared it.",
+      "type": "object",
+      "required": ["id", "type", "object", "initiator"],
+      "properties": {
+        "id": { "$ref": "common.schema.json#/$defs/id" },
+        "type": { "$ref": "common.schema.json#/$defs/name" },
+        "object": {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "$ref": "common.schema.json#/$defs/name" },
+            "id": { "type": "string", "minLength": 1, "maxLength": 255 }
+          },
+          "additionalProperties": false
+        },
+        "initiator": {
+          "description": "The application that started the task.",
+          "$ref": "common.schema.json#/$defs/name"
+        }
+      },
+      "additionalProperties": false
+    },
+    "root": {
+      "description": "jti of the task's root grant. Revoking it revokes the whole tree.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "parent": {
+      "description": "jti of the grant this one was narrowed from. Present exactly when depth > 0.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "depth": {
+      "description": "Steps from the root grant: 0 for the root itself.",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "flow": {
+      "description": "The delegation flow the grant belongs to. An offer and its redeem must carry the same flow, so two chains cannot be spliced together.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "limits": {
+      "description": "Budgets this grant draws from, shared with the rest of the task's tree by name.",
+      "type": "array",
+      "items": { "$ref": "common.schema.json#/$defs/limit" }
+    },
+    "status": {
+      "description": "Where to check revocation (Token Status List).",
+      "type": "object",
+      "required": ["status_list"],
+      "properties": {
+        "status_list": {
+          "type": "object",
+          "required": ["idx", "uri"],
+          "properties": {
+            "idx": { "type": "integer", "minimum": 0 },
+            "uri": { "type": "string", "format": "uri" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "if": { "properties": { "depth": { "const": 0 } } },
+  "then": { "not": { "required": ["parent"] } },
+  "else": { "required": ["parent"] },
+  "$defs": {
+    "numericDate": {
+      "description": "Seconds since the Unix epoch (RFC 7519 §2).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "actor": {
+      "type": "object",
+      "required": ["sub"],
+      "properties": {
+        "sub": { "$ref": "common.schema.json#/$defs/name" },
+        "iss": {
+          "description": "Trust domain of the actor, when it is not this box's own: an agent of a federated partner.",
+          "type": "string",
+          "format": "uri"
+        },
+        "act": { "$ref": "#/$defs/actor" }
+      },
+      "additionalProperties": false
+    }
+  }
+}

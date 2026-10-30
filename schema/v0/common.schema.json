@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/common.schema.json",
+  "title": "Shared definitions of the v0 schemas",
+  "$defs": {
+    "apiVersion": {
+      "description": "Version of the configuration format. A document written for another version is rejected rather than guessed at.",
+      "const": "agentbox/v0"
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["name"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "description": { "type": "string", "maxLength": 1024 },
+        "labels": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/name" },
+          "additionalProperties": { "type": "string", "maxLength": 256 }
+        }
+      },
+      "additionalProperties": false
+    },
+    "name": {
+      "description": "Name of an agent, application, task type, manifest or limit: lower case, digits, '.', '_' and '-', starting and ending with a letter or digit.",
+      "type": "string",
+      "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
+    },
+    "id": {
+      "description": "Opaque identifier issued by the box (grant, task, flow, decision, approval). By convention it starts with a type prefix such as grt_ or tsk_.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
+    },
+    "operation": {
+      "description": "Name of an operation as the manifest declares it: the MCP tool name, or the name given to an HTTP route. No wildcards: a grant lists every operation it covers.",
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_.-]{1,128}$"
+    },
+    "audience": {
+      "description": "Resource server identifier (RFC 8707 resource indicator, RFC 9396 locations).",
+      "type": "string",
+      "format": "uri",
+      "pattern": "^https?://"
+    },
+    "pointer": {
+      "description": "JSON Pointer (RFC 6901) into the arguments of an operation call. The root pointer \"\" is not a field and is not allowed.",
+      "type": "string",
+      "pattern": "^(/([^~/]|~[01])*)+$"
+    },
+    "duration": {
+      "description": "Duration such as 90s, 15m or 1h30m.",
+      "type": "string",
+      "pattern": "^([0-9]+(\\.[0-9]+)?(ms|s|m|h))+$"
+    },
+    "digest": {
+      "description": "SHA-256 digest, base64url without padding, with its algorithm prefix.",
+      "type": "string",
+      "pattern": "^sha-256:[A-Za-z0-9_-]{43}$"
+    },
+    "scalar": {
+      "type": ["string", "number", "boolean"]
+    },
+    "sensitivity": {
+      "description": "Sensitivity tier of an operation. The tier sets the grant lifetime, whether approval is needed, whether re-delegation is allowed and what happens on failure. Operations of the critical tier are the critical operations: they never run on a standing grant.",
+      "enum": ["low", "medium", "high", "critical"]
+    },
+    "constraintBounds": {
+      "description": "The ready-made constraint types. Every bound listed for a field must hold; a constrained field missing from the call fails the check. Each type can be compared with a narrower one, which is what makes 'request ⊆ grant' and narrowing on delegation decidable.",
+      "properties": {
+        "max": { "type": "number" },
+        "min": { "type": "number" },
+        "one_of": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/scalar" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "equals": { "$ref": "#/$defs/scalar" },
+        "prefix": { "type": "string", "minLength": 1 }
+      }
+    },
+    "constraint": {
+      "description": "Constraint on one field, as it appears in a grant: fully resolved.",
+      "type": "object",
+      "$ref": "#/$defs/constraintBounds",
+      "minProperties": 1,
+      "unevaluatedProperties": false
+    },
+    "constraintTemplate": {
+      "description": "Constraint on one field, as written in a boundary or a task type. task_object: true means the field must equal the ID of the task's object; the STS resolves it to equals when it issues the grant.",
+      "type": "object",
+      "$ref": "#/$defs/constraintBounds",
+      "properties": {
+        "task_object": { "const": true }
+      },
+      "minProperties": 1,
+      "unevaluatedProperties": false
+    },
+    "permission": {
+      "description": "What may be called, where, and with which argument values, as written in a boundary or a task type.",
+      "type": "object",
+      "required": ["locations", "actions"],
+      "properties": {
+        "locations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/audience" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "constraints": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/pointer" },
+          "additionalProperties": { "$ref": "#/$defs/constraintTemplate" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "authorizationDetail": {
+      "description": "One authorization_details entry of a grant (RFC 9396).",
+      "type": "object",
+      "required": ["type", "locations", "actions"],
+      "properties": {
+        "type": { "const": "tool_call" },
+        "locations": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/audience" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "constraints": {
+          "type": "object",
+          "propertyNames": { "$ref": "#/$defs/pointer" },
+          "additionalProperties": { "$ref": "#/$defs/constraint" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "limit": {
+      "description": "Budget shared by every grant of one task: the limit holds in total, however the task is delegated. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts.",
+      "type": "object",
+      "required": ["name", "kind", "max"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "kind": { "enum": ["count", "sum"] },
+        "max": { "type": "number", "minimum": 0 },
+        "field": { "$ref": "#/$defs/pointer" },
+        "actions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/operation" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "sum" } } },
+          "then": { "required": ["field"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "count" } } },
+          "then": {
+            "properties": { "max": { "type": "integer" }, "field": false }
+          }
+        }
+      ]
+    },
+    "delegation": {
+      "description": "Who may receive a narrower grant from this one, and how deep the chain may go. Absent means no delegation. Recipients are always listed: there is no 'any agent'.",
+      "type": "object",
+      "required": ["max_depth"],
+      "properties": {
+        "max_depth": { "type": "integer", "minimum": 0, "maximum": 8 },
+        "recipients": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/name" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "max_depth": { "minimum": 1 } } },
+      "then": { "required": ["recipients"] }
+    }
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "id": "dec_01JBXR6P5R7T9V1X3Z5B7D9F1H",
+  "time": "2026-10-30T09:32:31.250Z",
+  "request": {
+    "subject": { "type": "agent", "id": "ledger-agent" },
+    "action": { "name": "lookup_account" },
+    "resource": {
+      "type": "tool_call",
+      "id": "https://ledger.example.internal/mcp",
+      "properties": { "arguments": { "account_id": "acc_EU_448120" } }
+    },
+    "context": { "grant": "grt_01JBXR6M3K8P1Q5S7U9W2Y4ADD" }
+  },
+  "principal": {
+    "user": "alice@example.com",
+    "agent": "ledger-agent",
+    "actors": ["invoice-agent"]
+  },
+  "grant": {
+    "id": "grt_01JBXR6M3K8P1Q5S7U9W2Y4ADD",
+    "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "parent": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "depth": 1,
+    "task": { "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB", "type": "pay-invoice" }
+  },
+  "action_hash": "sha-256:example-hash-not-computed-action-0000000004",
+  "sensitivity": "low",
+  "outcome": "allow",
+  "checks": [
+    { "name": "request", "result": "pass" },
+    { "name": "signature", "result": "pass" },
+    { "name": "status", "result": "pass" },
+    { "name": "pop", "result": "pass" },
+    { "name": "audience", "result": "pass" },
+    { "name": "time", "result": "pass" },
+    { "name": "delegation", "result": "pass" },
+    { "name": "subset", "result": "pass" },
+    { "name": "sensitivity", "result": "pass" },
+    { "name": "policy", "result": "pass" },
+    { "name": "limits", "result": "pass" }
+  ],
+  "pdp": {
+    "id": "core-1",
+    "version": "0.1.0-dev",
+    "policy_version": "sha-256:example-hash-not-computed-policy-0000000001"
+  },
+  "pep": { "id": "mcp-gateway-1", "kind": "gateway" },
+  "limits": [{ "name": "calls", "consumed": 1, "remaining": 9 }],
+  "chain": {
+    "seq": 3,
+    "prev": "sha-256:example-hash-not-computed-record-0000000003",
+    "hash": "sha-256:example-hash-not-computed-record-0000000004"
+  }
+}

@@ -1,0 +1,27 @@
+apiVersion: agentbox/v0
+kind: Boundary
+metadata:
+  name: invoice-agent
+  description: Pays and inspects invoices for billing users.
+spec:
+  owner:
+    team: payments
+    contact: payments-oncall@example.com
+  task_types: [pay-invoice]
+  max_sensitivity: critical
+  max_ttl: 30m
+  permissions:
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments, pay_invoice]
+      constraints:
+        /amount: { max: 10000 }
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [lookup_account]
+  limits:
+    - name: payout-total
+      kind: sum
+      field: /amount
+      max: 10000
+  delegation:
+    max_depth: 1
+    recipients: [ledger-agent]

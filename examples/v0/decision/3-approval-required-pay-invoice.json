@@ -1,0 +1,57 @@
+{
+  "id": "dec_01JBXR5Q7W9Y1A3C5E7G9J1L3N",
+  "time": "2026-10-30T09:32:05.902Z",
+  "request": {
+    "subject": { "type": "agent", "id": "invoice-agent" },
+    "action": { "name": "pay_invoice" },
+    "resource": {
+      "type": "tool_call",
+      "id": "https://payments.example.internal",
+      "properties": {
+        "arguments": { "invoice_id": "inv_7Q2M9X4K", "amount": 1200, "currency": "EUR" }
+      }
+    },
+    "context": { "grant": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA" }
+  },
+  "principal": { "user": "alice@example.com", "agent": "invoice-agent" },
+  "grant": {
+    "id": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "depth": 0,
+    "task": { "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB", "type": "pay-invoice" }
+  },
+  "action_hash": "sha-256:example-hash-not-computed-action-0000000003",
+  "sensitivity": "critical",
+  "outcome": "approval_required",
+  "reasons": [
+    {
+      "code": "approval_required",
+      "message": "pay_invoice is critical: it runs only on a single-use grant after two approvals"
+    }
+  ],
+  "checks": [
+    { "name": "request", "result": "pass" },
+    { "name": "signature", "result": "pass" },
+    { "name": "status", "result": "pass" },
+    { "name": "pop", "result": "pass" },
+    { "name": "audience", "result": "pass" },
+    { "name": "time", "result": "pass" },
+    { "name": "delegation", "result": "skip", "detail": "root grant" },
+    { "name": "subset", "result": "pass" },
+    { "name": "sensitivity", "result": "fail", "detail": "critical tier needs a single-use grant" },
+    { "name": "policy", "result": "skip" },
+    { "name": "limits", "result": "skip" }
+  ],
+  "pdp": {
+    "id": "core-1",
+    "version": "0.1.0-dev",
+    "policy_version": "sha-256:example-hash-not-computed-policy-0000000001"
+  },
+  "pep": { "id": "gateway-1", "kind": "gateway" },
+  "approval": { "request": "apr_01JBXR5R2T4V6X8Z0B2D4F6H8K" },
+  "chain": {
+    "seq": 2,
+    "prev": "sha-256:example-hash-not-computed-record-0000000002",
+    "hash": "sha-256:example-hash-not-computed-record-0000000003"
+  }
+}

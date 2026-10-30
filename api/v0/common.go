@@ -1,0 +1,172 @@
+// Package v0 holds the Go types of the v0 schemas (F02): the grant, the
+// decision record, and the three documents a company writes — the manifest of
+// a resource's operations, the task type and the agent boundary.
+//
+// The JSON Schemas in schema/v0 are the contract. These types mirror them
+// field for field; the drift test in package schema fails the build when the
+// two disagree on a field name, on whether a field is required, or on the
+// members of an enum.
+package v0
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
+)
+
+// APIVersion is the apiVersion of every v0 configuration document.
+const APIVersion = "agentbox/v0"
+
+// TypeMeta is the envelope that tells documents of different kinds apart.
+type TypeMeta struct {
+	APIVersion string `json:"apiVersion"`
+	Kind       string `json:"kind"`
+}
+
+// ObjectMeta names a configuration document.
+type ObjectMeta struct {
+	Name        string            `json:"name"`
+	Description string            `json:"description,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+}
+
+// Sensitivity is the tier of an operation. Operations of the critical tier
+// never run on a standing grant.
+type Sensitivity string
+
+const (
+	SensitivityLow      Sensitivity = "low"
+	SensitivityMedium   Sensitivity = "medium"
+	SensitivityHigh     Sensitivity = "high"
+	SensitivityCritical Sensitivity = "critical"
+)
+
+// Permission is what may be called, where, and with which argument values, as
+// written in a boundary or a task type. Its constraints may still refer to the
+// task's object; the STS resolves them into an AuthorizationDetail.
+type Permission struct {
+	Locations   []string                      `json:"locations"`
+	Actions     []string                      `json:"actions"`
+	Constraints map[string]ConstraintTemplate `json:"constraints,omitempty"`
+}
+
+// AuthorizationDetailType is the RFC 9396 type of every entry the box issues.
+const AuthorizationDetailType = "tool_call"
+
+// AuthorizationDetail is one authorization_details entry of a grant
+// (RFC 9396). Its constraints are fully resolved: a grant never carries a
+// reference to the task's object, only the object's ID.
+type AuthorizationDetail struct {
+	Type        string                `json:"type"`
+	Locations   []string              `json:"locations"`
+	Actions     []string              `json:"actions"`
+	Constraints map[string]Constraint `json:"constraints,omitempty"`
+}
+
+// Constraint bounds one argument, keyed in its permission by the argument's
+// JSON Pointer. Every bound that is set must hold.
+type Constraint struct {
+	Max    *float64 `json:"max,omitempty"`
+	Min    *float64 `json:"min,omitempty"`
+	OneOf  []any    `json:"one_of,omitempty"`
+	Equals any      `json:"equals,omitempty"`
+	Prefix *string  `json:"prefix,omitempty"`
+}
+
+// ConstraintTemplate is a Constraint as written in configuration, where the
+// argument may also be tied to the task's object.
+type ConstraintTemplate struct {
+	Constraint
+	// TaskObject requires the argument to equal the ID of the task's object.
+	TaskObject bool `json:"task_object,omitempty"`
+}
+
+// LimitKind says what a limit counts.
+type LimitKind string
+
+const (
+	// LimitCount bounds the number of calls.
+	LimitCount LimitKind = "count"
+	// LimitSum bounds the total of a numeric argument.
+	LimitSum LimitKind = "sum"
+)
+
+// Limit is a budget shared by every grant of one task.
+type Limit struct {
+	Name string    `json:"name"`
+	Kind LimitKind `json:"kind"`
+	Max  float64   `json:"max"`
+	// Field is the argument a sum limit adds up.
+	Field string `json:"field,omitempty"`
+	// Actions, when set, restricts the operations the limit counts.
+	Actions []string `json:"actions,omitempty"`
+}
+
+// Delegation says who may receive a narrower grant, and how deep the chain may
+// go.
+type Delegation struct {
+	MaxDepth   int      `json:"max_depth"`
+	Recipients []string `json:"recipients,omitempty"`
+}
+
+// TimestampLayout is the one way a record writes a time: UTC, millisecond
+// precision. Records are hashed into a chain (F10), so a time must have a
+// single serialization; RFC 3339 alone allows many.
+const TimestampLayout = "2006-01-02T15:04:05.000Z"
+
+// Timestamp is a time.Time that always marshals in TimestampLayout.
+type Timestamp struct{ time.Time }
+
+func (t Timestamp) MarshalJSON() ([]byte, error) {
+	return json.Marshal(t.UTC().Format(TimestampLayout))
+}
+
+func (t *Timestamp) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("timestamp must be a string: %w", err)
+	}
+	parsed, err := time.Parse(TimestampLayout, raw)
+	if err != nil {
+		return fmt.Errorf("timestamp %q is not UTC with millisecond precision: %w", raw, err)
+	}
+	t.Time = parsed
+	return nil
+}
+
+// Duration is a time.Duration written as a string such as "15m".
+type Duration time.Duration
+
+// D returns the value as a time.Duration.
+func (d Duration) D() time.Duration { return time.Duration(d) }
+
+// String writes the duration without zero trailing units, so "15m" stays
+// "15m" instead of becoming "15m0s".
+func (d Duration) String() string {
+	s := time.Duration(d).String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
+}
+
+func (d Duration) MarshalJSON() ([]byte, error) {
+	return json.Marshal(d.String())
+}
+
+func (d *Duration) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return fmt.Errorf("duration must be a string such as \"15m\": %w", err)
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil {
+		return fmt.Errorf("parse duration %q: %w", raw, err)
+	}
+	*d = Duration(parsed)
+	return nil
+}

@@ -1,0 +1,143 @@
+// Command agentbox is the box's command-line tool. In v0 it validates
+// documents against the v0 schemas (F02) and reports its version (F01).
+package main
+
+import (
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"runtime/debug"
+
+	"github.com/vladmsnk/agentbox/schema"
+)
+
+// Set by the release build (see .goreleaser.yaml).
+var (
+	version = "dev"
+	commit  = ""
+)
+
+func main() {
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+const usage = `usage:
+  agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
+  agentbox version                          print the version
+
+Configuration documents (Boundary, TaskType, Manifest) name their kind; grants
+and decision records need --kind grant or --kind decision.
+`
+
+func run(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	switch args[0] {
+	case "validate":
+		return runValidate(args[1:], stdout, stderr)
+	case "version":
+		fmt.Fprintln(stdout, versionString())
+		return 0
+	case "help", "-h", "--help":
+		fmt.Fprint(stdout, usage)
+		return 0
+	default:
+		fmt.Fprintf(stderr, "agentbox: unknown command %q\n\n%s", args[0], usage)
+		return 2
+	}
+}
+
+func runValidate(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	kindFlag := fs.String("kind", "", "kind of every document: "+kindList())
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 2
+	}
+	if fs.NArg() == 0 {
+		fmt.Fprintln(stderr, "agentbox validate: no files given")
+		return 2
+	}
+
+	var kind schema.Kind
+	if *kindFlag != "" {
+		k, err := schema.ParseKind(*kindFlag)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentbox validate: %v\n", err)
+			return 2
+		}
+		kind = k
+	}
+
+	v, err := schema.NewValidator()
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox validate: %v\n", err)
+		return 1
+	}
+
+	failed := 0
+	for _, name := range fs.Args() {
+		data, err := os.ReadFile(name) // #nosec G304 -- reading the files the user named is the command's job
+		if err != nil {
+			fmt.Fprintf(stderr, "FAIL %v\n", err)
+			failed++
+			continue
+		}
+		sources, err := schema.Read(name, data, kind)
+		if err != nil {
+			fmt.Fprintf(stderr, "FAIL %v\n", err)
+			failed++
+			continue
+		}
+		for _, src := range sources {
+			if err := v.Validate(src.Kind, src.JSON); err != nil {
+				fmt.Fprintf(stderr, "FAIL %s (%s)\n%v\n", src.Name, src.Kind, err)
+				failed++
+				continue
+			}
+			fmt.Fprintf(stdout, "ok   %s (%s)\n", src.Name, src.Kind)
+		}
+	}
+	if failed > 0 {
+		fmt.Fprintf(stderr, "%d document(s) failed validation\n", failed)
+		return 1
+	}
+	return 0
+}
+
+func kindList() string {
+	s := ""
+	for i, k := range schema.Kinds {
+		if i > 0 {
+			s += ", "
+		}
+		s += string(k)
+	}
+	return s
+}
+
+// versionString reports the release version, or the VCS revision for a
+// development build.
+func versionString() string {
+	v, c := version, commit
+	if c == "" {
+		if info, ok := debug.ReadBuildInfo(); ok {
+			for _, s := range info.Settings {
+				if s.Key == "vcs.revision" {
+					c = s.Value
+				}
+			}
+		}
+	}
+	if c == "" {
+		return "agentbox " + v
+	}
+	return "agentbox " + v + " (" + c + ")"
+}

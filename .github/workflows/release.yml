@@ -1,0 +1,32 @@
+name: Release
+
+# A tag such as v0.0.1-test.1 produces a signed prerelease (F01); a tag
+# without a suffix produces a release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # create the GitHub release and upload its assets
+  id-token: write # keyless cosign signing with the workflow's OIDC identity
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: sigstore/cosign-installer@v3
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,0 +1,57 @@
+{
+  "id": "dec_01JBXR5H4K6M8N0P2Q4R6S8T0V",
+  "time": "2026-10-30T09:31:40.077Z",
+  "request": {
+    "subject": { "type": "agent", "id": "invoice-agent" },
+    "action": { "name": "pay_invoice" },
+    "resource": {
+      "type": "tool_call",
+      "id": "https://payments.example.internal",
+      "properties": {
+        "arguments": { "invoice_id": "inv_7Q2M9X4K", "amount": 7500, "currency": "EUR" }
+      }
+    },
+    "context": { "grant": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA" }
+  },
+  "principal": { "user": "alice@example.com", "agent": "invoice-agent" },
+  "grant": {
+    "id": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+    "depth": 0,
+    "task": { "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB", "type": "pay-invoice" }
+  },
+  "action_hash": "sha-256:example-hash-not-computed-action-0000000002",
+  "sensitivity": "critical",
+  "outcome": "deny",
+  "reasons": [
+    {
+      "code": "constraint_violated",
+      "field": "/amount",
+      "message": "7500 is above the grant's max of 5000"
+    }
+  ],
+  "checks": [
+    { "name": "request", "result": "pass" },
+    { "name": "signature", "result": "pass" },
+    { "name": "status", "result": "pass" },
+    { "name": "pop", "result": "pass" },
+    { "name": "audience", "result": "pass" },
+    { "name": "time", "result": "pass" },
+    { "name": "delegation", "result": "skip", "detail": "root grant" },
+    { "name": "subset", "result": "fail", "detail": "/amount" },
+    { "name": "sensitivity", "result": "skip" },
+    { "name": "policy", "result": "skip" },
+    { "name": "limits", "result": "skip" }
+  ],
+  "pdp": {
+    "id": "core-1",
+    "version": "0.1.0-dev",
+    "policy_version": "sha-256:example-hash-not-computed-policy-0000000001"
+  },
+  "pep": { "id": "gateway-1", "kind": "gateway" },
+  "chain": {
+    "seq": 1,
+    "prev": "sha-256:example-hash-not-computed-record-0000000001",
+    "hash": "sha-256:example-hash-not-computed-record-0000000002"
+  }
+}
