@@ -34,6 +34,8 @@ type Standing struct {
 	Refusal string
 	// Ceiling is the highest tier the grant's agent may be granted now.
 	Ceiling v0.Sensitivity
+	// Owner is the team that answers for the agent, if it has one.
+	Owner string
 	// SingleUse marks a grant issued for one approved call; ActionHash is
 	// that call's hash.
 	SingleUse  bool

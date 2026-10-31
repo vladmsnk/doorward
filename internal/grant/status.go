@@ -83,7 +83,11 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 	if m.Disabled {
 		return refuse("mandate %s is disabled", g.Mandate)
 	}
-	return Standing{Ceiling: a.Spec.MaxSensitivity, SingleUse: rec.SingleUse, ActionHash: rec.ActionHash}, nil
+	st := Standing{Ceiling: a.Spec.MaxSensitivity, SingleUse: rec.SingleUse, ActionHash: rec.ActionHash}
+	if a.Spec.Owner != nil {
+		st.Owner = a.Spec.Owner.Team
+	}
+	return st, nil
 }
 
 func (s StoreStatus) now() time.Time {

@@ -495,3 +495,107 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 		t.Errorf("after 40 calls: %s and %s", consumed(k1), consumed(k2))
 	}
 }
+
+// B5: a decision and the spending it records commit together.
+func TestSettle(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	now := time.Now()
+	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base.Chain = nil
+	key := store.GrantKey("grt_settle", "calls")
+	budget := &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "1"}}, At: now}
+	record := func(id string, outcome v0.Outcome) v0.Decision {
+		d := base
+		d.ID, d.Outcome = id, outcome
+		return d
+	}
+
+	// Allowed: drawn and recorded.
+	got, err := s.Settle(ctx, budget, func(drawn []store.Drawn, err error) (v0.Decision, error) {
+		if err != nil || len(drawn) != 1 || drawn[0].Remaining != "0" {
+			t.Errorf("first call: %v %v", drawn, err)
+		}
+		return record("dec_settle_allowed_000001", v0.OutcomeAllow), nil
+	})
+	if err != nil || got.Chain == nil || got.Chain.Seq != 0 {
+		t.Fatalf("allowed: %+v %v", got.Chain, err)
+	}
+	// Refused by the budget: nothing drawn, the refusal recorded.
+	got, err = s.Settle(ctx, budget, func(drawn []store.Drawn, err error) (v0.Decision, error) {
+		if !errors.Is(err, store.ErrExhausted) || drawn != nil {
+			t.Errorf("second call: %v %v", drawn, err)
+		}
+		return record("dec_settle_refused_000001", v0.OutcomeDeny), nil
+	})
+	if err != nil || got.Chain.Seq != 1 {
+		t.Fatalf("refused: %+v %v", got.Chain, err)
+	}
+	if v, _ := s.Counters().Consumed(ctx, key); v != "1" {
+		t.Errorf("the refused call drew: %s", v)
+	}
+	// A failure while deciding writes nothing at all.
+	other := store.GrantKey("grt_settle", "other")
+	if _, err := s.Settle(ctx, &store.Allowance{Draws: []store.Draw{{Key: other, Amount: "1", Max: "5"}}, At: now},
+		func([]store.Drawn, error) (v0.Decision, error) { return v0.Decision{}, errors.New("boom") }); err == nil {
+		t.Fatal("decide's error was swallowed")
+	}
+	if v, _ := s.Counters().Consumed(ctx, other); v != "0" {
+		t.Errorf("an aborted settlement drew %s", v)
+	}
+	if head, _ := s.Decisions().Head(ctx); head.Chain.Seq != 1 {
+		t.Errorf("an aborted settlement was recorded: seq %d", head.Chain.Seq)
+	}
+	// A spent single-use grant comes to decide as a refusal.
+	g := example[v0.Grant](t, "grant/reconcile.json")
+	g.ID = "grt_single_use_settle_0001"
+	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Grants().Spend(ctx, g.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Settle(ctx, &store.Allowance{SingleUse: g.ID, At: now}, func(_ []store.Drawn, err error) (v0.Decision, error) {
+		if !errors.Is(err, store.ErrState) {
+			t.Errorf("spent single-use grant: %v", err)
+		}
+		return record("dec_settle_spent_00000001", v0.OutcomeDeny), nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// The three records chain.
+	all, err := s.Decisions().Range(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := v0.Verify(all); err != nil || broken != -1 || len(all) != 3 {
+		t.Errorf("chain of %d records: broken at %d: %v", len(all), broken, err)
+	}
+}
+
+func TestPendingFor(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	a := example[v0.Approval](t, "approval/pay-invoice-1200-eur.json")
+	a.Status, a.Closed, a.Votes, a.SingleUseGrant = v0.ApprovalPending, nil, []v0.Vote{}, ""
+	// The approval names a consent, which must exist.
+	if err := s.Consents().Create(ctx, example[v0.Consent](t, "consent/alice-invoice-assistant.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Approvals().Create(ctx, a); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash)
+	if err != nil || got.ID != a.ID {
+		t.Fatalf("same call: %+v %v", got.ID, err)
+	}
+	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, "sha-256:other"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("another call: %v", err)
+	}
+	if _, err := s.Approvals().Close(ctx, a.ID, v0.ApprovalExpired, time.Now(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("a closed request still matches: %v", err)
+	}
+}

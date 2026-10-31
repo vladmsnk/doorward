@@ -63,7 +63,44 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /admin/v0/keys", s.auth(s.listKeys))
 	mux.HandleFunc("POST /admin/v0/keys/rotate", s.auth(s.rotateKey))
 	mux.HandleFunc("POST /admin/v0/keys/{kid}/retire", s.auth(s.retireKey))
+	mux.HandleFunc("GET /admin/v0/decisions", s.auth(s.exportDecisions))
 	return mux
+}
+
+// exportDecisions writes decision records as JSON lines, from ?from=SEQ
+// (default 0), at most ?limit=N of them (default and cap 10000), oldest
+// first, for an external verifier or an archive.
+func (s *Server) exportDecisions(w http.ResponseWriter, r *http.Request) {
+	from, limit := uint64(0), uint64(10000)
+	for name, dst := range map[string]*uint64{"from": &from, "limit": &limit} {
+		if v := r.URL.Query().Get(name); v != "" {
+			n, err := strconv.ParseUint(v, 10, 64)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, "bad_request", name+" must be a non-negative integer", nil)
+				return
+			}
+			*dst = n
+		}
+	}
+	if limit == 0 || limit > 10000 {
+		limit = 10000
+	}
+	records, err := s.Store.Decisions().Range(r.Context(), from, from+limit)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	for _, d := range records {
+		line, err := json.Marshal(d)
+		if err != nil {
+			s.Log.Error("exporting a decision", "decision", d.ID, "err", err)
+			return
+		}
+		if _, err := w.Write(append(line, '\n')); err != nil {
+			return
+		}
+	}
 }
 
 // SecretPurpose is the sealing purpose of a secret: bound to its name, so

@@ -39,7 +39,12 @@
     "version": "0.1.0-dev",
     "policy_version": "sha-256:example-hash-not-computed-policy-0000000001"
   },
+  "versions": {
+    "mandate": "sha-256:XlUJXDhGwmmSD2LaxIwRFGQMNZsaEOkGehTTOg-2gAM",
+    "manifest": "sha-256:o2qxvUyo5ZP8ND0KjOSRS1kYGnklbfSMQ6y8CW8p6j4"
+  },
   "pep": { "id": "mcp-gateway-1", "kind": "gateway" },
+  "trace_id": "a3ce929d0e0e47364bf92f3577b34da6",
   "limits": [{ "name": "entries", "consumed": 1, "remaining": 311 }],
   "chain": {
     "seq": 3,

@@ -54,6 +54,15 @@
       },
       "additionalProperties": false
     },
+    "versions": {
+      "description": "The configuration the decision was made under: the digests of the mandate and the manifest versions in force, as the box stores them.",
+      "type": "object",
+      "properties": {
+        "mandate": { "$ref": "common.schema.json#/$defs/digest" },
+        "manifest": { "$ref": "common.schema.json#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
     "action_hash": {
       "description": "Digest of the canonical form of the call (RFC 8785). It links grant, request, decision and result, and is what an approval is bound to.",
       "$ref": "common.schema.json#/$defs/digest"
@@ -90,6 +99,11 @@
         "kind": { "enum": ["gateway", "ext_authz", "sdk", "broker"] }
       },
       "additionalProperties": false
+    },
+    "trace_id": {
+      "description": "W3C Trace Context trace ID of the call, linking the record to traces and logs.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
     },
     "limits": {
       "description": "What an allowed call drew from each budget.",

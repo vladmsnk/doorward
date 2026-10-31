@@ -11,13 +11,19 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
+	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/sealer"
 	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/internal/telemetry"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -36,6 +42,26 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	addr := fs.String("addr", ":8080", "address of the public listener")
 	adminAddr := fs.String("admin-addr", defaultAdminAddr, "address of the Admin API; it changes configuration, so it listens on this machine only unless told otherwise")
 	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
+	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
+	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
+	journal := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
+	var peps []pdp.Client
+	pepFlag := func(v string) error {
+		c, err := parsePEP(v)
+		if err == nil {
+			peps = append(peps, c)
+		}
+		return err
+	}
+	fs.Func("pep", "a point of enforcement allowed to ask for decisions, as ID=TOKEN; repeat for several (or DOORWARD_PEPS, comma-separated)", pepFlag)
+	if env := os.Getenv("DOORWARD_PEPS"); env != "" {
+		for _, v := range strings.Split(env, ",") {
+			if err := pepFlag(strings.TrimSpace(v)); err != nil {
+				fmt.Fprintf(stderr, "doorward serve: DOORWARD_PEPS: %v\n", err)
+				return 2
+			}
+		}
+	}
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -54,6 +80,21 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		fmt.Fprintf(stderr, "doorward serve: --master-key or DOORWARD_MASTER_KEY: %v (generate one with: doorward master-key)\n", err)
 		return 2
+	}
+
+	var journalOut io.Writer
+	switch *journal {
+	case "":
+	case "-":
+		journalOut = stdout
+	default:
+		f, err := os.OpenFile(*journal, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- the operator names the journal file
+		if err != nil {
+			fmt.Fprintf(stderr, "doorward serve: --journal: %v\n", err)
+			return 2
+		}
+		defer func() { _ = f.Close() }()
+		journalOut = f
 	}
 
 	log := slog.New(slog.NewJSONHandler(stdout, nil))
@@ -101,6 +142,29 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		_ = json.NewEncoder(w).Encode(set)
 	})
 
+	tp, stopTracing, err := telemetry.Setup(ctx, "doorward", versionString())
+	if err != nil {
+		fmt.Fprintf(stderr, "doorward serve: OpenTelemetry: %v\n", err)
+		return 1
+	}
+	defer func() { _ = stopTracing(context.Background()) }()
+
+	decisions := &pdp.PDP{
+		Store: st,
+		Verifier: &grant.Verifier{
+			Keys:      km,
+			Status:    grant.StoreStatus{Store: st},
+			Validator: v,
+			Issuer:    *issuer,
+		},
+		ID:      *pdpID,
+		Version: versionString(),
+		Journal: journalOut,
+		Log:     log,
+		Tracer:  tp.Tracer("doorward"),
+	}
+	public.Handle("POST "+pdp.EvaluationPath, decisions.Handler(peps))
+
 	adminMux := http.NewServeMux()
 	adminMux.HandleFunc("GET /healthz", healthz)
 	api := &admin.Server{Store: st, Validator: v, Token: *adminToken, Sealer: sl, Keys: km, Log: log}
@@ -118,7 +182,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	for _, srv := range servers {
 		go func(srv *http.Server) { errc <- srv.ListenAndServe() }(srv)
 	}
-	log.Info("doorward serving", "version", versionString(), "addr", *addr, "admin_addr", *adminAddr, "kid", signer.KID)
+	log.Info("doorward serving", "version", versionString(), "addr", *addr, "admin_addr", *adminAddr, "kid", signer.KID, "points_of_enforcement", len(peps))
 
 	select {
 	case <-ctx.Done():
@@ -139,6 +203,20 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 	return 0
 }
+
+// parsePEP reads a point of enforcement as ID=TOKEN.
+func parsePEP(v string) (pdp.Client, error) {
+	id, token, ok := strings.Cut(v, "=")
+	switch {
+	case !ok || !nameRE.MatchString(id):
+		return pdp.Client{}, fmt.Errorf("%q: want ID=TOKEN, the ID lower case letters, digits, '.', '_' and '-'", v)
+	case len(token) < 16:
+		return pdp.Client{}, fmt.Errorf("point of enforcement %s: the token must be at least 16 characters", id)
+	}
+	return pdp.Client{Token: token, PEP: v0.PEP{ID: id, Kind: v0.PEPGateway}}, nil
+}
+
+var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$`)
 
 // runMasterKey prints a fresh master key for an operator setting up a box.
 func runMasterKey(stdout, stderr io.Writer) int {
