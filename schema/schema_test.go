@@ -582,3 +582,20 @@ func TestParseKind(t *testing.T) {
 		t.Error("ParseKind accepted task-type")
 	}
 }
+
+// The example consent names the version of the example mandate Alice saw:
+// the digest of that mandate in canonical form, as the box stores it.
+func TestConsentNamesTheMandateVersion(t *testing.T) {
+	v := newValidator(t)
+	c, err := schema.Decode[v0.Consent](v, example(t, consent, schema.Consent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := v0.CanonicalDocument(example(t, mandate, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MandateVersion != digest {
+		t.Errorf("consent names mandate version %s; the example mandate is %s", c.MandateVersion, digest)
+	}
+}

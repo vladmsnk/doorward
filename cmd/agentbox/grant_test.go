@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	v0 "github.com/vladmsnk/agentbox/api/v0"
 	"github.com/vladmsnk/agentbox/internal/sealer"
 	"github.com/vladmsnk/agentbox/internal/store/postgres"
 	"github.com/vladmsnk/agentbox/schema"
@@ -15,7 +17,7 @@ import (
 
 // grantEnv gives a database holding the example configuration, and a
 // master key.
-func grantEnv(t *testing.T) (dsn, masterKey string) {
+func grantEnv(t *testing.T) (dsn, masterKey string, st *postgres.Store) {
 	t.Helper()
 	dsn = os.Getenv("AGENTBOX_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -26,7 +28,7 @@ func grantEnv(t *testing.T) (dsn, masterKey string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = st.Close() }()
+	t.Cleanup(func() { _ = st.Close() })
 	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
 		t.Fatal(err)
 	}
@@ -55,11 +57,76 @@ func grantEnv(t *testing.T) (dsn, masterKey string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return dsn, masterKey
+	return dsn, masterKey, st
+}
+
+const aliceConsent = "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D"
+
+// writeConsent writes a copy of the example consent with another ID and
+// times relative to now, so the test does not depend on the example's
+// dates.
+func writeConsent(t *testing.T, id string, grantedAgo, validFor time.Duration) string {
+	t.Helper()
+	data, err := os.ReadFile("../../examples/v0/consent/alice-invoice-assistant.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c map[string]any
+	if err := json.Unmarshal(data, &c); err != nil {
+		t.Fatal(err)
+	}
+	granted := time.Now().Add(-grantedAgo)
+	c["id"] = id
+	c["granted_at"] = v0.Timestamp{Time: granted}
+	c["expires_at"] = v0.Timestamp{Time: granted.Add(validFor)}
+	c["auth"].(map[string]any)["auth_time"] = v0.Timestamp{Time: granted.Add(-time.Minute)}
+	return writeJSON(t, id+".json", c)
+}
+
+// writeClaims writes a copy of the example user grant, changed by edit.
+func writeClaims(t *testing.T, name string, edit func(g map[string]any)) string {
+	t.Helper()
+	data, err := os.ReadFile("../../examples/v0/grant/pay-invoice.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var g map[string]any
+	if err := json.Unmarshal(data, &g); err != nil {
+		t.Fatal(err)
+	}
+	edit(g)
+	return writeJSON(t, name, g)
+}
+
+func writeJSON(t *testing.T, name string, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// payBounds edits a grant's pay_invoice entry.
+func payBounds(max float64) func(g map[string]any) {
+	return func(g map[string]any) {
+		for _, d := range g["authorization_details"].([]any) {
+			e := d.(map[string]any)
+			if c, ok := e["constraints"].(map[string]any); ok {
+				c["/amount"].(map[string]any)["max"] = max
+			}
+		}
+	}
 }
 
 func TestGrantMintAndVerify(t *testing.T) {
-	dsn, mk := grantEnv(t)
+	dsn, mk, st := grantEnv(t)
+	ctx := context.Background()
+	consent := writeConsent(t, aliceConsent, time.Minute, 30*24*time.Hour)
 	const payments = "https://payments.example.internal"
 	mint := func(args ...string) (int, string, string) {
 		return runCLI(append([]string{"grant", "mint", "--db", dsn, "--master-key", mk}, args...)...)
@@ -73,7 +140,7 @@ func TestGrantMintAndVerify(t *testing.T) {
 	if code != 1 || !strings.Contains(stderr, "pass --consent FILE") {
 		t.Fatalf("mint without consent: %d %s", code, stderr)
 	}
-	code, tok, stderr := mint("--consent", "../../examples/v0/consent/alice-invoice-assistant.json", "../../examples/v0/grant/pay-invoice.json")
+	code, tok, stderr := mint("--consent", consent, "../../examples/v0/grant/pay-invoice.json")
 	if code != 0 {
 		t.Fatalf("mint: %d %s", code, stderr)
 	}
@@ -102,7 +169,7 @@ func TestGrantMintAndVerify(t *testing.T) {
 	}
 	// Once approved, a single-use grant runs that exact call and nothing else.
 	code, once, stderr := mint("--single-use", "--action", "pay_invoice", "--args", payArgs,
-		"--consent", "../../examples/v0/consent/alice-invoice-assistant.json", "../../examples/v0/grant/pay-invoice.json")
+		"--consent", consent, "../../examples/v0/grant/pay-invoice.json")
 	if code != 0 || !strings.Contains(stderr, "single-use: only pay_invoice at "+payments) {
 		t.Fatalf("mint a single-use grant: %d %s", code, stderr)
 	}
@@ -181,6 +248,61 @@ func TestGrantMintAndVerify(t *testing.T) {
 	}
 	if n != 1 {
 		t.Errorf("pay_invoice is in %d entries: %+v", n, res.Grant.Details)
+	}
+
+	// P3: the consent is checked fully.
+	expired := writeConsent(t, "cns_expired_000000000001", 40*24*time.Hour, 30*24*time.Hour)
+	onExpired := writeClaims(t, "on-expired.json", func(g map[string]any) { g["consent"] = "cns_expired_000000000001" })
+	if code, _, stderr := mint("--consent", expired, onExpired); code != 1 || !strings.Contains(stderr, "consent cns_expired_000000000001 expired at") {
+		t.Errorf("mint on an expired consent: %d %s", code, stderr)
+	}
+	// A grant never outlives its consent.
+	short := writeConsent(t, "cns_short_00000000000001", time.Minute, 5*time.Minute)
+	onShort := writeClaims(t, "on-short.json", func(g map[string]any) { g["consent"] = "cns_short_00000000000001" })
+	code, tok, stderr = mint("--ttl", "15m", "--consent", short, onShort)
+	if code != 0 {
+		t.Fatalf("mint on a short consent: %d %s", code, stderr)
+	}
+	code, out, _ = verify("--json", strings.TrimSpace(tok))
+	var capped struct {
+		Grant struct{ Exp int64 } `json:"grant"`
+	}
+	if err := json.Unmarshal([]byte(out), &capped); err != nil || code != 0 {
+		t.Fatalf("verify the capped grant: %d %v\n%s", code, err, out)
+	}
+	if left := time.Until(time.Unix(capped.Grant.Exp, 0)); left > 5*time.Minute {
+		t.Errorf("grant outlives its consent by %s", left-5*time.Minute)
+	}
+	// A grant wider than the mandate is refused.
+	if code, _, stderr := mint(writeClaims(t, "wide.json", payBounds(8000))); code != 1 || !strings.Contains(stderr, "mandate invoices") {
+		t.Errorf("mint wider than the mandate: %d %s", code, stderr)
+	}
+	// The mandate is widened after Alice consented: the current mandate
+	// allows 8000, but Alice agreed to 5000.
+	mdoc, err := st.Documents().Current(ctx, v0.KindMandate, "invoices")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wider := strings.Replace(string(mdoc.Doc), `"/amount":{"max":5000,`, `"/amount":{"max":8000,`, 1)
+	if wider == string(mdoc.Doc) {
+		t.Fatalf("the mandate's amount bound is not where the test expects it: %s", mdoc.Doc)
+	}
+	if _, err := st.Documents().Put(ctx, v0.KindMandate, "invoices", []byte(wider), "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, stderr := mint(writeClaims(t, "wide.json", payBounds(8000))); code != 1 || !strings.Contains(stderr, "as consented to in "+aliceConsent+" (version 1)") {
+		t.Errorf("mint beyond the consented version: %d %s", code, stderr)
+	}
+	// Within both versions it still mints.
+	if code, _, stderr := mint("../../examples/v0/grant/pay-invoice.json"); code != 0 {
+		t.Errorf("mint within both versions: %d %s", code, stderr)
+	}
+	// A disabled mandate fails the status check of grants already issued.
+	if _, err := st.Documents().SetDisabled(ctx, v0.KindMandate, "invoices", true, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := verify(once); code != 1 || !strings.Contains(out, "mandate invoices is disabled") {
+		t.Errorf("verify under a disabled mandate: %d\n%s", code, out)
 	}
 
 	// Usage errors.

@@ -2,9 +2,7 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -33,13 +31,10 @@ func (s documents) Put(ctx context.Context, kind, name string, doc []byte, by st
 }
 
 func (s documents) put(ctx context.Context, kind, name string, doc []byte, disabled bool, by string) (store.Document, error) {
-	// Store the document compacted, so its digest is the digest of exactly
-	// the bytes that come back out.
-	var compact json.RawMessage
-	if err := json.Unmarshal(doc, &compact); err != nil {
-		return store.Document{}, fmt.Errorf("document is not JSON: %w", err)
-	}
-	canon, err := json.Marshal(compact)
+	// Store the document in canonical form (RFC 8785), so its digest is the
+	// digest of exactly the bytes that come back out, whatever key order or
+	// spacing it was sent with.
+	canon, digest, err := v0.CanonicalDocument(doc)
 	if err != nil {
 		return store.Document{}, err
 	}
@@ -58,7 +53,7 @@ func (s documents) put(ctx context.Context, kind, name string, doc []byte, disab
 			INSERT INTO documents (kind, name, version, digest, doc, disabled, created_by)
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			RETURNING `+documentColumns,
-			kind, name, next, v0.Digest(canon), string(canon), disabled, by)
+			kind, name, next, digest, string(canon), disabled, by)
 		out, err = scanDocument(row)
 		return err
 	})

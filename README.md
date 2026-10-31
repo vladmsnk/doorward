@@ -102,16 +102,20 @@ record, in the record's order, and stops at the first failure:
 | Check | Refused with |
 |---|---|
 | `signature` | `grant_missing`, `grant_malformed`, `grant_signature_invalid` |
-| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or its agent is suspended |
+| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or it is a used single-use grant; its agent is suspended; its consent is revoked or expired; its mandate is disabled |
 | `pop` | recorded as `skip` until the sidecar sends DPoP proofs |
 | `audience` | `audience_mismatch` |
 | `time` | `grant_expired`, `grant_not_yet_valid` (30 s of clock skew allowed) |
 
 Until the token service exists, grants are minted from the command line.
-`mint` replaces `iat`, `exp` and `jti`, checks that the agent is registered
-and not suspended, the mandate exists and is enabled and, for a user, that
-the consent is recorded, active and given to this agent for this mandate;
-then it signs and records the grant. It needs the database and the master
+`mint` replaces `iat`, `exp` and `jti` and merges the grant to one entry
+per operation. It checks that the agent is registered and not suspended,
+the mandate exists and is enabled, and the grant lies within it. For a
+user it also checks that the consent is recorded, active, unexpired and
+given to this agent for this mandate, and that the grant lies within the
+mandate as the user saw it, named by the consent's `mandate_version`; the
+grant expires no later than the consent. Then it signs and records the
+grant. It needs the database and the master
 key, so it gives its user nothing they could not already do.
 
 ```sh

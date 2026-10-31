@@ -3,7 +3,7 @@
   "user": { "format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7" },
   "agent": "invoice-assistant",
   "mandate": "invoices",
-  "mandate_version": "sha-256:example-hash-not-computed-mandate-000000001",
+  "mandate_version": "sha-256:NySAoGN6Bip6yfF_QWOsLO_jysEV27ckJcNldBLmAaw",
   "status": "active",
   "granted_at": "2026-10-30T09:29:45.000Z",
   "expires_at": "2026-11-29T09:29:45.000Z",
