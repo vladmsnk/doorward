@@ -35,9 +35,27 @@ vet:
 lint:
 	golangci-lint run
 
+# The store tests need PostgreSQL: point AGENTBOX_TEST_POSTGRES_DSN at an
+# empty database first; without it they skip. `make test-db` starts a
+# throwaway PostgreSQL 16 for them (needs the postgresql-16 package).
 .PHONY: test
 test:
 	$(GO) test -race -count=1 $(PKGS)
+
+PGDATA ?= .pg
+PGPORT ?= 55432
+PGBIN ?= /usr/lib/postgresql/16/bin
+.PHONY: test-db
+test-db:
+	@test -d $(PGDATA)/data || $(PGBIN)/initdb -D $(PGDATA)/data -U postgres -A trust >/dev/null
+	@$(PGBIN)/pg_ctl -D $(PGDATA)/data -o "-k $(abspath $(PGDATA)) -p $(PGPORT) -c listen_addresses=" -l $(PGDATA)/log start >/dev/null
+	@psql -h $(abspath $(PGDATA)) -p $(PGPORT) -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'agentbox_test'" | grep -q 1 || \
+		psql -h $(abspath $(PGDATA)) -p $(PGPORT) -U postgres -c "CREATE DATABASE agentbox_test" >/dev/null
+	@echo "export AGENTBOX_TEST_POSTGRES_DSN='postgres://postgres@/agentbox_test?host=$(abspath $(PGDATA))&port=$(PGPORT)'"
+
+.PHONY: test-db-stop
+test-db-stop:
+	@$(PGBIN)/pg_ctl -D $(PGDATA)/data stop >/dev/null
 
 # F02: every example passes validation through the CLI, not only in tests.
 .PHONY: validate-examples

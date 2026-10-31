@@ -34,7 +34,19 @@ bin/agentbox validate --kind approval examples/v0/approval/*.json
 Configuration documents name their kind. Messages and records need `--kind`:
 `consent`, `grant`, `decision` or `approval`.
 
-Go 1.24 and, for `make lint`, golangci-lint v2.
+Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
+PostgreSQL 16: `make test-db` starts a throwaway one and prints the
+`AGENTBOX_TEST_POSTGRES_DSN` to export; without that variable they skip.
+
+## Storage
+
+Everything the box keeps lives in one PostgreSQL database, behind the
+`store.Store` interface in [`internal/store`](internal/store): configuration
+(manifests, agents, mandates), versioned so nothing is ever overwritten and
+a consent can name the exact mandate the user saw; and the records
+(consents, grants, decisions, approvals) plus the budget counters. Decision
+records form a hash chain; `v0.Verify` checks it. Migrations are embedded
+and applied on start.
 
 ## The v0 schemas
 

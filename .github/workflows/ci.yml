@@ -11,6 +11,25 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    # The store tests run against real PostgreSQL: the locks and the
+    # conditional updates they test are the database's to arbitrate.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: agentbox_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      AGENTBOX_TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/agentbox_test?sslmode=disable
+
     steps:
       - uses: actions/checkout@v4
 
