@@ -1,5 +1,5 @@
-// Command agentbox is the box's command-line tool. In v0 it validates
-// documents against the v0 schemas (F02) and reports its version (F01).
+// Command agentbox is the box's command-line tool: it validates documents,
+// runs the box, and signs and verifies grants.
 package main
 
 import (
@@ -26,6 +26,7 @@ func main() {
 const usage = `usage:
   agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
   agentbox serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on :8081
+  agentbox grant mint|verify ...            sign and record a grant; run a grant's checks
   agentbox master-key                       print a new master key for AGENTBOX_MASTER_KEY
   agentbox version                          print the version
 
@@ -43,6 +44,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
+	case "grant":
+		return runGrant(args[1:], os.Stdin, stdout, stderr)
 	case "master-key":
 		return runMasterKey(stdout, stderr)
 	case "version":
