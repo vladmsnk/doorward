@@ -15,7 +15,7 @@
     {
       "type": "tool_call",
       "locations": ["https://payments.example.internal"],
-      "actions": ["get_invoice", "list_payments", "pay_invoice"]
+      "actions": ["get_invoice", "list_payments"]
     },
     {
       "type": "tool_call",

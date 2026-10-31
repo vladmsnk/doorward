@@ -47,8 +47,29 @@ func (g Grant) Check() error {
 		p.add("aud must list exactly the locations of authorization_details")
 	}
 	p.checkDetails(g.AuthorizationDetails)
+	p.onePerOperation(g.AuthorizationDetails)
 	p.checkLimits(g.Limits)
 	return p.err()
+}
+
+// onePerOperation: each operation at each location appears in exactly one
+// entry. RFC 9396 leaves it to each type how entries combine; a resource
+// server that reads entries one at a time would otherwise allow, under an
+// unbounded entry, what another entry bounds.
+func (p *problems) onePerOperation(details []AuthorizationDetail) {
+	seen := make(map[string]int)
+	for i, d := range details {
+		for _, loc := range d.Locations {
+			for _, act := range d.Actions {
+				key := loc + " " + act
+				if j, ok := seen[key]; ok {
+					p.add("%s at %s is in authorization_details[%d] and [%d]: each operation appears in exactly one entry", act, loc, j, i)
+					continue
+				}
+				seen[key] = i
+			}
+		}
+	}
 }
 
 // Check enforces the rules of a consent record that span fields.

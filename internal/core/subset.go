@@ -131,3 +131,12 @@ func violation(c v0.Constraint, value any) string {
 	}
 	return v + " is outside the grant"
 }
+
+// Details writes permissions as a grant's authorization_details.
+func Details(perms []v0.Permission) []v0.AuthorizationDetail {
+	out := make([]v0.AuthorizationDetail, len(perms))
+	for i, p := range perms {
+		out[i] = v0.AuthorizationDetail{Type: v0.AuthorizationDetailType, Locations: p.Locations, Actions: p.Actions, Constraints: p.Constraints}
+	}
+	return out
+}

@@ -16,6 +16,7 @@ import (
 	"github.com/vladmsnk/agentbox/internal/grant"
 	"github.com/vladmsnk/agentbox/internal/ids"
 	"github.com/vladmsnk/agentbox/internal/keys"
+	"github.com/vladmsnk/agentbox/internal/policy"
 	"github.com/vladmsnk/agentbox/internal/sealer"
 	"github.com/vladmsnk/agentbox/internal/store"
 	"github.com/vladmsnk/agentbox/internal/store/postgres"
@@ -102,7 +103,7 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	g, err := readRecord[v0.Grant](v, fs.Arg(0), schema.Grant)
+	g, err := readClaims(v, fs.Arg(0))
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -112,6 +113,13 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	}
 	g.IssuedAt, g.Expiry = now.Unix(), now.Add(*ttl).Unix()
 	g.ID = ids.At(ids.Grant, now)
+	// One entry per operation, carrying all of its bounds, as every grant
+	// the box issues has it.
+	perms, err := policy.OnePerOperation(core.Permissions(g.AuthorizationDetails))
+	if err != nil {
+		return fail("claims: %v", err)
+	}
+	g.AuthorizationDetails = core.Details(perms)
 	// Check the result as a verifier will.
 	claims, err := json.Marshal(g)
 	if err != nil {
@@ -383,6 +391,30 @@ func printResult(w io.Writer, r grant.Result, call *core.Call, held bool) {
 	}
 	left := time.Until(time.Unix(g.Expiry, 0)).Round(time.Second)
 	fmt.Fprintf(w, "accepted: grant %s, agent %s acting for %s, mandate %s, expires in %s\n", g.ID, g.Actor.Subject, who, g.Mandate, left)
+}
+
+// readClaims reads a grant's claims to mint from: the schema must hold,
+// but the grant's rules run only on the grant as minted, once its entries
+// are merged and its times and ID are set.
+func readClaims(v *schema.Validator, name string) (v0.Grant, error) {
+	var g v0.Grant
+	data, err := os.ReadFile(name) // #nosec G304 -- reading the file the user named is the command's job
+	if err != nil {
+		return g, err
+	}
+	src, err := schema.Read(name, data, schema.Grant)
+	if err != nil {
+		return g, err
+	}
+	if len(src) != 1 {
+		return g, fmt.Errorf("%s: want one grant, found %d documents", name, len(src))
+	}
+	if err := v.Validate(schema.Grant, src[0].JSON); err != nil {
+		return g, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(src[0].JSON)))
+	dec.DisallowUnknownFields()
+	return g, dec.Decode(&g)
 }
 
 // readArgs decodes a call's arguments: one JSON object, no duplicate names.

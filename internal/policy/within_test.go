@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -184,5 +185,41 @@ func TestEffectiveAndCoherent(t *testing.T) {
 	p := policy.Coherent(perms, "mandate m")
 	if len(p) != 1 || !strings.Contains(p[0], "mandate m allows pay_invoice at "+loc+", but the bounds on /currency cannot all hold") {
 		t.Errorf("Coherent: %q", p)
+	}
+}
+
+// P2: the old example grant listed pay_invoice unbounded in one entry and
+// bounded in another. Merged, pay_invoice carries its bounds in a single
+// entry, and nothing else changes.
+func TestOnePerOperation(t *testing.T) {
+	const pay = "https://payments.example.internal"
+	amount := v0.Constraint{Min: f(0.01), Max: f(5000)}
+	currency := v0.Constraint{OneOf: []any{"EUR", "USD"}}
+	old := []v0.Permission{
+		{Locations: []string{pay}, Actions: []string{"get_invoice", "list_payments", "pay_invoice"}},
+		{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/amount": amount, "/currency": currency}},
+	}
+	got, err := policy.OnePerOperation(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []v0.Permission{
+		{Locations: []string{pay}, Actions: []string{"get_invoice", "list_payments"}},
+		{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/amount": amount, "/currency": currency}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+	// It allows exactly what the input allows, both ways round.
+	if p := policy.Within(got, "merged", old, "old", nil); p != nil {
+		t.Errorf("merged is wider: %v", p)
+	}
+	if p := policy.Within(old, "old", got, "merged", nil); p != nil {
+		t.Errorf("merged is narrower: %v", p)
+	}
+	// Contradictory bounds cannot be merged into a grant.
+	bad := append(old, v0.Permission{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"GBP"}}}})
+	if _, err := policy.OnePerOperation(bad); err == nil {
+		t.Error("merged bounds that cannot hold")
 	}
 }

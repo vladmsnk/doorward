@@ -148,6 +148,41 @@ func TestGrantMintAndVerify(t *testing.T) {
 		t.Fatalf("verify service grant: %d\n%s", code, out)
 	}
 
+	// Claims that name an operation in two entries are merged on mint: the
+	// grant carries pay_invoice once, with its bounds.
+	data, err := os.ReadFile("../../examples/v0/grant/pay-invoice.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := filepath.Join(t.TempDir(), "old-shape.json")
+	if err := os.WriteFile(old, []byte(strings.Replace(string(data), `"actions": ["get_invoice", "list_payments"]`, `"actions": ["get_invoice", "list_payments", "pay_invoice"]`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	code, merged, stderr := mint(old)
+	if code != 0 {
+		t.Fatalf("mint from the old shape: %d %s", code, stderr)
+	}
+	code, out, _ = verify("--json", strings.TrimSpace(merged))
+	var res struct {
+		Grant struct {
+			Details []struct{ Actions []string } `json:"authorization_details"`
+		} `json:"grant"`
+	}
+	if err := json.Unmarshal([]byte(out), &res); err != nil || code != 0 {
+		t.Fatalf("merged grant: %d %v\n%s", code, err, out)
+	}
+	n := 0
+	for _, d := range res.Grant.Details {
+		for _, a := range d.Actions {
+			if a == "pay_invoice" {
+				n++
+			}
+		}
+	}
+	if n != 1 {
+		t.Errorf("pay_invoice is in %d entries: %+v", n, res.Grant.Details)
+	}
+
 	// Usage errors.
 	if code, _, _ := runCLI("grant"); code != 2 {
 		t.Errorf("grant with no command: %d", code)

@@ -72,8 +72,7 @@ func TestSubsetExamples(t *testing.T) {
 			v0.ReasonConstraintViolated, "/amount", "7500 is above the grant's max of 5000"},
 		{"post an entry", reconciler, core.Call{ledger, "post_entry", map[string]any{"account_id": "acc_EU_448120", "amount": 240.5, "memo": "payment pmt_8K2"}}, "", "", ""},
 
-		// Bounds of every entry naming the operation apply: the first entry
-		// lists pay_invoice unbounded, the second bounds it.
+		// The currency bound holds too.
 		{"pay in GBP", alice, core.Call{payments, "pay_invoice", map[string]any{"invoice_id": "i", "amount": 10.0, "currency": "GBP"}},
 			v0.ReasonConstraintViolated, "/currency", `"GBP" is not one of the grant's ["EUR","USD"]`},
 		{"pay nothing", alice, core.Call{payments, "pay_invoice", map[string]any{"invoice_id": "i", "amount": 0.0, "currency": "EUR"}},

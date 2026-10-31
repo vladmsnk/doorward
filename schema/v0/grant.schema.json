@@ -69,7 +69,7 @@
       "$ref": "common.schema.json#/$defs/id"
     },
     "authorization_details": {
-      "description": "What the grant allows: the mandate's permissions intersected with the agent's.",
+      "description": "What the grant allows: the mandate's permissions intersected with the agent's. Each operation at each location appears in exactly one entry, carrying all of its bounds, so every entry can be read on its own.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/authorizationDetail" },
       "minItems": 1
