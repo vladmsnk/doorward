@@ -39,6 +39,13 @@ type Store interface {
 	// and the error says why (an *ExhaustedError, or ErrState for a
 	// single-use grant already spent).
 	Allow(ctx context.Context, a Allowance) ([]Drawn, error)
+	// Settle spends an allowance, when there is one, and appends the
+	// decision that results, in one transaction: an allowed call's record
+	// is written exactly when its spending is. decide receives what Allow
+	// drew, or Allow's refusal (*ExhaustedError, ErrState), after which
+	// nothing was drawn; any other error from Allow or decide aborts it all.
+	// It returns the decision as appended, chain filled in.
+	Settle(ctx context.Context, a *Allowance, decide func(drawn []Drawn, err error) (v0.Decision, error)) (v0.Decision, error)
 	Keys() Keys
 	// LockConfig runs fn in one transaction holding the configuration lock.
 	// No two LockConfig calls run at once, fn reads the configuration as
@@ -148,6 +155,10 @@ type Approvals interface {
 	Get(ctx context.Context, id string) (v0.Approval, error)
 	// Pending lists open requests, oldest first.
 	Pending(ctx context.Context) ([]v0.Approval, error)
+	// PendingFor returns the newest open request for one call: the same
+	// agent, mandate, consent ("" for a service agent) and action hash.
+	// ErrNotFound if there is none.
+	PendingFor(ctx context.Context, agent, mandate, consent, actionHash string) (v0.Approval, error)
 	// Vote adds a vote to a pending request. ErrState if it is not pending.
 	Vote(ctx context.Context, id string, v v0.Vote) (v0.Approval, error)
 	// Close moves a pending request to approved, rejected or expired.
