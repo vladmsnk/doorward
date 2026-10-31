@@ -32,7 +32,7 @@ func grantEnv(t *testing.T) (dsn, masterKey string) {
 	}
 	// The store checks nothing but shape, so the documents go in directly;
 	// the Admin API's rules have their own tests.
-	for _, f := range []string{"mandate-invoices.yaml", "mandate-reconcile.yaml", "agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
+	for _, f := range []string{"manifest-payments-api.yaml", "mandate-invoices.yaml", "mandate-reconcile.yaml", "agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
 		data, err := os.ReadFile(filepath.Join("../../examples/v0/config", f))
 		if err != nil {
 			t.Fatal(err)
@@ -87,6 +87,52 @@ func TestGrantMintAndVerify(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "refused: audience_mismatch") {
 		t.Fatalf("verify other audience: %d\n%s", code, out)
 	}
+	// With a call: the subset check runs after the grant's own checks.
+	// A payment inside the grant is critical: it is held for approval.
+	const payArgs = `{"invoice_id":"inv_1","amount":1200,"currency":"EUR"}`
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", payArgs, tok)
+	if code != 3 || !strings.Contains(out, "pass  subset") || !strings.Contains(out, "fail  sensitivity critical tier needs a single-use grant") ||
+		!strings.Contains(out, "approval required") {
+		t.Fatalf("verify a payment inside the grant: %d\n%s", code, out)
+	}
+	// A read runs.
+	code, out, _ = verify("--aud", payments, "--action", "get_invoice", "--args", `{"invoice_id":"inv_1"}`, tok)
+	if code != 0 || !strings.Contains(out, "pass  sensitivity") {
+		t.Fatalf("verify a read: %d\n%s", code, out)
+	}
+	// Once approved, a single-use grant runs that exact call and nothing else.
+	code, once, stderr := mint("--single-use", "--action", "pay_invoice", "--args", payArgs,
+		"--consent", "../../examples/v0/consent/alice-invoice-assistant.json", "../../examples/v0/grant/pay-invoice.json")
+	if code != 0 || !strings.Contains(stderr, "single-use: only pay_invoice at "+payments) {
+		t.Fatalf("mint a single-use grant: %d %s", code, stderr)
+	}
+	once = strings.TrimSpace(once)
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", `{"currency":"EUR","amount":1.2e3,"invoice_id":"inv_1"}`, once)
+	if code != 0 || !strings.Contains(out, "single-use grant for this exact call") {
+		t.Fatalf("verify the approved call, written another way: %d\n%s", code, out)
+	}
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", `{"invoice_id":"inv_1","amount":1201,"currency":"EUR"}`, once)
+	if code != 1 || !strings.Contains(out, "issued for another call") {
+		t.Fatalf("verify another call on the single-use grant: %d\n%s", code, out)
+	}
+	if code, _, _ := mint("--single-use", "../../examples/v0/grant/pay-invoice.json"); code != 2 {
+		t.Errorf("--single-use without --action: %d", code)
+	}
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", `{"invoice_id":"inv_1","amount":7500,"currency":"EUR"}`, tok)
+	if code != 1 || !strings.Contains(out, "fail  subset      /amount") || !strings.Contains(out, "refused: constraint_violated") {
+		t.Fatalf("verify a payment over the grant: %d\n%s", code, out)
+	}
+	code, out, _ = verify("--aud", payments, "--action", "refund_payment", tok)
+	if code != 1 || !strings.Contains(out, "refused: action_not_granted") {
+		t.Fatalf("verify an operation outside the grant: %d\n%s", code, out)
+	}
+	if code, _, _ := verify("--action", "pay_invoice", tok); code != 2 {
+		t.Errorf("--action without --aud: %d", code)
+	}
+	if code, _, _ := verify("--aud", payments, "--action", "pay_invoice", "--args", `{"amount":1,"amount":2}`, tok); code != 2 {
+		t.Errorf("duplicate argument names: %d", code)
+	}
+
 	code, out, _ = verify("--json", "--issuer", "https://other.example", tok)
 	if code != 1 || !strings.Contains(out, `"code": "grant_malformed"`) {
 		t.Fatalf("verify other issuer: %d\n%s", code, out)

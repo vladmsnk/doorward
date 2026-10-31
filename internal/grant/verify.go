@@ -22,11 +22,22 @@ type Keys interface {
 	Public(ctx context.Context, kid string) (*ecdsa.PublicKey, error)
 }
 
-// Status says whether a genuine grant still stands. It returns a non-empty
-// refusal when the grant must not be honoured, and an error only when it
-// could not find out.
+// Status says whether a genuine grant still stands, and what the box's
+// records add to it. It returns an error only when it could not find out.
 type Status interface {
-	Standing(ctx context.Context, g v0.Grant) (refusal string, err error)
+	Standing(ctx context.Context, g v0.Grant) (Standing, error)
+}
+
+// Standing is what the box's records say about a grant beyond its claims.
+type Standing struct {
+	// Refusal is set when the grant must not be honoured, and says why.
+	Refusal string
+	// Ceiling is the highest tier the grant's agent may be granted now.
+	Ceiling v0.Sensitivity
+	// SingleUse marks a grant issued for one approved call; ActionHash is
+	// that call's hash.
+	SingleUse  bool
+	ActionHash string
 }
 
 // Verifier checks grants. Keys, Status and Validator are required.
@@ -48,8 +59,10 @@ type Verifier struct {
 type Result struct {
 	// Grant is set once the signature has been checked and the claims have
 	// passed the schema.
-	Grant  *v0.Grant  `json:"grant,omitempty"`
-	Checks []v0.Check `json:"checks"`
+	Grant *v0.Grant `json:"grant,omitempty"`
+	// Standing is set once the status check has passed.
+	Standing *Standing  `json:"-"`
+	Checks   []v0.Check `json:"checks"`
 	// Reason is set exactly when a check failed.
 	Reason *v0.Reason `json:"reason,omitempty"`
 }
@@ -113,16 +126,21 @@ func (v *Verifier) Verify(ctx context.Context, tok, audience string) (Result, er
 	r.Grant = &g
 	r.pass(v0.CheckSignature, "key "+t.header.Kid)
 
-	// status: the box issued this grant, has not revoked it, and its
-	// agent is not suspended.
-	refusal, err := v.Status.Standing(ctx, g)
+	// status: the box issued this grant, has not revoked it, its agent is
+	// not suspended, and if it is single-use it has not been used.
+	st, err := v.Status.Standing(ctx, g)
 	if err != nil {
 		return r.fail(v0.CheckStatus, v0.ReasonInternalError, "status of %s unknown", g.ID), fmt.Errorf("status of %s: %w", g.ID, err)
 	}
-	if refusal != "" {
-		return r.fail(v0.CheckStatus, v0.ReasonGrantRevoked, "%s", refusal), nil
+	if st.Refusal != "" {
+		return r.fail(v0.CheckStatus, v0.ReasonGrantRevoked, "%s", st.Refusal), nil
 	}
-	r.pass(v0.CheckStatus, "")
+	r.Standing = &st
+	detail := ""
+	if st.SingleUse {
+		detail = "single-use grant, not yet used"
+	}
+	r.pass(v0.CheckStatus, detail)
 
 	// pop: proof that the caller holds the key in cnf. Recorded as skipped
 	// until the sidecar sends DPoP proofs.

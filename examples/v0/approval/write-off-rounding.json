@@ -12,7 +12,7 @@
     "location": "https://ledger.example.internal/mcp",
     "arguments": { "amount": 12.4, "payment_id": "pmt_3F9Q", "reason": "rounding difference" }
   },
-  "action_hash": "sha-256:example-hash-not-computed-action-0000000005",
+  "action_hash": "sha-256:DrIdZ8aH95ruWTOEFjRicTrSV8xJ_sPrUn6LI4jPAtU",
   "policy_version": "sha-256:example-hash-not-computed-policy-0000000001",
   "required": 2,
   "votes": [

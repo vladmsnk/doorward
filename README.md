@@ -127,6 +127,66 @@ accepted: grant grt_01M68ZAY9YDFW1ZFC20G1RM7AM, agent invoice-assistant acting f
 
 `verify` exits 1 on a refusal; `--json` prints the checks and the reason.
 
+Given a call, `verify` also runs the subset check
+([`internal/core`](internal/core)): the grant must allow the operation at
+the resource, and every bound the grant sets on its arguments must hold.
+Bounds from every entry that names the operation apply together. A bound
+on an argument the call carries is always checked; a missing argument is
+refused only if the manifest declares it, since one entry may bound
+`/amount` for operations that take no amount.
+
+```sh
+agentbox grant verify --aud https://payments.example.internal \
+  --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}' - < grant.jwt
+```
+
+```
+...
+fail  subset      /amount
+refused: constraint_violated
+```
+
+| Refused with | When |
+|---|---|
+| `action_not_granted` | no entry names the operation at that resource, or the manifest no longer has it |
+| `field_missing` | a bounded argument the operation declares is absent or null |
+| `constraint_violated` | a value breaks a bound, or is not the type the manifest declares |
+
+Then the sensitivity check: the manifest gives the operation's tier, and
+the grant's record says whether it is standing or single-use.
+
+| Case | Answer |
+|---|---|
+| the tier is above the agent's `max_sensitivity`, as it stands now | deny, `sensitivity_exceeded` |
+| a single-use grant, but not the call it was issued for | deny, `action_not_granted` |
+| `critical` on a standing grant | approval required: the call is held |
+| `read` or `write`, or the single-use grant's own call | pass |
+
+A call is named by its action hash: the digest of
+`{"name", "location", "arguments"}` in canonical JSON (RFC 8785), so the
+same call written with other key order, spacing or number spelling hashes
+the same, and a cent more does not. An approval is bound to that hash, and
+so is the single-use grant issued once it is approved. `grant mint
+--single-use` issues one by hand; the grant record keeps the hash, and a
+used single-use grant fails the status check.
+
+```sh
+agentbox grant verify --aud https://payments.example.internal \
+  --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":1200,"currency":"EUR"}' - < grant.jwt
+```
+
+```
+...
+pass  subset
+fail  sensitivity critical tier needs a single-use grant
+action hash sha-256:gUi92kB2Ra9Uh-iK8Fg62NSU7pmAFgPjYOOHZ1mlHtg
+approval required: a person approves this exact call, then a single-use grant bound to its hash runs it
+```
+
+`verify` exits 3 when a call needs approval. Spending a single-use grant
+belongs to the evaluation endpoint, together with budgets: it happens only
+for a call that is allowed.
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the
@@ -295,6 +355,7 @@ internal/policy/   comparing permissions: tiers, constraints, "within"
 internal/keys/     signing keys: create, rotate, retire, JWK Set
 internal/sealer/   AES-256-GCM sealing under the master key
 internal/grant/    signing grants and verifying them (B1)
+internal/core/     the decision core: subset (B2) and sensitivity (B3) checks
 internal/ids/      record IDs: prefix_ULID
 schema/            the embedded schemas, the validator, strict YAML/JSON reading
 schema/v0/         the JSON Schemas
