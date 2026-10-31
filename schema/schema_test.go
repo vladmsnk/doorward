@@ -600,3 +600,29 @@ func TestConsentNamesTheMandateVersion(t *testing.T) {
 		t.Errorf("consent names mandate version %s; the example mandate is %s", c.MandateVersion, digest)
 	}
 }
+
+// The example decisions name the versions of the example mandate and
+// manifest they were made under, as digests of those documents.
+func TestDecisionsNameTheirVersions(t *testing.T) {
+	v := newValidator(t)
+	digest := func(rel string) string {
+		_, d, err := v0.CanonicalDocument(example(t, rel, ""))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	byMandate := map[string]v0.Versions{
+		"invoices":  {Mandate: digest(mandate), Manifest: digest(manifest)},
+		"reconcile": {Mandate: digest(svcMandate), Manifest: digest(mcp)},
+	}
+	for _, rel := range []string{allow, deny, hold, svcAllow} {
+		d, err := schema.Decode[v0.Decision](v, example(t, rel, schema.Decision))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := byMandate[d.Grant.Mandate]; d.Versions == nil || *d.Versions != want {
+			t.Errorf("%s names versions %+v; the example documents are %+v", rel, d.Versions, want)
+		}
+	}
+}

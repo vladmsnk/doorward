@@ -19,6 +19,10 @@
     "mandate": "invoices",
     "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D"
   },
+  "versions": {
+    "mandate": "sha-256:EVsq_KywhLWSV0w6in1-BV4khWoOa4hbGQ6NIt55xdU",
+    "manifest": "sha-256:w1-hDrl2bjFVm3LFwcQLXEzBsvXchUIRMZQWGDSsR7Y"
+  },
   "action_hash": "sha-256:gUi92kB2Ra9Uh-iK8Fg62NSU7pmAFgPjYOOHZ1mlHtg",
   "sensitivity": "critical",
   "outcome": "approval_required",
@@ -40,6 +44,7 @@
     "policy_version": "sha-256:example-hash-not-computed-policy-0000000001"
   },
   "pep": { "id": "gateway-1", "kind": "gateway" },
+  "trace_id": "5b8efff798038103d269b633813fc60c",
   "approval": { "request": "apr_01JBXR5R2T4V6X8Z0B2D4F6H8K" },
   "chain": {
     "seq": 2,

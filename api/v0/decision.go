@@ -11,6 +11,7 @@ type Decision struct {
 	Request     EvaluationRequest `json:"request"`
 	Principal   *Principal        `json:"principal,omitempty"`
 	Grant       *GrantRef         `json:"grant,omitempty"`
+	Versions    *Versions         `json:"versions,omitempty"`
 	ActionHash  string            `json:"action_hash,omitempty"`
 	Sensitivity Sensitivity       `json:"sensitivity,omitempty"`
 	Outcome     Outcome           `json:"outcome"`
@@ -19,6 +20,8 @@ type Decision struct {
 	Checks []Check `json:"checks"`
 	PDP    PDP     `json:"pdp"`
 	PEP    PEP     `json:"pep"`
+	// TraceID is the W3C trace ID of the call.
+	TraceID string `json:"trace_id,omitempty"`
 	// Limits is what an allowed call drew from each budget. It is empty for
 	// any other outcome: budget is drawn last, so a refusal spends nothing.
 	Limits   []LimitUse   `json:"limits,omitempty"`
@@ -61,6 +64,12 @@ type GrantRef struct {
 	ID      string `json:"id"`
 	Mandate string `json:"mandate"`
 	Consent string `json:"consent,omitempty"`
+}
+
+// Versions names the configuration a decision was made under.
+type Versions struct {
+	Mandate  string `json:"mandate,omitempty"`
+	Manifest string `json:"manifest,omitempty"`
 }
 
 // Outcome is one of the three answers of the decision core.

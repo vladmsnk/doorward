@@ -17,27 +17,29 @@ func Digest(data []byte) string {
 	return DigestPrefix + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-// ChainHash computes a decision record's hash: the digest of the record as
-// it is stored, with its chain filled in except for the hash itself. Record
-// N's hash therefore covers record N-1's hash through chain.prev, which is
-// what makes the journal a chain.
-//
-// The hashed form is the record's canonical JSON. encoding/json writes a
-// struct's fields in declaration order with no whitespace, and Timestamp has
-// exactly one serialization, so two readers hash the same record the same
-// way.
+// ChainHash computes a decision record's hash: the digest of the record in
+// canonical JSON (RFC 8785), with its chain filled in but without chain.hash
+// itself. Record N's hash therefore covers record N-1's hash through
+// chain.prev, which is what makes the journal a chain, and anyone with the
+// records and an RFC 8785 implementation can recompute it, in any language.
 func ChainHash(d Decision) (string, error) {
 	if d.Chain == nil {
 		return "", fmt.Errorf("chain is not set")
 	}
-	c := *d.Chain
-	c.Hash = ""
-	d.Chain = &c
 	data, err := json.Marshal(d)
 	if err != nil {
 		return "", err
 	}
-	return Digest(data), nil
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return "", err
+	}
+	delete(doc["chain"].(map[string]any), "hash")
+	canon, err := Canonical(doc)
+	if err != nil {
+		return "", err
+	}
+	return Digest(canon), nil
 }
 
 // Link fills d.Chain so that d follows prev, and sets its hash. prev is nil
