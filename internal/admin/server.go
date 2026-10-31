@@ -113,7 +113,10 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	if err := s.Store.Secrets().Put(r.Context(), name, sealed, s.actor(r)); err != nil {
+	err = s.change(r.Context(),
+		func(after *snapshot, _ store.Config) error { after.secrets[name] = true; return nil },
+		func(c store.Config) error { return c.Secrets().Put(r.Context(), name, sealed, s.actor(r)) })
+	if err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -124,16 +127,16 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 // deleteSecret removes a secret unless an enabled manifest still names it.
 func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
-	snap, err := load(r.Context(), s.Store)
+	err := s.change(r.Context(),
+		func(after *snapshot, _ store.Config) error {
+			if users := after.secretUsers(name); len(users) > 0 {
+				return inUse(fmt.Sprintf("secret %s is named by enabled manifests: %s", name, strings.Join(users, ", ")))
+			}
+			delete(after.secrets, name)
+			return nil
+		},
+		func(c store.Config) error { return c.Secrets().Delete(r.Context(), name) })
 	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	if users := snap.secretUsers(name); len(users) > 0 {
-		writeError(w, http.StatusConflict, "in_use", fmt.Sprintf("secret %s is named by enabled manifests: %s", name, strings.Join(users, ", ")), nil)
-		return
-	}
-	if err := s.Store.Secrets().Delete(r.Context(), name); err != nil {
 		s.fail(w, err)
 		return
 	}
@@ -327,11 +330,13 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("the URL names %q but metadata.name is %q", name, meta.Metadata.Name), nil)
 		return
 	}
-	if err := s.checkRules(r.Context(), kind, doc); err != nil {
-		s.fail(w, err)
-		return
-	}
-	stored, err := s.Store.Documents().Put(r.Context(), string(kind), name, doc, s.actor(r))
+	var stored store.Document
+	err = s.change(r.Context(),
+		func(after *snapshot, _ store.Config) error { return after.put(string(kind), doc) },
+		func(c store.Config) (err error) {
+			stored, err = c.Documents().Put(r.Context(), string(kind), name, doc, s.actor(r))
+			return err
+		})
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -340,38 +345,26 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toResponse(stored))
 }
 
-// checkRules runs the cross-document rules for one document against the
-// current configuration.
-func (s *Server) checkRules(ctx context.Context, kind schema.Kind, doc []byte) error {
-	snap, err := load(ctx, s.Store)
-	if err != nil {
-		return err
-	}
-	var p Problems
-	switch kind {
-	case schema.Manifest:
-		var m v0.Manifest
-		if err := json.Unmarshal(doc, &m); err != nil {
+// change makes one configuration change under the configuration lock. It
+// loads the configuration as the last change left it, lets try apply the
+// change to a copy, refuses the change if the copy breaks a rule the
+// original did not, and otherwise lets commit write it. Nothing is written
+// unless the whole change is accepted.
+func (s *Server) change(ctx context.Context, try func(after *snapshot, c store.Config) error, commit func(c store.Config) error) error {
+	return s.Store.LockConfig(ctx, func(c store.Config) error {
+		before, err := load(ctx, c)
+		if err != nil {
 			return err
 		}
-		p = snap.checkManifest(m)
-	case schema.Agent:
-		var a v0.Agent
-		if err := json.Unmarshal(doc, &a); err != nil {
+		after := before.clone()
+		if err := try(after, c); err != nil {
 			return err
 		}
-		p = snap.checkAgent(a)
-	case schema.Mandate:
-		var m v0.Mandate
-		if err := json.Unmarshal(doc, &m); err != nil {
-			return err
+		if p := introduced(before, after); len(p) > 0 {
+			return p
 		}
-		p = snap.checkMandate(m)
-	}
-	if len(p) > 0 {
-		return p
-	}
-	return nil
+		return commit(c)
+	})
 }
 
 func (s *Server) setDisabled(disabled bool) http.HandlerFunc {
@@ -385,28 +378,34 @@ func (s *Server) setDisabled(disabled bool) http.HandlerFunc {
 			return
 		}
 		name := r.PathValue("name")
-		if disabled && kind == schema.Manifest {
-			// A manifest other mandates rest on stays enabled until they
-			// no longer name it.
-			cur, err := s.Store.Documents().Current(r.Context(), string(kind), name)
-			if err != nil {
-				s.fail(w, err)
-				return
-			}
-			var m v0.Manifest
-			_ = json.Unmarshal(cur.Doc, &m)
-			snap, err := load(r.Context(), s.Store)
-			if err != nil {
-				s.fail(w, err)
-				return
-			}
-			if deps := snap.dependents(m.Spec.Audience); len(deps) > 0 {
-				writeError(w, http.StatusConflict, "in_use",
-					fmt.Sprintf("manifest %s is named by enabled mandates: %s", name, strings.Join(deps, ", ")), nil)
-				return
-			}
-		}
-		d, err := s.Store.Documents().SetDisabled(r.Context(), string(kind), name, disabled, s.actor(r))
+		var d store.Document
+		err := s.change(r.Context(),
+			func(after *snapshot, c store.Config) error {
+				cur, err := c.Documents().Current(r.Context(), string(kind), name)
+				if err != nil {
+					return err
+				}
+				if !disabled {
+					return after.put(string(kind), cur.Doc)
+				}
+				if kind == schema.Manifest {
+					// A manifest that enabled mandates rest on stays enabled
+					// until they no longer name it.
+					var m v0.Manifest
+					if err := json.Unmarshal(cur.Doc, &m); err != nil {
+						return err
+					}
+					if deps := after.dependents(m.Spec.Audience); len(deps) > 0 {
+						return inUse(fmt.Sprintf("manifest %s is named by enabled mandates: %s", name, strings.Join(deps, ", ")))
+					}
+				}
+				after.disable(string(kind), name)
+				return nil
+			},
+			func(c store.Config) (err error) {
+				d, err = c.Documents().SetDisabled(r.Context(), string(kind), name, disabled, s.actor(r))
+				return err
+			})
 		if err != nil {
 			s.fail(w, err)
 			return
@@ -444,39 +443,48 @@ func (s *Server) suspendAgent(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) changeAgent(w http.ResponseWriter, r *http.Request, change func(*v0.Agent)) {
 	name := r.PathValue("name")
-	cur, err := s.Store.Documents().Current(r.Context(), v0.KindAgent, name)
+	var doc []byte
+	var status v0.AgentStatus
+	var stored store.Document
+	err := s.change(r.Context(),
+		func(after *snapshot, c store.Config) error {
+			cur, err := c.Documents().Current(r.Context(), v0.KindAgent, name)
+			if err != nil {
+				return err
+			}
+			var a v0.Agent
+			if err := json.Unmarshal(cur.Doc, &a); err != nil {
+				return err
+			}
+			change(&a)
+			status = a.Spec.Status
+			if doc, err = json.Marshal(a); err != nil {
+				return err
+			}
+			// The changed document goes through the same door as a
+			// written one.
+			if err := s.Validator.Check(schema.Agent, doc); err != nil {
+				return invalidDocument{err}
+			}
+			return after.put(v0.KindAgent, doc)
+		},
+		func(c store.Config) (err error) {
+			stored, err = c.Documents().Put(r.Context(), v0.KindAgent, name, doc, s.actor(r))
+			return err
+		})
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	var a v0.Agent
-	if err := json.Unmarshal(cur.Doc, &a); err != nil {
-		s.fail(w, err)
-		return
-	}
-	change(&a)
-	doc, err := json.Marshal(a)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	// The changed document goes through the same door as a written one.
-	if err := s.Validator.Check(schema.Agent, doc); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_document", err.Error(), nil)
-		return
-	}
-	if err := s.checkRules(r.Context(), schema.Agent, doc); err != nil {
-		s.fail(w, err)
-		return
-	}
-	stored, err := s.Store.Documents().Put(r.Context(), v0.KindAgent, name, doc, s.actor(r))
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	s.Log.Info("agent status changed", "agent", name, "status", a.Spec.Status, "version", stored.Version, "by", stored.CreatedBy)
+	s.Log.Info("agent status changed", "agent", name, "status", status, "version", stored.Version, "by", stored.CreatedBy)
 	writeJSON(w, http.StatusOK, toResponse(stored))
 }
+
+// invalidDocument is a document that fails its own schema or rules.
+type invalidDocument struct{ err error }
+
+func (e invalidDocument) Error() string { return e.err.Error() }
+func (e invalidDocument) Unwrap() error { return e.err }
 
 // ---------------------------------------------------------------- plumbing
 
@@ -519,6 +527,10 @@ func (s *Server) fail(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, "not_found", "no such document", nil)
 	case errors.Is(err, store.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error(), nil)
+	case errors.As(err, new(inUse)):
+		writeError(w, http.StatusConflict, "in_use", err.Error(), nil)
+	case errors.As(err, new(invalidDocument)):
+		writeError(w, http.StatusBadRequest, "invalid_document", err.Error(), nil)
 	default:
 		if p, ok := IsProblems(err); ok {
 			writeError(w, http.StatusBadRequest, "rules_violated", "the document contradicts the current configuration", p)

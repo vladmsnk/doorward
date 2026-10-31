@@ -63,7 +63,7 @@ func scanKey(row pgx.Row) (store.SigningKey, error) {
 
 // ---------------------------------------------------------------- secrets
 
-type secrets struct{ pool *pgxpool.Pool }
+type secrets struct{ pool db }
 
 func (s secrets) Put(ctx context.Context, name string, sealed []byte, by string) error {
 	_, err := s.pool.Exec(ctx, `

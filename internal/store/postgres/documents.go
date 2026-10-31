@@ -5,13 +5,12 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	v0 "github.com/vladmsnk/agentbox/api/v0"
 	"github.com/vladmsnk/agentbox/internal/store"
 )
 
-type documents struct{ pool *pgxpool.Pool }
+type documents struct{ pool db }
 
 const documentColumns = "kind, name, version, digest, doc, disabled, created_at, created_by"
 
