@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vladmsnk/agentbox/internal/admin"
@@ -192,6 +193,8 @@ func TestRefusals(t *testing.T) {
 			strings.ReplaceAll(invoices, "https://payments.example.internal", "https://nowhere.example.internal"), 400, "no manifest declares"},
 		{"constraint on an argument no operation has", "/admin/v0/mandates/invoices", strings.Replace(invoices, "/amount: { min: 0.01, max: 5000 }", "/total: { min: 0.01, max: 5000 }", 1), 400, "none of its operations"},
 		{"monthly limit above the agent's cap", "/admin/v0/mandates/invoices", strings.Replace(invoices, "max: 5000\n    - name: calls", "max: 25000\n    - name: calls", 1), 400, "caps it at 20000"},
+		{"contradictory bounds", "/admin/v0/mandates/invoices",
+			strings.Replace(invoices, "/amount: { min: 0.01, max: 5000 }", "/amount: { min: 6000, max: 5000 }", 1), 400, "min 6000 is above max 5000"},
 		{"second manifest on one audience", "/admin/v0/manifests/payments-copy",
 			strings.Replace(string(example(t, "manifest-payments-api.yaml")), "name: payments-api", "name: payments-copy", 1), 400, "already belongs to manifest payments-api"},
 		{"agent listing a missing mandate", "/admin/v0/agents/invoice-assistant",
@@ -317,12 +320,17 @@ func TestDisableAndEnable(t *testing.T) {
 	if !r.resp.Disabled || r.resp.Version != 2 {
 		t.Fatalf("disable mandate: %s", r.body)
 	}
-	// A disabled mandate no longer counts: an agent may still list it only
-	// if it exists, and it no longer exists for the rules.
-	rec := strings.Replace(string(example(t, "agent-reconciler.yaml")), "max_ttl: 2h", "max_ttl: 3h", 1)
-	if r := call(t, srv, http.MethodPut, "/admin/v0/agents/reconciler", []byte(rec), "application/yaml", true); r.status != 400 || !strings.Contains(r.body, "reconcile, which does not exist") {
-		t.Fatalf("agent listing a disabled mandate: %d %s", r.status, r.body)
+	// An agent may keep listing a disabled mandate: disabling it is how its
+	// grants are stopped at once. While it is disabled, the agent narrows
+	// below it.
+	narrow := strings.Replace(string(example(t, "agent-reconciler.yaml")), "/amount: { max: 5000 }", "/amount: { max: 500 }", 1)
+	mustOK(t, call(t, srv, http.MethodPut, "/admin/v0/agents/reconciler", []byte(narrow), "application/yaml", true))
+	// P4: enabling it again is checked against the configuration as it is
+	// now, and refused: the mandate allows 1000, the agent 500.
+	if r := call(t, srv, http.MethodPost, "/admin/v0/mandates/reconcile/enable", nil, "", true); r.status != 400 || !strings.Contains(r.body, "must stay at or below 500") {
+		t.Fatalf("enable a mandate that no longer fits: %d %s", r.status, r.body)
 	}
+	mustOK(t, call(t, srv, http.MethodPut, "/admin/v0/agents/reconciler", example(t, "agent-reconciler.yaml"), "application/yaml", true))
 	r = mustOK(t, call(t, srv, http.MethodPost, "/admin/v0/mandates/reconcile/enable", nil, "", true))
 	if r.resp.Disabled || r.resp.Version != 3 {
 		t.Fatalf("enable mandate: %s", r.body)
@@ -331,5 +339,81 @@ func TestDisableAndEnable(t *testing.T) {
 	r = mustOK(t, call(t, srv, http.MethodPost, "/admin/v0/mandates/reconcile/enable", nil, "", true))
 	if r.resp.Version != 3 {
 		t.Errorf("enable twice: version %d", r.resp.Version)
+	}
+}
+
+// P4: a manifest change is checked against the mandates and agents that
+// rely on it. Before, only the manifest's audience and secret were checked.
+func TestManifestChangesAreChecked(t *testing.T) {
+	srv := newServer(t)
+	loadExamples(t, srv)
+	payments := string(example(t, "manifest-payments-api.yaml"))
+
+	// Dropping an operation a mandate names.
+	start := strings.Index(payments, "    # Critical: never runs on a standing grant")
+	if start < 0 {
+		t.Fatal("the example manifest changed shape")
+	}
+	withoutPay := payments[:start]
+	if r := call(t, srv, http.MethodPut, "/admin/v0/manifests/payments-api", []byte(withoutPay), "application/yaml", true); r.status != 400 ||
+		!strings.Contains(r.body, "mandate invoices names operation pay_invoice, which manifest payments-api does not declare") {
+		t.Errorf("manifest dropping pay_invoice: %d %s", r.status, r.body)
+	}
+	// Raising an operation above an agent's ceiling: get_invoice becomes
+	// write, but the unverified desk helper, which may ask for the open
+	// read-only mandate, goes no higher than read.
+	raised := strings.Replace(payments, "description: Read one invoice.\n      sensitivity: read", "description: Read one invoice.\n      sensitivity: write", 1)
+	if raised == payments {
+		t.Fatal("the example manifest changed shape")
+	}
+	if r := call(t, srv, http.MethodPut, "/admin/v0/manifests/payments-api", []byte(raised), "application/yaml", true); r.status != 400 ||
+		!strings.Contains(r.body, "a write operation, but agent desk-helper-7f3a may go no higher than read") {
+		t.Errorf("manifest raising get_invoice: %d %s", r.status, r.body)
+	}
+	// Neither left a version behind.
+	r := call(t, srv, http.MethodGet, "/admin/v0/manifests/payments-api/versions", nil, "", true)
+	if strings.Count(r.body, `"version"`) != 1 {
+		t.Errorf("refused manifest writes created versions: %s", r.body)
+	}
+}
+
+// P4: two changes that are each fine, but not together, cannot both pass.
+// The mandate rises to 8000 while the agent's ceiling falls to 6000; one of
+// the two must be refused, whichever comes second.
+func TestConflictingChangesAreSerialized(t *testing.T) {
+	srv := newServer(t)
+	loadExamples(t, srv)
+	mandate := string(example(t, "mandate-invoices.yaml"))
+	agent := string(example(t, "agent-invoice-assistant.yaml"))
+	wideMandate := strings.Replace(mandate, "/amount: { min: 0.01, max: 5000 }", "/amount: { min: 0.01, max: 8000 }", 1)
+	lowAgent := strings.Replace(agent, "/amount: { max: 10000 }", "/amount: { max: 6000 }", 1)
+	if wideMandate == mandate || lowAgent == agent {
+		t.Fatal("the examples changed shape")
+	}
+	for round := 0; round < 20; round++ {
+		mustOK(t, call(t, srv, http.MethodPut, "/admin/v0/mandates/invoices", []byte(mandate), "application/yaml", true))
+		mustOK(t, call(t, srv, http.MethodPut, "/admin/v0/agents/invoice-assistant", []byte(agent), "application/yaml", true))
+		var wg sync.WaitGroup
+		codes := make([]int, 2)
+		for i, put := range []struct{ path, body string }{
+			{"/admin/v0/mandates/invoices", wideMandate},
+			{"/admin/v0/agents/invoice-assistant", lowAgent},
+		} {
+			wg.Add(1)
+			go func(i int, path, body string) {
+				defer wg.Done()
+				codes[i] = call(t, srv, http.MethodPut, path, []byte(body), "application/yaml", true).status
+			}(i, put.path, put.body)
+		}
+		wg.Wait()
+		ok := 0
+		for _, c := range codes {
+			if c == http.StatusOK {
+				ok++
+			}
+		}
+		if ok != 1 {
+			t.Fatalf("round %d: %d of the two conflicting changes passed (statuses %v)", round, ok, codes)
+		}
 	}
 }

@@ -200,3 +200,19 @@ func (a ApprovedAction) Hash() (string, error) {
 	}
 	return Digest(data), nil
 }
+
+// CanonicalDocument returns a JSON document in canonical form (RFC 8785)
+// and its digest. The box stores configuration in this form and names each
+// version by this digest, so a consent's mandate_version depends on what
+// the mandate says, not on how it was formatted when it was sent.
+func CanonicalDocument(doc []byte) ([]byte, string, error) {
+	var v any
+	if err := json.Unmarshal(doc, &v); err != nil {
+		return nil, "", fmt.Errorf("document is not JSON: %w", err)
+	}
+	canon, err := Canonical(v)
+	if err != nil {
+		return nil, "", err
+	}
+	return canon, Digest(canon), nil
+}

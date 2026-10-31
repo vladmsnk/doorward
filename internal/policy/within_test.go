@@ -1,8 +1,10 @@
 package policy_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -103,9 +105,9 @@ func TestWithinFindsEveryWidening(t *testing.T) {
 }
 
 func TestTightenAndSatisfies(t *testing.T) {
-	c := policy.Tighten(v0.Constraint{Max: f(100), OneOf: []any{"a", "b", "c"}}, v0.Constraint{Max: f(50), Min: f(1), OneOf: []any{"b", "c", "d"}})
-	if *c.Max != 50 || *c.Min != 1 || len(c.OneOf) != 2 {
-		t.Errorf("Tighten: %+v", c)
+	c, err := policy.Tighten(v0.Constraint{Max: f(100), OneOf: []any{1.0, 20.0, 70.0}}, v0.Constraint{Max: f(50), Min: f(1), OneOf: []any{20.0, 70.0, 80.0}})
+	if err != nil || *c.Max != 50 || *c.Min != 1 || len(c.OneOf) != 2 {
+		t.Errorf("Tighten: %+v %v", c, err)
 	}
 	amount := v0.Constraint{Min: f(0.01), Max: f(5000)}
 	for v, ok := range map[any]bool{1200.0: true, 7500.0: false, 0.0: false, "lots": false} {
@@ -118,5 +120,106 @@ func TestTightenAndSatisfies(t *testing.T) {
 	}
 	if policy.Satisfies(v0.Constraint{Equals: 5.0}, 5) != nil {
 		t.Error("int 5 should equal 5.0")
+	}
+}
+
+// P1: bounds that cannot all hold allow nothing. Before the fix, two
+// disjoint one_of lists combined into no list at all, which read as "any
+// value", and conflicting equals or prefixes kept whichever came second.
+func TestContradictionsAreUnsatisfiable(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b v0.Constraint
+		why  string
+	}{
+		{"disjoint one_of", v0.Constraint{OneOf: []any{"EUR"}}, v0.Constraint{OneOf: []any{"USD"}}, "no value in common"},
+		{"two equals", v0.Constraint{Equals: "acc_1"}, v0.Constraint{Equals: "acc_2"}, "equals acc_1 and equals acc_2"},
+		{"diverging prefixes", v0.Constraint{Prefix: s("acme/")}, v0.Constraint{Prefix: s("other/")}, "diverge"},
+		{"min above max", v0.Constraint{Max: f(10)}, v0.Constraint{Min: f(20)}, "min 20 is above max 10"},
+		{"equals outside one_of", v0.Constraint{OneOf: []any{"EUR", "USD"}}, v0.Constraint{Equals: "GBP"}, "does not meet the other bounds"},
+		{"one_of outside max", v0.Constraint{Max: f(5)}, v0.Constraint{OneOf: []any{10.0, 20.0}}, "no value of one_of"},
+		{"number and prefix", v0.Constraint{Max: f(5)}, v0.Constraint{Prefix: s("a")}, "no value is both"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := policy.Tighten(c.a, c.b)
+			if err == nil || !strings.Contains(err.Error(), c.why) {
+				t.Fatalf("Tighten = %+v, %v; want an error saying %q", got, err, c.why)
+			}
+			// Order does not matter.
+			if _, err := policy.Tighten(c.b, c.a); err == nil {
+				t.Error("unsatisfiable one way round only")
+			}
+		})
+	}
+	// Compatible prefixes keep the longer, in either order.
+	for _, pair := range [][2]string{{"acme/", "acme/payments/"}, {"acme/payments/", "acme/"}} {
+		c, err := policy.Tighten(v0.Constraint{Prefix: s(pair[0])}, v0.Constraint{Prefix: s(pair[1])})
+		if err != nil || *c.Prefix != "acme/payments/" {
+			t.Errorf("prefixes %v: %+v %v", pair, c, err)
+		}
+	}
+	// One document's own constraint can contradict itself too.
+	if err := policy.Admits(v0.Constraint{Min: f(10), Max: f(5)}); err == nil {
+		t.Error("min above max admitted")
+	}
+	if err := policy.Admits(v0.Constraint{Min: f(1), Max: f(5), OneOf: []any{3.0, 9.0}}); err != nil {
+		t.Errorf("satisfiable constraint refused: %v", err)
+	}
+}
+
+func TestEffectiveAndCoherent(t *testing.T) {
+	const loc = "https://payments.example.internal"
+	perms := []v0.Permission{
+		{Locations: []string{loc}, Actions: []string{"pay_invoice", "get_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"EUR"}}}},
+		{Locations: []string{loc}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"USD"}}}},
+	}
+	_, err := policy.Effective(perms, loc, "pay_invoice")
+	var u *policy.Unsatisfiable
+	if !errors.As(err, &u) || u.Field != "/currency" {
+		t.Fatalf("Effective: %v", err)
+	}
+	if b, err := policy.Effective(perms, loc, "get_invoice"); err != nil || len(b["/currency"].OneOf) != 1 {
+		t.Errorf("get_invoice: %+v %v", b, err)
+	}
+	p := policy.Coherent(perms, "mandate m")
+	if len(p) != 1 || !strings.Contains(p[0], "mandate m allows pay_invoice at "+loc+", but the bounds on /currency cannot all hold") {
+		t.Errorf("Coherent: %q", p)
+	}
+}
+
+// P2: the old example grant listed pay_invoice unbounded in one entry and
+// bounded in another. Merged, pay_invoice carries its bounds in a single
+// entry, and nothing else changes.
+func TestOnePerOperation(t *testing.T) {
+	const pay = "https://payments.example.internal"
+	amount := v0.Constraint{Min: f(0.01), Max: f(5000)}
+	currency := v0.Constraint{OneOf: []any{"EUR", "USD"}}
+	old := []v0.Permission{
+		{Locations: []string{pay}, Actions: []string{"get_invoice", "list_payments", "pay_invoice"}},
+		{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/amount": amount, "/currency": currency}},
+	}
+	got, err := policy.OnePerOperation(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []v0.Permission{
+		{Locations: []string{pay}, Actions: []string{"get_invoice", "list_payments"}},
+		{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/amount": amount, "/currency": currency}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got  %+v\nwant %+v", got, want)
+	}
+	// It allows exactly what the input allows, both ways round.
+	if p := policy.Within(got, "merged", old, "old", nil); p != nil {
+		t.Errorf("merged is wider: %v", p)
+	}
+	if p := policy.Within(old, "old", got, "merged", nil); p != nil {
+		t.Errorf("merged is narrower: %v", p)
+	}
+	// Contradictory bounds cannot be merged into a grant.
+	bad := append(old, v0.Permission{Locations: []string{pay}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"GBP"}}}})
+	if _, err := policy.OnePerOperation(bad); err == nil {
+		t.Error("merged bounds that cannot hold")
 	}
 }

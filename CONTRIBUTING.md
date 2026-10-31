@@ -9,12 +9,25 @@ certifying the [Developer Certificate of Origin](DCO):
 git commit -s
 ```
 
-CI checks every commit of a pull request (`scripts/check-dco.sh`). To sign
-off commits you have already made:
+CI checks every commit of a pull request and of every push to main
+(`scripts/check-dco.sh`). `make hooks` installs a commit-msg hook that runs
+the same check before a commit is made. To sign off commits you have
+already made:
 
 ```sh
 git rebase --signoff origin/main
 ```
+
+## AI-assisted development
+
+Much of agentbox is written with an AI coding assistant (Claude Code). The
+assistance is disclosed, not hidden:
+
+- Every commit is authored and signed off by the person who submits it,
+  who answers for it under the DCO. An AI cannot certify the DCO, so a
+  commit authored, committed or signed off by an AI identity is refused.
+- Commits written with an assistant say so with a `Co-Authored-By:`
+  trailer naming it.
 
 ## Before you push
 

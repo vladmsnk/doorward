@@ -7,7 +7,6 @@
   "exp": 1793325600,
   "jti": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
   "act": { "sub": "reconciler" },
-  "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000002" },
   "mandate": "reconcile",
   "authorization_details": [
     {

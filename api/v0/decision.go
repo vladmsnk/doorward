@@ -1,9 +1,8 @@
 package v0
 
-// Decision is the record of one authorization decision. It carries every
-// element level L1 asks for: who acts (Principal.Agent), on whose behalf
-// (Principal.User), where the decision was made (PDP), where it was enforced
-// (PEP), and what was asked (Request). Request is the agent's input and
+// Decision is the record of one authorization decision. It says who acts
+// (Principal.Agent), on whose behalf (Principal.User), where the decision was
+// made (PDP), where it was enforced (PEP), and what was asked (Request). Request is the agent's input and
 // Principal is what the verified grant established; the two are kept apart
 // because a request is not an authorization.
 type Decision struct {

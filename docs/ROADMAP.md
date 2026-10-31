@@ -41,8 +41,10 @@ What sets it apart, and what no open-source project combines today:
 | A3 | CLI client of the Admin API | skipped; superseded by `agentbox apply` (O1) |
 | A4 | signing keys, sealed secrets, JWK Set | on main |
 | B1 | grant verification | on main |
-| B2 | subset check | branch `b2-subset` |
-| B3 | tiers, action hash, single-use grants | branch `b3-sensitivity` |
+| B2 | subset check | on main |
+| B3 | tiers, action hash, single-use grants | on main |
+| P1–P7 | fail-open paths closed | on main |
+| | commits authored and signed off by a person, checked in CI | on main |
 
 ## What changed from the first plan, and why
 

@@ -33,7 +33,7 @@
     { "name": "request", "result": "pass" },
     { "name": "signature", "result": "pass" },
     { "name": "status", "result": "pass" },
-    { "name": "pop", "result": "pass" },
+    { "name": "pop", "result": "skip", "detail": "proof of possession is not checked yet" },
     { "name": "audience", "result": "pass" },
     { "name": "time", "result": "pass" },
     { "name": "subset", "result": "fail", "detail": "/amount" },

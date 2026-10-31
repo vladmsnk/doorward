@@ -44,7 +44,7 @@ func example(t *testing.T, rel string, kind schema.Kind) []byte {
 	return srcs[0].JSON
 }
 
-// F02 "done when": every example passes validation, decodes into its Go type,
+// Every example passes validation, decodes into its Go type,
 // and comes back out of the Go type unchanged and still valid.
 func TestExamplesValidateAndRoundTrip(t *testing.T) {
 	v := newValidator(t)
@@ -260,7 +260,7 @@ func TestInvalidDocuments(t *testing.T) {
 		{"aud as a string", userGrant, schema.Grant, []edit{{set: "/aud", value: "https://payments.example.internal"}}, "type"},
 		{"empty aud", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{}}}, "minItems"},
 		{"exp as a date string", userGrant, schema.Grant, []edit{{set: "/exp", value: "2026-10-30T10:00:00Z"}}, "type"},
-		{"short key thumbprint", userGrant, schema.Grant, []edit{{set: "/cnf/jkt", value: "abc"}}, "pattern"},
+		{"short key thumbprint", userGrant, schema.Grant, []edit{{set: "/cnf", value: map[string]any{"jkt": "abc"}}}, "pattern"},
 		{"unknown claim", userGrant, schema.Grant, []edit{{set: "/roles", value: []any{"admin"}}}, "additionalProperties"},
 		{"task claim is gone", userGrant, schema.Grant, []edit{{set: "/task", value: map[string]any{"id": "tsk_0000000000"}}}, "additionalProperties"},
 		{"delegation claims are not in v0", userGrant, schema.Grant, []edit{{set: "/parent", value: "grt_01JBXR4T7Q2M9X4KZ8D3F6H1ZZ"}}, "additionalProperties"},
@@ -341,6 +341,7 @@ func TestRuleChecks(t *testing.T) {
 		edits []edit
 		want  string
 	}{
+		{"operation in two entries", userGrant, schema.Grant, []edit{{set: "/authorization_details/0/actions", value: []any{"get_invoice", "list_payments", "pay_invoice"}}}, "each operation appears in exactly one entry"},
 		{"aud wider than the details", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{"https://payments.example.internal", "https://other.example.internal"}}}, "aud must list exactly"},
 		{"expiring before issue", userGrant, schema.Grant, []edit{{set: "/exp", value: 1793352000}}, "exp must be after iat"},
 		{"user grant without sub_id", userGrant, schema.Grant, []edit{{del: "/sub_id"}}, "sub_id must say"},
@@ -579,5 +580,22 @@ func TestParseKind(t *testing.T) {
 	}
 	if _, err := schema.ParseKind("task-type"); err == nil {
 		t.Error("ParseKind accepted task-type")
+	}
+}
+
+// The example consent names the version of the example mandate Alice saw:
+// the digest of that mandate in canonical form, as the box stores it.
+func TestConsentNamesTheMandateVersion(t *testing.T) {
+	v := newValidator(t)
+	c, err := schema.Decode[v0.Consent](v, example(t, consent, schema.Consent))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := v0.CanonicalDocument(example(t, mandate, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.MandateVersion != digest {
+		t.Errorf("consent names mandate version %s; the example mandate is %s", c.MandateVersion, digest)
 	}
 }

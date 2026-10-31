@@ -46,6 +46,33 @@ func (s *Store) Counters() store.Counters   { return counters{s.pool} }
 func (s *Store) Keys() store.Keys           { return signingKeys{s.pool} }
 func (s *Store) Secrets() store.Secrets     { return secrets{s.pool} }
 
+// configLock is the advisory lock key every configuration change holds.
+const configLock = "agentbox:config"
+
+func (s *Store) LockConfig(ctx context.Context, fn func(store.Config) error) error {
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", configLock); err != nil {
+			return err
+		}
+		return fn(configTx{tx})
+	})
+}
+
+// configTx is the configuration seen through one transaction.
+type configTx struct{ tx pgx.Tx }
+
+func (c configTx) Documents() store.Documents { return documents{c.tx} }
+func (c configTx) Secrets() store.Secrets     { return secrets{c.tx} }
+
+// db is what the configuration parts need from either the pool or a
+// transaction. A Begin on a transaction opens a savepoint.
+type db interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
 func (s *Store) Close() error {
 	s.pool.Close()
 	return nil

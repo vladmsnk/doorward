@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Refuses a commit before it exists when it would fail scripts/check-dco.sh:
+# authored or committed by an AI assistant, signed off by one, or not signed
+# off by its author. Install with `make hooks`.
+set -euo pipefail
+
+msg_file=$1
+not_a_person='@anthropic\.com>?$|^Claude <'
+
+ident() { git var "$1" | sed -E 's/ [0-9]+ [+-][0-9]{4}$//'; }
+author="$(ident GIT_AUTHOR_IDENT)"
+committer="$(ident GIT_COMMITTER_IDENT)"
+
+fail() {
+	echo "commit-msg: $1" >&2
+	echo "commit-msg: commit as yourself and sign off with 'git commit -s'; see CONTRIBUTING.md" >&2
+	exit 1
+}
+
+grep -qE "$not_a_person" <<<"$author" && fail "the author is an AI assistant ($author)"
+grep -qE "$not_a_person" <<<"$committer" && fail "the committer is an AI assistant ($committer)"
+signoffs="$(git interpret-trailers --parse "$msg_file" | sed -n 's/^Signed-off-by: //p')"
+grep -E "$not_a_person" <<<"$signoffs" | grep -q . && fail "a sign-off names an AI assistant; only a person can certify the DCO"
+# Merges are exempt from the sign-off itself, as in check-dco.sh.
+if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+	grep -qxF "$author" <<<"$signoffs" || fail "no trailer: Signed-off-by: $author"
+fi
+exit 0

@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -30,7 +31,16 @@ func Subset(g v0.Grant, op *v0.Operation, call Call) (v0.Check, *v0.Reason) {
 	if op == nil {
 		return failAction(fmt.Sprintf("the manifest of %s declares no operation %s", call.Resource, call.Action))
 	}
-	bounds := policy.Effective(perms, call.Resource, call.Action)
+	bounds, err := policy.Effective(perms, call.Resource, call.Action)
+	var u *policy.Unsatisfiable
+	if errors.As(err, &u) {
+		// Bounds that contradict each other allow no call, whatever the
+		// arguments.
+		return failField(v0.ReasonConstraintViolated, u.Field, u.Error())
+	}
+	if err != nil {
+		return failAction(err.Error())
+	}
 	fields := make([]string, 0, len(bounds))
 	for f := range bounds {
 		fields = append(fields, f)
@@ -120,4 +130,13 @@ func violation(c v0.Constraint, value any) string {
 		return fmt.Sprintf("%s does not start with the grant's %q", v, *c.Prefix)
 	}
 	return v + " is outside the grant"
+}
+
+// Details writes permissions as a grant's authorization_details.
+func Details(perms []v0.Permission) []v0.AuthorizationDetail {
+	out := make([]v0.AuthorizationDetail, len(perms))
+	for i, p := range perms {
+		out[i] = v0.AuthorizationDetail{Type: v0.AuthorizationDetailType, Locations: p.Locations, Actions: p.Actions, Constraints: p.Constraints}
+	}
+	return out
 }

@@ -329,3 +329,15 @@ func BenchmarkVerify(b *testing.B) {
 		}
 	}
 }
+
+// P6: a grant that claims a key binding the box does not check fails pop,
+// instead of being honoured as a Bearer token.
+func TestBoundGrantFailsPoP(t *testing.T) {
+	f := setup(t)
+	g := f.claims
+	g.Confirmation = &v0.Confirmation_{JKT: strings.Repeat("k", 43)}
+	r, err := f.v.Verify(context.Background(), f.sign(t, g), aud)
+	if err != nil || r.OK() || r.Reason.Code != v0.ReasonPoPMissing || checks(r) != "signature:pass status:pass pop:fail" {
+		t.Fatalf("%s %+v %v", checks(r), r.Reason, err)
+	}
+}

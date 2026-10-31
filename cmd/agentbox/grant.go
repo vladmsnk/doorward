@@ -16,6 +16,7 @@ import (
 	"github.com/vladmsnk/agentbox/internal/grant"
 	"github.com/vladmsnk/agentbox/internal/ids"
 	"github.com/vladmsnk/agentbox/internal/keys"
+	"github.com/vladmsnk/agentbox/internal/policy"
 	"github.com/vladmsnk/agentbox/internal/sealer"
 	"github.com/vladmsnk/agentbox/internal/store"
 	"github.com/vladmsnk/agentbox/internal/store/postgres"
@@ -102,9 +103,12 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	g, err := readRecord[v0.Grant](v, fs.Arg(0), schema.Grant)
+	g, err := readClaims(v, fs.Arg(0))
 	if err != nil {
 		return fail("%v", err)
+	}
+	if g.Confirmation != nil {
+		return fail("claims: cnf binds the grant to a key, but the box does not check proofs of possession yet, so it issues Bearer grants; remove cnf")
 	}
 	now := time.Now()
 	if *issuer != "" {
@@ -112,6 +116,13 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	}
 	g.IssuedAt, g.Expiry = now.Unix(), now.Add(*ttl).Unix()
 	g.ID = ids.At(ids.Grant, now)
+	// One entry per operation, carrying all of its bounds, as every grant
+	// the box issues has it.
+	perms, err := policy.OnePerOperation(core.Permissions(g.AuthorizationDetails))
+	if err != nil {
+		return fail("claims: %v", err)
+	}
+	g.AuthorizationDetails = core.Details(perms)
 	// Check the result as a verifier will.
 	claims, err := json.Marshal(g)
 	if err != nil {
@@ -143,7 +154,7 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = st.Close() }()
 
-	if err := mintable(ctx, st, g); err != nil {
+	if err := mintable(ctx, st, v, g); err != nil {
 		return fail("%v", err)
 	}
 	if *consentFile != "" {
@@ -159,8 +170,14 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if g.Consent != "" {
-		if err := consentFits(ctx, st, g); err != nil {
+		until, err := consentFits(ctx, st, v, g, now)
+		if err != nil {
 			return fail("%v", err)
+		}
+		// A grant never outlives the consent it rests on.
+		if until.Unix() < g.Expiry {
+			g.Expiry = until.Unix()
+			rec.Grant = g
 		}
 	}
 	signer, err := keys.New(st.Keys(), sl).Ensure(ctx)
@@ -184,10 +201,10 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 }
 
 // mintable refuses what the token service would: an agent that is not
-// registered or is suspended, a mandate that does not exist or is disabled.
-// Whether the mandate allows these permissions is the token service's
-// job, not this command's.
-func mintable(ctx context.Context, st store.Store, g v0.Grant) error {
+// registered or is suspended, a mandate that does not exist or is disabled,
+// a grant wider than the mandate. Building the grant from the mandate and
+// the agent is the token service's job; this only checks the result.
+func mintable(ctx context.Context, st store.Store, v *schema.Validator, g v0.Grant) error {
 	doc, err := st.Documents().Current(ctx, v0.KindAgent, g.Actor.Subject)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("agent %s is not registered; PUT it through the Admin API first", g.Actor.Subject)
@@ -202,38 +219,116 @@ func mintable(ctx context.Context, st store.Store, g v0.Grant) error {
 	if a.Spec.Status == v0.AgentSuspended {
 		return fmt.Errorf("agent %s is suspended", g.Actor.Subject)
 	}
-	m, err := st.Documents().Current(ctx, v0.KindMandate, g.Mandate)
+	md, err := st.Documents().Current(ctx, v0.KindMandate, g.Mandate)
 	if errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("mandate %s does not exist", g.Mandate)
 	}
 	if err != nil {
 		return err
 	}
-	if m.Disabled {
+	if md.Disabled {
 		return fmt.Errorf("mandate %s is disabled", g.Mandate)
+	}
+	return grantWithin(ctx, st, v, g, md, fmt.Sprintf("mandate %s", g.Mandate))
+}
+
+// consentFits checks that a user grant rests on a recorded, active,
+// unexpired consent given to this agent for this mandate, and lies within
+// the mandate as the user saw it when consenting. It returns when the
+// consent expires: the grant must not outlive it.
+func consentFits(ctx context.Context, st store.Store, v *schema.Validator, g v0.Grant, now time.Time) (time.Time, error) {
+	c, err := st.Consents().Get(ctx, g.Consent)
+	if errors.Is(err, store.ErrNotFound) {
+		return time.Time{}, fmt.Errorf("consent %s is not recorded; a grant to a user rests on one: pass --consent FILE", g.Consent)
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	switch {
+	case c.Agent != g.Actor.Subject:
+		return time.Time{}, fmt.Errorf("consent %s was given to agent %s, not %s", c.ID, c.Agent, g.Actor.Subject)
+	case c.Mandate != g.Mandate:
+		return time.Time{}, fmt.Errorf("consent %s is for mandate %s, not %s", c.ID, c.Mandate, g.Mandate)
+	case c.Status != v0.ConsentActive:
+		return time.Time{}, fmt.Errorf("consent %s is %s", c.ID, c.Status)
+	case !now.Before(c.ExpiresAt.Time):
+		return time.Time{}, fmt.Errorf("consent %s expired at %s", c.ID, c.ExpiresAt.UTC().Format(v0.TimestampLayout))
+	}
+	seen, err := st.Documents().ByDigest(ctx, v0.KindMandate, g.Mandate, c.MandateVersion)
+	if errors.Is(err, store.ErrNotFound) {
+		return time.Time{}, fmt.Errorf("consent %s names version %s of mandate %s, which the box does not have", c.ID, c.MandateVersion, g.Mandate)
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	// The mandate may have changed since: the grant must lie within what
+	// the user agreed to, as well as within the mandate as it is now.
+	who := fmt.Sprintf("mandate %s as consented to in %s (version %d)", g.Mandate, c.ID, seen.Version)
+	if err := grantWithin(ctx, st, v, g, seen, who); err != nil {
+		return time.Time{}, err
+	}
+	return c.ExpiresAt.Time, nil
+}
+
+// grantWithin checks a grant's permissions and budgets against one version
+// of its mandate.
+func grantWithin(ctx context.Context, st store.Store, v *schema.Validator, g v0.Grant, md store.Document, who string) error {
+	m, err := schema.Decode[v0.Mandate](v, md.Doc)
+	if err != nil {
+		return fmt.Errorf("%s: %w", who, err)
+	}
+	declared, err := declaredParams(ctx, st, v)
+	if err != nil {
+		return err
+	}
+	problems := policy.Within(core.Permissions(g.AuthorizationDetails), "the grant", m.Spec.Permissions, who, declared)
+	for _, ml := range m.Spec.Limits {
+		found := false
+		for _, gl := range g.Limits {
+			if gl.Name != ml.Name {
+				continue
+			}
+			found = true
+			if gl.Kind != ml.Kind || gl.Field != ml.Field || gl.Max > ml.Max {
+				problems = append(problems, fmt.Sprintf("the grant's limit %s is looser than %s's", gl.Name, who))
+			}
+		}
+		if !found {
+			problems = append(problems, fmt.Sprintf("the grant lacks limit %s, which %s sets", ml.Name, who))
+		}
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("the grant goes beyond %s: %s", who, strings.Join(problems, "; "))
 	}
 	return nil
 }
 
-// consentFits checks that a user grant rests on a recorded, active consent
-// given to this agent for this mandate.
-func consentFits(ctx context.Context, st store.Store, g v0.Grant) error {
-	c, err := st.Consents().Get(ctx, g.Consent)
-	if errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("consent %s is not recorded; a grant to a user rests on one: pass --consent FILE", g.Consent)
-	}
+// declaredParams says which arguments each operation has, from the enabled
+// manifests.
+func declaredParams(ctx context.Context, st store.Store, v *schema.Validator) (policy.Declared, error) {
+	docs, err := st.Documents().List(ctx, v0.KindManifest)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	switch {
-	case c.Agent != g.Actor.Subject:
-		return fmt.Errorf("consent %s was given to agent %s, not %s", c.ID, c.Agent, g.Actor.Subject)
-	case c.Mandate != g.Mandate:
-		return fmt.Errorf("consent %s is for mandate %s, not %s", c.ID, c.Mandate, g.Mandate)
-	case c.Status != v0.ConsentActive:
-		return fmt.Errorf("consent %s is %s", c.ID, c.Status)
+	byAud := make(map[string]v0.Manifest)
+	for _, d := range docs {
+		if d.Disabled {
+			continue
+		}
+		m, err := schema.Decode[v0.Manifest](v, d.Doc)
+		if err != nil {
+			return nil, fmt.Errorf("manifest %s: %w", d.Name, err)
+		}
+		byAud[m.Spec.Audience] = m
 	}
-	return nil
+	return func(location, action, field string) bool {
+		op := core.Operation(byAud[location], action)
+		if op == nil {
+			return true // an unknown operation: treat every bound as applying
+		}
+		_, ok := op.Params[field]
+		return ok
+	}, nil
 }
 
 func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -383,6 +478,30 @@ func printResult(w io.Writer, r grant.Result, call *core.Call, held bool) {
 	}
 	left := time.Until(time.Unix(g.Expiry, 0)).Round(time.Second)
 	fmt.Fprintf(w, "accepted: grant %s, agent %s acting for %s, mandate %s, expires in %s\n", g.ID, g.Actor.Subject, who, g.Mandate, left)
+}
+
+// readClaims reads a grant's claims to mint from: the schema must hold,
+// but the grant's rules run only on the grant as minted, once its entries
+// are merged and its times and ID are set.
+func readClaims(v *schema.Validator, name string) (v0.Grant, error) {
+	var g v0.Grant
+	data, err := os.ReadFile(name) // #nosec G304 -- reading the file the user named is the command's job
+	if err != nil {
+		return g, err
+	}
+	src, err := schema.Read(name, data, schema.Grant)
+	if err != nil {
+		return g, err
+	}
+	if len(src) != 1 {
+		return g, fmt.Errorf("%s: want one grant, found %d documents", name, len(src))
+	}
+	if err := v.Validate(schema.Grant, src[0].JSON); err != nil {
+		return g, err
+	}
+	dec := json.NewDecoder(strings.NewReader(string(src[0].JSON)))
+	dec.DisallowUnknownFields()
+	return g, dec.Decode(&g)
 }
 
 // readArgs decodes a call's arguments: one JSON object, no duplicate names.

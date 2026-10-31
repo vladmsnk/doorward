@@ -27,15 +27,28 @@ var (
 
 // Store is everything the box keeps.
 type Store interface {
-	Documents() Documents
+	Config
 	Consents() Consents
 	Grants() Grants
 	Decisions() Decisions
 	Approvals() Approvals
 	Counters() Counters
 	Keys() Keys
-	Secrets() Secrets
+	// LockConfig runs fn in one transaction holding the configuration lock.
+	// No two LockConfig calls run at once, fn reads the configuration as
+	// the last of them left it, and its writes commit together or, if it
+	// returns an error, not at all. Every change to configuration goes
+	// through it, so a change is checked against the configuration it will
+	// actually join.
+	LockConfig(ctx context.Context, fn func(Config) error) error
 	Close() error
+}
+
+// Config is the part of the store that holds configuration: the documents,
+// and the secrets they name.
+type Config interface {
+	Documents() Documents
+	Secrets() Secrets
 }
 
 // Document is one version of a configuration document.

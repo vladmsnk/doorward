@@ -10,16 +10,38 @@ company that has neither, and each can be replaced through a standard
 interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 
 > `agentbox` is a working name.
+>
+> Development is AI-assisted: much of the code is written with Claude Code,
+> and every commit is authored and signed off by a human maintainer (see
+> [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
 
 ## Status
 
-The contract, storage, Admin API, signing keys and grant verification are
-on main; the subset and sensitivity checks are on branches. Nothing yet
-sits in front of a real tool: the next steps close the fail-open paths,
-finish the decision core, and then build one end-to-end slice in which an
-off-the-shelf MCP client connects, a user consents, and a call is refused
-or approved. The order and the reasons are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+On main: the contract, PostgreSQL storage, the Admin API, signing keys and
+sealed secrets, grant verification, and the decision core's subset and
+sensitivity checks, with the fail-open paths found in review closed.
+Nothing yet sits in front of a real tool. Next come budgets and the
+evaluation endpoint, then one end-to-end slice in which an off-the-shelf
+MCP client connects, a user consents, and a call is refused or approved.
+The order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## What agentbox cannot see
+
+Agentbox decides only on calls that pass through it, to tools a company has
+described to it. It cannot see or stop:
+
+- **Calls that never reach it**: an agent acting on the machine it runs on
+  (a shell, local files, credentials stored there), or calling an API
+  directly with a credential it already holds.
+- **What the model decides**: prompt injection, a poisoned tool
+  description, a goal hijacked mid-task. Agentbox does not prevent an agent
+  from being manipulated; it bounds what a manipulated agent can do: which
+  operations, with which arguments, within which budgets, and which calls a
+  person approves first.
+- **What a tool does with an allowed call**: a compromised server behind
+  the gateway can misuse what it is allowed to receive. A constraint that
+  pins an argument, such as an email's recipient, narrows that; nothing
+  removes it.
 
 ## Quick start
 
@@ -41,15 +63,21 @@ PostgreSQL 16: `make test-db` starts a throwaway one and prints the
 ## Admin API
 
 Configuration enters the box through the Admin API, and only there. Every
-write is validated against the contract, then against the other documents
-(a mandate's operations exist, a mandate lies within every agent that may
-hold it, no identity is claimed twice), and stored as a new version. Nothing
-is overwritten; `…/versions` shows who changed what and when.
+write is validated against the contract, then against the whole
+configuration as it would be after the write (a mandate's operations exist,
+a mandate lies within every agent that may hold it, no identity is claimed
+twice), under one lock so concurrent changes are checked one after the
+other, and stored as a new version. Nothing is overwritten; `…/versions`
+shows who changed what and when.
+
+The Admin API listens on `127.0.0.1:8081` by default, because one token
+authorizes every change. Expose it with `--admin-addr` only behind
+something that restricts who can reach it.
 
 ```sh
 export AGENTBOX_DB=postgres://… AGENTBOX_ADMIN_TOKEN=$(openssl rand -hex 16)
 export AGENTBOX_MASTER_KEY=$(agentbox master-key)   # keep it: it seals the signing keys and secrets
-agentbox serve                                      # public listener on :8080, Admin API on :8081
+agentbox serve                                      # public listener on :8080, Admin API on 127.0.0.1:8081
 
 H="Authorization: Bearer $AGENTBOX_ADMIN_TOKEN"
 curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \
@@ -98,16 +126,20 @@ record, in the record's order, and stops at the first failure:
 | Check | Refused with |
 |---|---|
 | `signature` | `grant_missing`, `grant_malformed`, `grant_signature_invalid` |
-| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or its agent is suspended |
-| `pop` | recorded as `skip` until the sidecar sends DPoP proofs |
+| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or it is a used single-use grant; its agent is suspended; its consent is revoked or expired; its mandate is disabled |
+| `pop` | recorded as `skip`: the box issues Bearer grants and does not check proofs of possession yet. A grant that carries `cnf` anyway fails with `pop_missing` |
 | `audience` | `audience_mismatch` |
 | `time` | `grant_expired`, `grant_not_yet_valid` (30 s of clock skew allowed) |
 
 Until the token service exists, grants are minted from the command line.
-`mint` replaces `iat`, `exp` and `jti`, checks that the agent is registered
-and not suspended, the mandate exists and is enabled and, for a user, that
-the consent is recorded, active and given to this agent for this mandate;
-then it signs and records the grant. It needs the database and the master
+`mint` replaces `iat`, `exp` and `jti` and merges the grant to one entry
+per operation. It checks that the agent is registered and not suspended,
+the mandate exists and is enabled, and the grant lies within it. For a
+user it also checks that the consent is recorded, active, unexpired and
+given to this agent for this mandate, and that the grant lies within the
+mandate as the user saw it, named by the consent's `mandate_version`; the
+grant expires no later than the consent. Then it signs and records the
+grant. It needs the database and the master
 key, so it gives its user nothing they could not already do.
 
 ```sh
@@ -211,7 +243,7 @@ as agents work.
 | [Mandate](schema/v0/mandate.schema.json) | company | What an agent may do for a principal and on what terms: permissions, limits, how long a user's consent stands, who approves critical calls |
 | [Consent](schema/v0/consent.schema.json) | the box | One person allowing one agent one mandate, given on the box's consent page |
 | [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent holds under a mandate |
-| [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision, with every element level L1 asks for |
+| [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision: who acted, for whom, under which grant and consent, what was asked, every check and its result, and where it was decided and enforced |
 | [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
 
 ### How an agent asks for authority
@@ -314,11 +346,14 @@ order, an allowed decision has no failed check, a manifest's path parameters
 match its routes, an approval's voters are distinct and match its route, and
 `min ≤ max` everywhere.
 
-Rules that need a second document belong to the features that load both: a
-mandate lying within an agent's permissions (F12), operations existing in a
-manifest (F08), an agent requesting only mandates it may (F11).
-The hashes, key thumbprints and tokens in the examples have the right format
-but are placeholders, not real values (F05, F10).
+Rules that need a second document run in the Admin API, over the whole
+configuration: a mandate lying within every agent that may hold it,
+operations existing in a manifest, an agent requesting only mandates it
+may, an identity claimed once.
+
+In the examples, action hashes and the consent's `mandate_version` are real
+digests, kept so by tests. Other IDs, chain hashes and policy versions have
+the right format but are placeholders.
 
 ### Decisions for the first implementation
 

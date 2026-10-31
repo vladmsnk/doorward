@@ -72,8 +72,7 @@ func TestSubsetExamples(t *testing.T) {
 			v0.ReasonConstraintViolated, "/amount", "7500 is above the grant's max of 5000"},
 		{"post an entry", reconciler, core.Call{ledger, "post_entry", map[string]any{"account_id": "acc_EU_448120", "amount": 240.5, "memo": "payment pmt_8K2"}}, "", "", ""},
 
-		// Bounds of every entry naming the operation apply: the first entry
-		// lists pay_invoice unbounded, the second bounds it.
+		// The currency bound holds too.
 		{"pay in GBP", alice, core.Call{payments, "pay_invoice", map[string]any{"invoice_id": "i", "amount": 10.0, "currency": "GBP"}},
 			v0.ReasonConstraintViolated, "/currency", `"GBP" is not one of the grant's ["EUR","USD"]`},
 		{"pay nothing", alice, core.Call{payments, "pay_invoice", map[string]any{"invoice_id": "i", "amount": 0.0, "currency": "EUR"}},
@@ -179,5 +178,22 @@ func TestSubsetUndeclaredAndNestedArguments(t *testing.T) {
 				t.Errorf("want a refusal on %s, got %+v %+v", c.field, check, reason)
 			}
 		})
+	}
+}
+
+// P1: a grant whose entries bound one argument in contradictory ways allows
+// no call. Before the fix, EUR in one entry and USD in another combined into
+// no bound at all, and any currency passed.
+func TestSubsetContradictoryEntries(t *testing.T) {
+	g := v0.Grant{AuthorizationDetails: []v0.AuthorizationDetail{
+		{Type: "tool_call", Locations: []string{payments}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"EUR"}}}},
+		{Type: "tool_call", Locations: []string{payments}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"USD"}}}},
+	}}
+	w := newWorld(t)
+	for _, cur := range []string{"EUR", "USD", "GBP"} {
+		check, reason := w.subset(g, core.Call{Resource: payments, Action: "pay_invoice", Arguments: map[string]any{"invoice_id": "i", "amount": 10.0, "currency": cur}})
+		if reason == nil || reason.Code != v0.ReasonConstraintViolated || reason.Field != "/currency" || check.Result != v0.CheckFail {
+			t.Errorf("%s: %+v %+v", cur, check, reason)
+		}
 	}
 }

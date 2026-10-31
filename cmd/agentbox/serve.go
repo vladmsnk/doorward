@@ -21,6 +21,10 @@ import (
 	"github.com/vladmsnk/agentbox/schema"
 )
 
+// defaultAdminAddr keeps the Admin API off the network unless an operator
+// opens it: one token authorizes every change to the configuration.
+const defaultAdminAddr = "127.0.0.1:8081"
+
 // runServe starts the box: a public listener (health, the JWK Set; the
 // token service and the gateway join it in later steps) and the Admin API
 // on its own port, so the two can be exposed differently.
@@ -30,7 +34,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
 	masterKey := fs.String("master-key", os.Getenv("AGENTBOX_MASTER_KEY"), "32-byte key, hex or base64, that seals private keys and secrets (or AGENTBOX_MASTER_KEY)")
 	addr := fs.String("addr", ":8080", "address of the public listener")
-	adminAddr := fs.String("admin-addr", ":8081", "address of the Admin API")
+	adminAddr := fs.String("admin-addr", defaultAdminAddr, "address of the Admin API; it changes configuration, so it listens on this machine only unless told otherwise")
 	adminToken := fs.String("admin-token", os.Getenv("AGENTBOX_ADMIN_TOKEN"), "bootstrap administrator token (or AGENTBOX_ADMIN_TOKEN)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {

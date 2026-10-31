@@ -33,6 +33,25 @@ func openStore(t *testing.T) *postgres.Store {
 	return s
 }
 
+func putDoc(t *testing.T, s store.Store, rel string) {
+	t.Helper()
+	data, err := os.ReadFile("../../examples/v0/" + rel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := schema.Read(rel, data, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta struct {
+		Metadata struct{ Name string } `json:"metadata"`
+	}
+	_ = json.Unmarshal(src[0].JSON, &meta)
+	if _, err := s.Documents().Put(context.Background(), string(src[0].Kind), meta.Metadata.Name, src[0].JSON, "test"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func putAgent(t *testing.T, s store.Store, status v0.AgentStatus) {
 	t.Helper()
 	data, err := os.ReadFile("../../examples/v0/config/agent-invoice-assistant.yaml")
@@ -56,7 +75,8 @@ func TestStoreStatus(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	f := setup(t)
-	st := grant.StoreStatus{Store: s}
+	st := grant.StoreStatus{Store: s, Now: func() time.Time { return f.now }}
+	putDoc(t, s, "config/mandate-invoices.yaml")
 
 	standing := func(want string) {
 		t.Helper()
@@ -95,10 +115,20 @@ func TestStoreStatus(t *testing.T) {
 	standing("agent invoice-assistant is suspended")
 	putAgent(t, s, v0.AgentVerified)
 	standing("")
-	if err := s.Grants().Revoke(ctx, f.claims.ID, time.Now()); err != nil {
+
+	// The mandate and the consent the grant rests on are read too (P3).
+	if _, err := s.Documents().SetDisabled(ctx, v0.KindMandate, "invoices", true, "test"); err != nil {
 		t.Fatal(err)
 	}
-	standing("was revoked at")
+	standing("mandate invoices is disabled")
+	if _, err := s.Documents().SetDisabled(ctx, v0.KindMandate, "invoices", false, "test"); err != nil {
+		t.Fatal(err)
+	}
+	standing("")
+	f.now = consent.ExpiresAt.Time
+	standing("consent cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D expired at 2026-11-29T09:29:45.000Z")
+	f.now = time.Unix(f.claims.IssuedAt, 0).Add(5 * time.Minute)
+	standing("")
 
 	// A single-use grant stands, bound to its call, until it is spent.
 	once := f.claims
@@ -115,6 +145,25 @@ func TestStoreStatus(t *testing.T) {
 	}
 	if got, _ := st.Standing(ctx, once); !strings.Contains(got.Refusal, "was used at") {
 		t.Errorf("spent single-use grant: %+v", got)
+	}
+
+	if err := s.Grants().Revoke(ctx, f.claims.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	standing("was revoked at")
+
+	// A grant whose consent was revoked fails, even if the grant itself
+	// was missed when its consent's grants were revoked.
+	if _, err := s.Consents().Revoke(ctx, consent.ID, v0.RevokedByUser, f.now); err != nil {
+		t.Fatal(err)
+	}
+	other := f.claims
+	other.ID = "grt_01JBXR9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z"
+	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: other, Agent: "invoice-assistant"}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Standing(ctx, other); got.Refusal != "consent cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D is revoked" {
+		t.Errorf("grant on a revoked consent: %q", got.Refusal)
 	}
 
 	// Through the verifier: the record of a revoked grant ends at status.

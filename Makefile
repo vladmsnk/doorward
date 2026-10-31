@@ -71,6 +71,11 @@ validate-examples: build
 dco-check:
 	scripts/check-dco.sh $(DCO_BASE) HEAD
 
+# Refuse, before they exist, commits that dco-check would refuse.
+.PHONY: hooks
+hooks:
+	git config core.hooksPath scripts/hooks
+
 # What CI runs, in the same order.
 .PHONY: ci
 ci: tidy-check fmt-check vet lint test validate-examples
