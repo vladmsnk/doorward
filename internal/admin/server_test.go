@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	"github.com/vladmsnk/agentbox/internal/admin"
+	"github.com/vladmsnk/agentbox/internal/keys"
+	"github.com/vladmsnk/agentbox/internal/sealer"
 	"github.com/vladmsnk/agentbox/internal/store/postgres"
 	"github.com/vladmsnk/agentbox/schema"
 )
@@ -32,14 +34,20 @@ func newServer(t *testing.T) *httptest.Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = st.Close() })
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters"); err != nil {
+	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
 		t.Fatal(err)
 	}
 	v, err := schema.NewValidator()
 	if err != nil {
 		t.Fatal(err)
 	}
-	api := &admin.Server{Store: st, Validator: v, Token: token, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	master, _ := sealer.Generate()
+	sl, _ := sealer.Parse(master)
+	km := keys.New(st.Keys(), sl)
+	if _, err := km.Ensure(ctx); err != nil {
+		t.Fatal(err)
+	}
+	api := &admin.Server{Store: st, Validator: v, Token: token, Sealer: sl, Keys: km, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
 	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 	return srv
@@ -103,6 +111,10 @@ func mustOK(t *testing.T, r result) result {
 // loadExamples puts every example in dependency order.
 func loadExamples(t *testing.T, srv *httptest.Server) {
 	t.Helper()
+	// The ledger manifest's upstream names a secret, which has to exist first.
+	if r := call(t, srv, http.MethodPut, "/admin/v0/secrets/ledger-mcp-api-key", []byte(`{"value":"lk_live_example"}`), "application/json", true); r.status != 204 {
+		t.Fatalf("put secret: %d %s", r.status, r.body)
+	}
 	for _, f := range []string{"manifest-payments-api.yaml", "manifest-ledger-mcp.yaml"} {
 		mustOK(t, putYAML(t, srv, "/admin/v0/manifests/"+strings.TrimSuffix(strings.TrimPrefix(f, "manifest-"), ".yaml"), f))
 	}
@@ -225,6 +237,70 @@ func TestAgentLifecycle(t *testing.T) {
 	}
 	if r := call(t, srv, http.MethodPost, "/admin/v0/agents/desk-helper-7f3a/disable", nil, "", true); r.status != 400 {
 		t.Errorf("disable on an agent: %d", r.status)
+	}
+}
+
+func TestSecretsAndKeys(t *testing.T) {
+	srv := newServer(t)
+
+	// A manifest cannot name a secret that is not there.
+	r := putYAML(t, srv, "/admin/v0/manifests/ledger-mcp", "manifest-ledger-mcp.yaml")
+	if r.status != 400 || !strings.Contains(r.body, "secret ledger-mcp-api-key, which has not been stored") {
+		t.Fatalf("manifest before secret: %d %s", r.status, r.body)
+	}
+	loadExamples(t, srv)
+
+	// Secrets are listed without their values, and cannot be deleted while used.
+	r = call(t, srv, http.MethodGet, "/admin/v0/secrets", nil, "", true)
+	if r.status != 200 || !strings.Contains(r.body, `"name":"ledger-mcp-api-key"`) || strings.Contains(r.body, "lk_live") {
+		t.Fatalf("list secrets: %d %s", r.status, r.body)
+	}
+	if r := call(t, srv, http.MethodDelete, "/admin/v0/secrets/ledger-mcp-api-key", nil, "", true); r.status != 409 {
+		t.Errorf("delete secret in use: %d %s", r.status, r.body)
+	}
+	if r := call(t, srv, http.MethodPut, "/admin/v0/secrets/Bad Name", []byte(`{"value":"x"}`), "application/json", true); r.status != 400 {
+		t.Errorf("bad secret name: %d", r.status)
+	}
+	if r := call(t, srv, http.MethodPut, "/admin/v0/secrets/empty", []byte(`{"value":""}`), "application/json", true); r.status != 400 {
+		t.Errorf("empty secret: %d", r.status)
+	}
+	if r := call(t, srv, http.MethodPut, "/admin/v0/secrets/unused", []byte(`{"value":"x"}`), "application/json", true); r.status != 204 {
+		t.Errorf("put unused secret: %d", r.status)
+	}
+	if r := call(t, srv, http.MethodDelete, "/admin/v0/secrets/unused", nil, "", true); r.status != 204 {
+		t.Errorf("delete unused secret: %d", r.status)
+	}
+
+	// Keys: one active key at start; rotation adds one; the active key cannot be retired.
+	r = call(t, srv, http.MethodGet, "/admin/v0/keys", nil, "", true)
+	var ks []admin.KeyResponse
+	if err := json.Unmarshal([]byte(r.body), &ks); err != nil || len(ks) != 1 || !ks[0].Active {
+		t.Fatalf("keys: %d %s", r.status, r.body)
+	}
+	first := ks[0].KID
+	if r := call(t, srv, http.MethodPost, "/admin/v0/keys/rotate", nil, "", true); r.status != 200 {
+		t.Fatalf("rotate: %d %s", r.status, r.body)
+	}
+	r = call(t, srv, http.MethodGet, "/admin/v0/keys", nil, "", true)
+	_ = json.Unmarshal([]byte(r.body), &ks)
+	// Newest first: the new key is active, the first one no longer is.
+	if len(ks) != 2 || !ks[0].Active || ks[0].KID == first || ks[1].Active || ks[1].KID != first {
+		t.Fatalf("after rotate: %s", r.body)
+	}
+	var active string
+	for _, k := range ks {
+		if k.Active {
+			active = k.KID
+		}
+	}
+	if r := call(t, srv, http.MethodPost, "/admin/v0/keys/"+active+"/retire", nil, "", true); r.status != 409 {
+		t.Errorf("retire active key: %d %s", r.status, r.body)
+	}
+	if r := call(t, srv, http.MethodPost, "/admin/v0/keys/"+first+"/retire", nil, "", true); r.status != 204 {
+		t.Errorf("retire old key: %d %s", r.status, r.body)
+	}
+	if r := call(t, srv, http.MethodPost, "/admin/v0/keys/nope/retire", nil, "", true); r.status != 404 {
+		t.Errorf("retire unknown key: %d", r.status)
 	}
 }
 

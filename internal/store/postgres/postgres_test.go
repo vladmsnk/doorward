@@ -34,7 +34,7 @@ func open(t *testing.T) *postgres.Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	// Each test starts from an empty database.
-	_, err = s.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters")
+	_, err = s.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -323,6 +323,54 @@ func TestApprovalsLifecycle(t *testing.T) {
 	}
 	if pending, _ := s.Approvals().Pending(ctx); len(pending) != 0 {
 		t.Errorf("closed request still pending")
+	}
+}
+
+func TestKeysAndSecrets(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	if _, err := s.Keys().Active(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("empty: %v", err)
+	}
+	for _, kid := range []string{"k1", "k2"} {
+		if err := s.Keys().Create(ctx, store.SigningKey{KID: kid, Alg: "ES256", PublicJWK: []byte(`{"kid":"` + kid + `"}`), PrivateEnc: []byte("sealed")}); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(2 * time.Millisecond) // created_at orders them
+	}
+	if err := s.Keys().Create(ctx, store.SigningKey{KID: "k1", Alg: "ES256", PublicJWK: []byte(`{}`), PrivateEnc: []byte("x")}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("duplicate kid: %v", err)
+	}
+	if a, err := s.Keys().Active(ctx); err != nil || a.KID != "k2" {
+		t.Fatalf("Active: %+v %v", a, err)
+	}
+	if err := s.Keys().Retire(ctx, "k2", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if a, _ := s.Keys().Active(ctx); a.KID != "k1" {
+		t.Errorf("after retiring k2, active is %s", a.KID)
+	}
+	if all, _ := s.Keys().List(ctx); len(all) != 2 || all[0].KID != "k2" || all[0].RetiredAt == nil {
+		t.Errorf("List: %+v", all)
+	}
+
+	if err := s.Secrets().Put(ctx, "ledger-mcp-api-key", []byte("sealed-1"), "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Secrets().Put(ctx, "ledger-mcp-api-key", []byte("sealed-2"), "admin"); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := s.Secrets().Get(ctx, "ledger-mcp-api-key"); err != nil || string(v) != "sealed-2" {
+		t.Errorf("Get: %q %v", v, err)
+	}
+	if list, _ := s.Secrets().List(ctx); len(list) != 1 || list[0].Name != "ledger-mcp-api-key" {
+		t.Errorf("List: %+v", list)
+	}
+	if err := s.Secrets().Delete(ctx, "ledger-mcp-api-key"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Secrets().Get(ctx, "ledger-mcp-api-key"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("after delete: %v", err)
 	}
 }
 

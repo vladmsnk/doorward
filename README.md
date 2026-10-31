@@ -48,7 +48,8 @@ is overwritten; `…/versions` shows who changed what and when.
 
 ```sh
 export AGENTBOX_DB=postgres://… AGENTBOX_ADMIN_TOKEN=$(openssl rand -hex 16)
-agentbox serve                                   # Admin API on :8081
+export AGENTBOX_MASTER_KEY=$(agentbox master-key)   # keep it: it seals the signing keys and secrets
+agentbox serve                                      # public listener on :8080, Admin API on :8081
 
 H="Authorization: Bearer $AGENTBOX_ADMIN_TOKEN"
 curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \
@@ -66,9 +67,22 @@ curl -sS -X POST -H "$H" -d '{"owner":{"team":"support-tools"}}' \
 | `GET …/{name}/versions`, `…/versions/{n}` | the history; one version |
 | `POST …/{name}/disable`, `/enable` | manifests and mandates; a manifest that enabled mandates name cannot be disabled |
 | `POST /admin/v0/agents/{name}/verify`, `/suspend` | an agent's status; suspending revokes its live grants |
+| `PUT /admin/v0/secrets/{name}` `{"value": …}`, `GET …`, `DELETE …/{name}` | upstream credentials a manifest's `secret_ref` names; values are never returned, and a secret an enabled manifest uses cannot be deleted |
+| `GET /admin/v0/keys`, `POST …/rotate`, `POST …/{kid}/retire` | the box's signing keys; a rotated-out key stays published until retired |
 
 Authentication is a bootstrap bearer token for now (`AGENTBOX_ADMIN_TOKEN`);
 administrators from the identity provider come with the consent work.
+
+## Keys and secrets
+
+On first start the box creates an ES256 signing key, and publishes the
+public half at `/.well-known/jwks.json` on the public listener; the `kid`
+is the key's RFC 7638 thumbprint. Rotation makes a new key active and keeps
+the old one published, so grants it signed still verify, until an
+administrator retires it. Private keys and upstream secrets are sealed with
+AES-256-GCM under the operator's master key (`AGENTBOX_MASTER_KEY`) before
+they reach the database, each bound to its own slot, so the database never
+holds them in clear and a value cannot be moved from one slot to another.
 
 ## Storage
 

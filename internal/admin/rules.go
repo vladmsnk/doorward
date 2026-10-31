@@ -35,12 +35,21 @@ type snapshot struct {
 	byAud     map[string]v0.Manifest // by audience
 	agents    map[string]v0.Agent
 	mandates  map[string]v0.Mandate
+	secrets   map[string]bool
 }
 
-func load(ctx context.Context, docs store.Documents) (*snapshot, error) {
+func load(ctx context.Context, st store.Store) (*snapshot, error) {
+	docs := st.Documents()
 	s := &snapshot{
 		manifests: map[string]v0.Manifest{}, byAud: map[string]v0.Manifest{},
-		agents: map[string]v0.Agent{}, mandates: map[string]v0.Mandate{},
+		agents: map[string]v0.Agent{}, mandates: map[string]v0.Mandate{}, secrets: map[string]bool{},
+	}
+	secretList, err := st.Secrets().List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, sec := range secretList {
+		s.secrets[sec.Name] = true
 	}
 	manifests, err := enabled(ctx, docs, v0.KindManifest)
 	if err != nil {
@@ -111,13 +120,37 @@ func (s *snapshot) declared(location, action, field string) bool {
 	return has
 }
 
-// checkManifest: one manifest per audience.
+// checkManifest: one manifest per audience, and the upstream's secret
+// exists before the manifest can rely on it.
 func (s *snapshot) checkManifest(m v0.Manifest) Problems {
 	var p Problems
 	if other, ok := s.byAud[m.Spec.Audience]; ok && other.Metadata.Name != m.Metadata.Name {
 		p = append(p, fmt.Sprintf("audience %s already belongs to manifest %s", m.Spec.Audience, other.Metadata.Name))
 	}
+	if a := m.Spec.Upstream.Auth; a != nil && !s.secrets[a.SecretRef] {
+		p = append(p, fmt.Sprintf("manifest %s names secret %s, which has not been stored; put it first", m.Metadata.Name, a.SecretRef))
+	}
 	return p
+}
+
+// secretUsers names the enabled manifests whose upstream uses a secret.
+func (s *snapshot) secretUsers(name string) []string {
+	var out []string
+	for _, mn := range sortedManifestNames(s.manifests) {
+		if a := s.manifests[mn].Spec.Upstream.Auth; a != nil && a.SecretRef == name {
+			out = append(out, mn)
+		}
+	}
+	return out
+}
+
+func sortedManifestNames(m map[string]v0.Manifest) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // checkMandate: every operation exists, and the mandate lies within every

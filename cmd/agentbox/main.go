@@ -25,7 +25,8 @@ func main() {
 
 const usage = `usage:
   agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
-  agentbox serve --db DSN --admin-token T   run the box: Admin API on :8081
+  agentbox serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on :8081
+  agentbox master-key                       print a new master key for AGENTBOX_MASTER_KEY
   agentbox version                          print the version
 
 Configuration documents (Manifest, Agent, Mandate) name their kind. Records
@@ -42,6 +43,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runValidate(args[1:], stdout, stderr)
 	case "serve":
 		return runServe(args[1:], stdout, stderr)
+	case "master-key":
+		return runMasterKey(stdout, stderr)
 	case "version":
 		fmt.Fprintln(stdout, versionString())
 		return 0

@@ -43,6 +43,8 @@ func (s *Store) Grants() store.Grants       { return grants{s.pool} }
 func (s *Store) Decisions() store.Decisions { return decisions{s.pool} }
 func (s *Store) Approvals() store.Approvals { return approvals{s.pool} }
 func (s *Store) Counters() store.Counters   { return counters{s.pool} }
+func (s *Store) Keys() store.Keys           { return signingKeys{s.pool} }
+func (s *Store) Secrets() store.Secrets     { return secrets{s.pool} }
 
 func (s *Store) Close() error {
 	s.pool.Close()

@@ -12,11 +12,14 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	v0 "github.com/vladmsnk/agentbox/api/v0"
+	"github.com/vladmsnk/agentbox/internal/keys"
+	"github.com/vladmsnk/agentbox/internal/sealer"
 	"github.com/vladmsnk/agentbox/internal/store"
 	"github.com/vladmsnk/agentbox/schema"
 )
@@ -27,8 +30,12 @@ type Server struct {
 	Validator *schema.Validator
 	// Token is the bootstrap bearer token. Requests without it are refused.
 	Token string
-	Log   *slog.Logger
-	Now   func() time.Time
+	// Sealer seals secret values before they reach the store.
+	Sealer *sealer.Sealer
+	// Keys manages the signing keys; nil disables the key routes.
+	Keys *keys.Manager
+	Log  *slog.Logger
+	Now  func() time.Time
 }
 
 // collections maps URL segments to document kinds.
@@ -50,7 +57,140 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /admin/v0/{collection}/{name}/enable", s.auth(s.setDisabled(false)))
 	mux.HandleFunc("POST /admin/v0/agents/{name}/verify", s.auth(s.verifyAgent))
 	mux.HandleFunc("POST /admin/v0/agents/{name}/suspend", s.auth(s.suspendAgent))
+	mux.HandleFunc("GET /admin/v0/secrets", s.auth(s.listSecrets))
+	mux.HandleFunc("PUT /admin/v0/secrets/{name}", s.auth(s.putSecret))
+	mux.HandleFunc("DELETE /admin/v0/secrets/{name}", s.auth(s.deleteSecret))
+	mux.HandleFunc("GET /admin/v0/keys", s.auth(s.listKeys))
+	mux.HandleFunc("POST /admin/v0/keys/rotate", s.auth(s.rotateKey))
+	mux.HandleFunc("POST /admin/v0/keys/{kid}/retire", s.auth(s.retireKey))
 	return mux
+}
+
+// SecretPurpose is the sealing purpose of a secret: bound to its name, so
+// one secret's ciphertext cannot be moved under another name.
+func SecretPurpose(name string) string { return "secret:" + name }
+
+// ---------------------------------------------------------------- secrets
+
+// SecretResponse is what is said about a secret: everything but its value.
+type SecretResponse struct {
+	Name      string    `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	UpdatedBy string    `json:"updated_by"`
+}
+
+func (s *Server) listSecrets(w http.ResponseWriter, r *http.Request) {
+	list, err := s.Store.Secrets().List(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	out := make([]SecretResponse, 0, len(list))
+	for _, i := range list {
+		out = append(out, SecretResponse{Name: i.Name, CreatedAt: i.CreatedAt, UpdatedAt: i.UpdatedAt, UpdatedBy: i.UpdatedBy})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// putSecret stores a value. The body is {"value": "..."}; the value is
+// never returned by any route.
+func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !nameRE.MatchString(name) {
+		writeError(w, http.StatusBadRequest, "bad_request", "a secret name is lower case letters, digits, '.', '_' and '-'", nil)
+		return
+	}
+	var body struct {
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil || body.Value == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", `send {"value": "..."}`, nil)
+		return
+	}
+	sealed, err := s.Sealer.Seal([]byte(body.Value), SecretPurpose(name))
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if err := s.Store.Secrets().Put(r.Context(), name, sealed, s.actor(r)); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.Log.Info("secret stored", "name", name, "by", s.actor(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteSecret removes a secret unless an enabled manifest still names it.
+func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	snap, err := load(r.Context(), s.Store)
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	if users := snap.secretUsers(name); len(users) > 0 {
+		writeError(w, http.StatusConflict, "in_use", fmt.Sprintf("secret %s is named by enabled manifests: %s", name, strings.Join(users, ", ")), nil)
+		return
+	}
+	if err := s.Store.Secrets().Delete(r.Context(), name); err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.Log.Info("secret deleted", "name", name, "by", s.actor(r))
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------- keys
+
+// KeyResponse is one signing key as the admin sees it: public part only.
+type KeyResponse struct {
+	KID       string     `json:"kid"`
+	Alg       string     `json:"alg"`
+	Active    bool       `json:"active"`
+	CreatedAt time.Time  `json:"created_at"`
+	RetiredAt *time.Time `json:"retired_at,omitempty"`
+}
+
+func (s *Server) listKeys(w http.ResponseWriter, r *http.Request) {
+	all, err := s.Store.Keys().List(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	active := ""
+	if sg := s.Keys.Signer(); sg != nil {
+		active = sg.KID
+	}
+	out := make([]KeyResponse, 0, len(all))
+	for _, k := range all {
+		out = append(out, KeyResponse{KID: k.KID, Alg: k.Alg, Active: k.KID == active, CreatedAt: k.CreatedAt, RetiredAt: k.RetiredAt})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request) {
+	jwk, err := s.Keys.Rotate(r.Context())
+	if err != nil {
+		s.fail(w, err)
+		return
+	}
+	s.Log.Info("signing key rotated", "kid", jwk.Kid, "by", s.actor(r))
+	writeJSON(w, http.StatusOK, KeyResponse{KID: jwk.Kid, Alg: jwk.Alg, Active: true, CreatedAt: s.now()})
+}
+
+func (s *Server) retireKey(w http.ResponseWriter, r *http.Request) {
+	kid := r.PathValue("kid")
+	if err := s.Keys.Retire(r.Context(), kid, s.now()); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			s.fail(w, err)
+			return
+		}
+		writeError(w, http.StatusConflict, "active_key", err.Error(), nil)
+		return
+	}
+	s.Log.Info("signing key retired", "kid", kid, "by", s.actor(r))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Response is how a document is returned: its version envelope and the
@@ -203,7 +343,7 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 // checkRules runs the cross-document rules for one document against the
 // current configuration.
 func (s *Server) checkRules(ctx context.Context, kind schema.Kind, doc []byte) error {
-	snap, err := load(ctx, s.Store.Documents())
+	snap, err := load(ctx, s.Store)
 	if err != nil {
 		return err
 	}
@@ -255,7 +395,7 @@ func (s *Server) setDisabled(disabled bool) http.HandlerFunc {
 			}
 			var m v0.Manifest
 			_ = json.Unmarshal(cur.Doc, &m)
-			snap, err := load(r.Context(), s.Store.Documents())
+			snap, err := load(r.Context(), s.Store)
 			if err != nil {
 				s.fail(w, err)
 				return
@@ -339,6 +479,8 @@ func (s *Server) changeAgent(w http.ResponseWriter, r *http.Request, change func
 }
 
 // ---------------------------------------------------------------- plumbing
+
+var nameRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$`)
 
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

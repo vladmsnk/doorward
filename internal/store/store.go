@@ -33,6 +33,8 @@ type Store interface {
 	Decisions() Decisions
 	Approvals() Approvals
 	Counters() Counters
+	Keys() Keys
+	Secrets() Secrets
 	Close() error
 }
 
@@ -141,6 +143,44 @@ type Counters interface {
 	Consume(ctx context.Context, key string, amount, max float64) (remaining float64, err error)
 	// Consumed returns the counter's value, 0 if it does not exist.
 	Consumed(ctx context.Context, key string) (float64, error)
+}
+
+// SigningKey is one of the box's keys. PrivateEnc is sealed; the store
+// never sees the private key in clear.
+type SigningKey struct {
+	KID        string
+	Alg        string
+	PublicJWK  []byte
+	PrivateEnc []byte
+	CreatedAt  time.Time
+	RetiredAt  *time.Time
+}
+
+// Keys keeps the signing keys.
+type Keys interface {
+	Create(ctx context.Context, k SigningKey) error
+	// Active returns the newest key that is not retired.
+	Active(ctx context.Context) (SigningKey, error)
+	// List returns every key, newest first, retired ones included.
+	List(ctx context.Context) ([]SigningKey, error)
+	Retire(ctx context.Context, kid string, at time.Time) error
+}
+
+// SecretInfo is what is known about a secret without its value.
+type SecretInfo struct {
+	Name      string
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	UpdatedBy string
+}
+
+// Secrets keeps sealed values the gateway presents to upstreams, named by
+// a manifest's secret_ref. Values are sealed before they get here.
+type Secrets interface {
+	Put(ctx context.Context, name string, sealed []byte, by string) error
+	Get(ctx context.Context, name string) ([]byte, error)
+	List(ctx context.Context) ([]SecretInfo, error)
+	Delete(ctx context.Context, name string) error
 }
 
 // GrantKey and ConsentKey name a budget. Period is a calendar day
