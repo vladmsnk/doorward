@@ -34,7 +34,8 @@ spec:
         /amount: { type: number, in: body }
 
     # Critical: never runs on a standing grant, only on a single-use grant
-    # issued after two people approve the exact call.
+    # issued after a person approves the exact call. Who approves is up to
+    # the mandate: the user, or two people from a group.
     - name: pay_invoice
       sensitivity: critical
       http:
