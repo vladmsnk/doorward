@@ -20,10 +20,11 @@ linters:
         - fmt.Fprintln
   exclusions:
     rules:
-      # Tests read their fixtures from paths they build themselves.
+      # Tests read their fixtures from paths they build themselves, and run
+      # tools (python3 for the independent journal verifier) found on PATH.
       - path: _test\.go
         linters: [gosec]
-        text: G304
+        text: G304|G204
 
 formatters:
   enable:

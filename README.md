@@ -16,12 +16,13 @@ interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 ## Status
 
 On main: the contract, PostgreSQL storage, the Admin API, signing keys and
-sealed secrets, grant verification, and the decision core's subset and
-sensitivity checks, with the fail-open paths found in review closed.
-Nothing yet sits in front of a real tool. Next come budgets and the
-evaluation endpoint, then one end-to-end slice in which an off-the-shelf
-MCP client connects, a user consents, and a call is refused or approved.
-The order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
+sealed secrets, and the decision core behind an AuthZEN evaluation
+endpoint: grant verification, the subset, sensitivity and budget checks,
+approval requests for critical calls, and a hash-chained journal that can
+be verified outside the box. Nothing yet sits in front of a real tool. Next
+comes observe mode, then one end-to-end slice in which an off-the-shelf MCP
+client connects, a user consents, and a call is refused or approved. The
+order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## What doorward cannot see
 
@@ -238,6 +239,62 @@ fail  limits      payout-month
 refused: limit_exceeded: budget payout-month has 1000 left this month; the call needs 1200
 ```
 
+## Decision point
+
+`POST /access/v1/evaluation` on the public listener answers one call in the
+AuthZEN 1.0 shape. The point of enforcement (a gateway) authenticates with
+its own token, configured with `--pep ID=TOKEN` (or `DOORWARD_PEPS`), and
+sends the agent's grant in `context.token`:
+
+```sh
+curl -sS -X POST localhost:8080/access/v1/evaluation \
+  -H "Authorization: Bearer $PEP_TOKEN" -H "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" \
+  -d '{"subject":{"type":"agent","id":"invoice-assistant"},
+       "action":{"name":"pay_invoice"},
+       "resource":{"type":"tool_call","id":"https://payments.example.internal",
+                   "properties":{"arguments":{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}}},
+       "context":{"token":"'"$GRANT"'"}}'
+```
+
+```json
+{"decision":false,"context":{"id":"dec_01M69…","outcome":"deny",
+ "reasons":[{"code":"constraint_violated","message":"7500 is above the grant's max of 5000","field":"/amount"}],
+ "action_hash":"sha-256:zSm3ob6uLbcAwT_CafGYJI2ndRqedlo64DDnvnGROGQ"}}
+```
+
+`decision` is true only for an allowed call. The ten checks run in the
+record's order and stop at the first failure; the rest are recorded as
+skipped. A held critical call opens an approval request with the mandate's
+route, or reuses the one already open for the same call, and the answer
+names it. An allowed call's budgets and single-use grant are spent in the
+same transaction that appends its record. A request missing its subject,
+action or resource is refused with 400 and leaves no record; anything else
+is decided and recorded, and an internal failure answers 500 with
+`decision` false.
+
+Every record names the user or the owning team, the agent, the grant (its
+ID; never the token), the versions of the mandate and the manifest in
+force, the W3C trace ID, and every check. Records are chained: each one's
+`chain.hash` is the SHA-256 of the record in RFC 8785 canonical JSON
+without `chain.hash`, and covers the previous record's hash.
+
+- `--journal FILE` (or `-` for standard output) writes every record as one
+  JSON line once it is committed; `GET /admin/v0/decisions?from=SEQ`
+  exports them from the Admin API, and `doorward journal export` from the
+  command line.
+- `doorward journal verify FILE` checks every record against the contract
+  and the chain. [`scripts/verify-journal.py`](scripts/verify-journal.py)
+  checks the chain with Python's standard library alone, sharing no code
+  with doorward.
+- With `OTEL_EXPORTER_OTLP_ENDPOINT` set, each evaluation is a span in the
+  caller's trace, carrying the decision's ID, outcome, agent, mandate and
+  reason.
+
+One allowed decision (HTTP, both sets of checks, a budget drawn, the record
+appended) takes about 5.5 ms against a local PostgreSQL, and sixteen
+concurrent callers get about 470 decisions a second; appends to the chain
+are serialized.
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the
@@ -421,7 +478,9 @@ internal/policy/   comparing permissions: tiers, constraints, "within"
 internal/keys/     signing keys: create, rotate, retire, JWK Set
 internal/sealer/   AES-256-GCM sealing under the master key
 internal/grant/    signing grants and verifying them (B1)
-internal/core/     the decision core: subset (B2) and sensitivity (B3) checks
+internal/core/     the decision core: subset, sensitivity and budget checks
+internal/pdp/      the AuthZEN evaluation endpoint and the journal
+internal/telemetry/ OpenTelemetry tracing, when an endpoint is configured
 internal/ids/      record IDs: prefix_ULID
 schema/            the embedded schemas, the validator, strict YAML/JSON reading
 schema/v0/         the JSON Schemas
