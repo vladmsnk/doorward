@@ -2,6 +2,8 @@ name: DCO
 
 on:
   pull_request:
+  push:
+    branches: [main]
 
 permissions:
   contents: read
@@ -13,10 +15,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - name: Every commit is signed off
-        run: >-
-          scripts/check-dco.sh
-          ${{ github.event.pull_request.base.sha }}
-          ${{ github.event.pull_request.head.sha }}
+      - name: Every commit is authored and signed off by a person
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          # A push whose previous head is unknown or no longer an ancestor
+          # (a new branch, a rewritten history) is checked in full.
+          if [ -z "$BASE" ] || ! git merge-base --is-ancestor "$BASE" "$HEAD" 2>/dev/null; then
+            BASE=""
+          fi
+          scripts/check-dco.sh "$BASE" "$HEAD"
