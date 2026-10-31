@@ -84,6 +84,49 @@ AES-256-GCM under the operator's master key (`AGENTBOX_MASTER_KEY`) before
 they reach the database, each bound to its own slot, so the database never
 holds them in clear and a value cannot be moved from one slot to another.
 
+## Grants
+
+A grant is a JWT access token (RFC 9068): header `{"alg":"ES256","typ":"at+jwt","kid":…}`,
+the claims of [`grant.schema.json`](schema/v0/grant.schema.json), signed
+with the box's active key. Verification ([`internal/grant`](internal/grant))
+accepts exactly that header, finds the key by `kid` in the box's own key
+table (retired keys included, so a grant outlives a rotation), checks the
+signature before reading a single claim, then runs the claims through the
+schema and the grant's rules. It produces the grant's part of a decision
+record, in the record's order, and stops at the first failure:
+
+| Check | Refused with |
+|---|---|
+| `signature` | `grant_missing`, `grant_malformed`, `grant_signature_invalid` |
+| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or its agent is suspended |
+| `pop` | recorded as `skip` until the sidecar sends DPoP proofs |
+| `audience` | `audience_mismatch` |
+| `time` | `grant_expired`, `grant_not_yet_valid` (30 s of clock skew allowed) |
+
+Until the token service exists, grants are minted from the command line.
+`mint` replaces `iat`, `exp` and `jti`, checks that the agent is registered
+and not suspended, the mandate exists and is enabled and, for a user, that
+the consent is recorded, active and given to this agent for this mandate;
+then it signs and records the grant. It needs the database and the master
+key, so it gives its user nothing they could not already do.
+
+```sh
+agentbox grant mint --consent examples/v0/consent/alice-invoice-assistant.json \
+  examples/v0/grant/pay-invoice.json > grant.jwt
+agentbox grant verify --aud https://payments.example.internal - < grant.jwt
+```
+
+```
+pass  signature  key TDgsZWz9aL3UpCrlz8oKiwWOoLf11IcazmKRe9QPGpI
+pass  status
+skip  pop        proof of possession is not checked yet
+pass  audience
+pass  time
+accepted: grant grt_01M68ZAY9YDFW1ZFC20G1RM7AM, agent invoice-assistant acting for user alice@example.com, mandate invoices, expires in 15m0s
+```
+
+`verify` exits 1 on a refusal; `--json` prints the checks and the reason.
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the
@@ -219,8 +262,8 @@ but are placeholders, not real values (F05, F10).
   agent gets a pending answer and polls; once approved, the gateway runs the
   stored call on the single-use grant. No agent has to cooperate.
 - **Checks the first version does not run are recorded as `skip`**: `pop`
-  (no DPoP yet), `status` (no status list), `policy` (the mandate is the
-  policy). Grants carry no `cnf` until the sidecar exists.
+  (no DPoP yet) and `policy` (the mandate is the policy). `status` reads
+  the box's own grant records; a published status list comes later.
 - **Upstream credentials** come from the box's secret store, named by
   `secret_ref`; the first store is a file or Kubernetes Secrets.
 
@@ -244,8 +287,15 @@ each adds fields or documents without changing what is here:
 ## Layout
 
 ```
-cmd/agentbox/      the CLI: validate, version
+cmd/agentbox/      the CLI: validate, serve, grant mint|verify, master-key, version
 api/v0/            Go types of the v0 documents
+internal/store/    the Store interface; postgres/ implements it, with migrations
+internal/admin/    the Admin API and the rules across documents
+internal/policy/   comparing permissions: tiers, constraints, "within"
+internal/keys/     signing keys: create, rotate, retire, JWK Set
+internal/sealer/   AES-256-GCM sealing under the master key
+internal/grant/    signing grants and verifying them (B1)
+internal/ids/      record IDs: prefix_ULID
 schema/            the embedded schemas, the validator, strict YAML/JSON reading
 schema/v0/         the JSON Schemas
 examples/v0/       valid examples of every document

@@ -1,0 +1,323 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"strings"
+	"time"
+
+	v0 "github.com/vladmsnk/agentbox/api/v0"
+	"github.com/vladmsnk/agentbox/internal/grant"
+	"github.com/vladmsnk/agentbox/internal/ids"
+	"github.com/vladmsnk/agentbox/internal/keys"
+	"github.com/vladmsnk/agentbox/internal/sealer"
+	"github.com/vladmsnk/agentbox/internal/store"
+	"github.com/vladmsnk/agentbox/internal/store/postgres"
+	"github.com/vladmsnk/agentbox/schema"
+)
+
+const grantUsage = `usage:
+  agentbox grant mint [flags] CLAIMS     sign and record a grant (until the token service exists)
+  agentbox grant verify [flags] TOKEN    run the grant's checks; TOKEN - reads stdin
+`
+
+func runGrant(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, grantUsage)
+		return 2
+	}
+	switch args[0] {
+	case "mint":
+		return runGrantMint(args[1:], stdout, stderr)
+	case "verify":
+		return runGrantVerify(args[1:], stdin, stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "agentbox grant: unknown command %q\n\n%s", args[0], grantUsage)
+		return 2
+	}
+}
+
+// runGrantMint does what the token service will do once it exists: take a
+// grant's claims, give them a fresh ID and lifetime, sign them with the
+// box's active key and record the grant. It needs the database and the
+// master key, so it grants nothing their holder could not already do.
+func runGrantMint(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("grant mint", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
+	masterKey := fs.String("master-key", os.Getenv("AGENTBOX_MASTER_KEY"), "master key (or AGENTBOX_MASTER_KEY)")
+	issuer := fs.String("issuer", os.Getenv("AGENTBOX_ISSUER"), "iss of the grant (or AGENTBOX_ISSUER); default: the claims' own")
+	ttl := fs.Duration("ttl", 15*time.Minute, "lifetime of the grant")
+	consentFile := fs.String("consent", "", "Consent record to store first, for a grant to a user")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: agentbox grant mint [flags] CLAIMS\n\nCLAIMS is a grant in JSON, such as examples/v0/grant/pay-invoice.json.\niat, exp and jti are replaced; the token goes to stdout.")
+		fs.PrintDefaults()
+	}
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return 2
+	}
+	if *ttl <= 0 || *ttl > 24*time.Hour {
+		fmt.Fprintln(stderr, "agentbox grant mint: --ttl must be between 1s and 24h")
+		return 2
+	}
+	sl, err := sealer.Parse(*masterKey)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox grant mint: --master-key or AGENTBOX_MASTER_KEY: %v\n", err)
+		return 2
+	}
+	v, err := schema.NewValidator()
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox grant mint: %v\n", err)
+		return 1
+	}
+	fail := func(format string, a ...any) int {
+		fmt.Fprintf(stderr, "agentbox grant mint: "+format+"\n", a...)
+		return 1
+	}
+
+	g, err := readRecord[v0.Grant](v, fs.Arg(0), schema.Grant)
+	if err != nil {
+		return fail("%v", err)
+	}
+	now := time.Now()
+	if *issuer != "" {
+		g.Issuer = *issuer
+	}
+	g.IssuedAt, g.Expiry = now.Unix(), now.Add(*ttl).Unix()
+	g.ID = ids.At(ids.Grant, now)
+	// Check the result as a verifier will.
+	claims, err := json.Marshal(g)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if g, err = schema.Decode[v0.Grant](v, claims); err != nil {
+		return fail("claims: %v", err)
+	}
+
+	ctx := context.Background()
+	st, code, ok := openStore(ctx, *dsn, "grant mint", stderr)
+	if !ok {
+		return code
+	}
+	defer func() { _ = st.Close() }()
+
+	if err := mintable(ctx, st, g); err != nil {
+		return fail("%v", err)
+	}
+	if *consentFile != "" {
+		c, err := readRecord[v0.Consent](v, *consentFile, schema.Consent)
+		if err != nil {
+			return fail("%v", err)
+		}
+		if c.ID != g.Consent {
+			return fail("consent %s is not the one the grant names (%q)", c.ID, g.Consent)
+		}
+		if err := st.Consents().Create(ctx, c); err != nil && !errors.Is(err, store.ErrConflict) {
+			return fail("consent %s: %v", c.ID, err)
+		}
+	}
+	if g.Consent != "" {
+		if err := consentFits(ctx, st, g); err != nil {
+			return fail("%v", err)
+		}
+	}
+	signer, err := keys.New(st.Keys(), sl).Ensure(ctx)
+	if err != nil {
+		return fail("signing key: %v", err)
+	}
+	tok, err := grant.Sign(signer, g)
+	if err != nil {
+		return fail("%v", err)
+	}
+	if err := st.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: g.Actor.Subject}); err != nil {
+		return fail("recording %s: %v", g.ID, err)
+	}
+	fmt.Fprintln(stdout, tok)
+	fmt.Fprintf(stderr, "minted %s for %s via agent %s under mandate %s, key %s, expires %s\n",
+		g.ID, g.Subject, g.Actor.Subject, g.Mandate, signer.KID, time.Unix(g.Expiry, 0).UTC().Format(time.RFC3339))
+	return 0
+}
+
+// mintable refuses what the token service would: an agent that is not
+// registered or is suspended, a mandate that does not exist or is disabled.
+// Whether the mandate allows these permissions is the token service's
+// job, not this command's.
+func mintable(ctx context.Context, st store.Store, g v0.Grant) error {
+	doc, err := st.Documents().Current(ctx, v0.KindAgent, g.Actor.Subject)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("agent %s is not registered; PUT it through the Admin API first", g.Actor.Subject)
+	}
+	if err != nil {
+		return err
+	}
+	var a v0.Agent
+	if err := json.Unmarshal(doc.Doc, &a); err != nil {
+		return err
+	}
+	if a.Spec.Status == v0.AgentSuspended {
+		return fmt.Errorf("agent %s is suspended", g.Actor.Subject)
+	}
+	m, err := st.Documents().Current(ctx, v0.KindMandate, g.Mandate)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("mandate %s does not exist", g.Mandate)
+	}
+	if err != nil {
+		return err
+	}
+	if m.Disabled {
+		return fmt.Errorf("mandate %s is disabled", g.Mandate)
+	}
+	return nil
+}
+
+// consentFits checks that a user grant rests on a recorded, active consent
+// given to this agent for this mandate.
+func consentFits(ctx context.Context, st store.Store, g v0.Grant) error {
+	c, err := st.Consents().Get(ctx, g.Consent)
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("consent %s is not recorded; a grant to a user rests on one: pass --consent FILE", g.Consent)
+	}
+	if err != nil {
+		return err
+	}
+	switch {
+	case c.Agent != g.Actor.Subject:
+		return fmt.Errorf("consent %s was given to agent %s, not %s", c.ID, c.Agent, g.Actor.Subject)
+	case c.Mandate != g.Mandate:
+		return fmt.Errorf("consent %s is for mandate %s, not %s", c.ID, c.Mandate, g.Mandate)
+	case c.Status != v0.ConsentActive:
+		return fmt.Errorf("consent %s is %s", c.ID, c.Status)
+	}
+	return nil
+}
+
+func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("grant verify", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
+	issuer := fs.String("issuer", os.Getenv("AGENTBOX_ISSUER"), "the only iss accepted (or AGENTBOX_ISSUER); default: any")
+	aud := fs.String("aud", "", "the resource being called; without it the audience check is skipped")
+	asJSON := fs.Bool("json", false, "print the result as JSON")
+	fs.Usage = func() {
+		fmt.Fprintln(stderr, "usage: agentbox grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nExit status: 0 accepted, 1 refused.")
+		fs.PrintDefaults()
+	}
+	if code, ok := parseFlags(fs, args); !ok {
+		return code
+	}
+	if fs.NArg() != 1 {
+		fs.Usage()
+		return 2
+	}
+	tok := fs.Arg(0)
+	if tok == "-" {
+		data, err := io.ReadAll(io.LimitReader(stdin, grant.MaxTokenSize+2))
+		if err != nil {
+			fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+			return 1
+		}
+		tok = strings.TrimSpace(string(data))
+	}
+	v, err := schema.NewValidator()
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+		return 1
+	}
+	ctx := context.Background()
+	st, code, ok := openStore(ctx, *dsn, "grant verify", stderr)
+	if !ok {
+		return code
+	}
+	defer func() { _ = st.Close() }()
+
+	verifier := &grant.Verifier{
+		// Looking up public keys needs no master key.
+		Keys:      keys.New(st.Keys(), nil),
+		Status:    grant.StoreStatus{Store: st},
+		Validator: v,
+		Issuer:    *issuer,
+	}
+	r, err := verifier.Verify(ctx, tok, *aud)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+	}
+	if *asJSON {
+		out, _ := json.MarshalIndent(r, "", "  ")
+		fmt.Fprintln(stdout, string(out))
+	} else {
+		printResult(stdout, r)
+	}
+	if !r.OK() {
+		return 1
+	}
+	return 0
+}
+
+func printResult(w io.Writer, r grant.Result) {
+	for _, c := range r.Checks {
+		line := fmt.Sprintf("%-5s %-10s %s", c.Result, c.Name, c.Detail)
+		fmt.Fprintln(w, strings.TrimRight(line, " "))
+	}
+	if !r.OK() {
+		fmt.Fprintf(w, "refused: %s\n", r.Reason.Code)
+		return
+	}
+	g := r.Grant
+	who := "user " + g.Subject
+	if g.Subject == g.ClientID {
+		who = "itself (service mandate)"
+	}
+	left := time.Until(time.Unix(g.Expiry, 0)).Round(time.Second)
+	fmt.Fprintf(w, "accepted: grant %s, agent %s acting for %s, mandate %s, expires in %s\n", g.ID, g.Actor.Subject, who, g.Mandate, left)
+}
+
+// readRecord reads one record of a kind from a JSON or YAML file and
+// decodes it fully: schema, strict decoding, rules.
+func readRecord[T schema.Document](v *schema.Validator, name string, kind schema.Kind) (T, error) {
+	var zero T
+	data, err := os.ReadFile(name) // #nosec G304 -- reading the file the user named is the command's job
+	if err != nil {
+		return zero, err
+	}
+	src, err := schema.Read(name, data, kind)
+	if err != nil {
+		return zero, err
+	}
+	if len(src) != 1 {
+		return zero, fmt.Errorf("%s: want one %s, found %d documents", name, kind, len(src))
+	}
+	return schema.Decode[T](v, src[0].JSON)
+}
+
+func openStore(ctx context.Context, dsn, cmd string, stderr io.Writer) (*postgres.Store, int, bool) {
+	if dsn == "" {
+		fmt.Fprintf(stderr, "agentbox %s: --db or AGENTBOX_DB is required\n", cmd)
+		return nil, 2, false
+	}
+	st, err := postgres.Open(ctx, dsn)
+	if err != nil {
+		fmt.Fprintf(stderr, "agentbox %s: %v\n", cmd, err)
+		return nil, 1, false
+	}
+	return st, 0, true
+}
+
+// parseFlags parses and reports whether to go on, and if not, the exit code.
+func parseFlags(fs *flag.FlagSet, args []string) (int, bool) {
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0, false
+		}
+		return 2, false
+	}
+	return 0, true
+}
