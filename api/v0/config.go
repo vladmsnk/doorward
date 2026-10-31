@@ -91,7 +91,8 @@ type JWKSet struct {
 	Keys []map[string]any `json:"keys"`
 }
 
-// Mandate is what an agent may do for a principal, and on what terms.
+// Mandate is what an agent may do for a principal, and on what terms. Its
+// name is the OAuth scope an agent requests to get it.
 type Mandate struct {
 	TypeMeta
 	Metadata ObjectMeta  `json:"metadata"`
@@ -177,9 +178,29 @@ const (
 )
 
 type ManifestSpec struct {
-	Audience   string      `json:"audience"`
-	Protocol   Protocol    `json:"protocol"`
+	// Audience is the resource's identifier as grants name it: the gateway's
+	// address for it.
+	Audience string   `json:"audience"`
+	Protocol Protocol `json:"protocol"`
+	// Upstream is where the gateway forwards allowed calls.
+	Upstream   Upstream    `json:"upstream"`
 	Operations []Operation `json:"operations"`
+}
+
+// Upstream is the real resource behind the gateway and how the gateway
+// authenticates to it.
+type Upstream struct {
+	URL string `json:"url"`
+	// Auth is a header the gateway sets from a secret; nil when the upstream
+	// trusts the gateway by network or mTLS.
+	Auth *UpstreamAuth `json:"auth,omitempty"`
+}
+
+// UpstreamAuth is a credential header the gateway adds. Agents never see it.
+type UpstreamAuth struct {
+	Header    string `json:"header"`
+	Prefix    string `json:"prefix,omitempty"`
+	SecretRef string `json:"secret_ref"`
 }
 
 // Operation is one MCP tool or one HTTP route.

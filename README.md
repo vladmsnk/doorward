@@ -45,13 +45,23 @@ as agents work.
 
 | Document | Written by | What it is |
 |---|---|---|
-| [Manifest](schema/v0/manifest.schema.json) | company | The operations one resource exposes (MCP tools or HTTP routes), the tier of each (`read`, `write`, `critical`), and where their constrainable arguments are |
+| [Manifest](schema/v0/manifest.schema.json) | company | One resource behind the gateway: where the gateway forwards to and with which credential, the operations it exposes (MCP tools or HTTP routes), the tier of each (`read`, `write`, `critical`), and where their constrainable arguments are |
 | [Agent](schema/v0/agent.schema.json) | company, or the agent itself | One agent: how it presented itself, how it proves who it is, who answers for it, and the most it may ever be granted |
 | [Mandate](schema/v0/mandate.schema.json) | company | What an agent may do for a principal and on what terms: permissions, limits, how long a user's consent stands, who approves critical calls |
 | [Consent](schema/v0/consent.schema.json) | the box | One person allowing one agent one mandate, given on the box's consent page |
 | [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent holds under a mandate |
 | [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision, with every element level L1 asks for |
 | [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
+
+### How an agent asks for authority
+
+A mandate's name is an OAuth scope. The gateway publishes, for each resource,
+the standard protected-resource metadata (RFC 9728) listing the box as its
+authorization server and the mandates it accepts as `scopes_supported`. A
+standard MCP client therefore finds the consent flow on its own: it reads the
+metadata, registers itself if it is new, and sends the user to the box with
+`scope=invoices`. A deployed agent exchanges its workload token for a grant
+with the same scope.
 
 ### How an agent comes in
 
@@ -144,6 +154,17 @@ mandate lying within an agent's permissions (F12), operations existing in a
 manifest (F08), an agent requesting only mandates it may (F11).
 The hashes, key thumbprints and tokens in the examples have the right format
 but are placeholders, not real values (F05, F10).
+
+### Decisions for the first implementation
+
+- **The gateway holds a critical call** while its approval is pending. The
+  agent gets a pending answer and polls; once approved, the gateway runs the
+  stored call on the single-use grant. No agent has to cooperate.
+- **Checks the first version does not run are recorded as `skip`**: `pop`
+  (no DPoP yet), `status` (no status list), `policy` (the mandate is the
+  policy). Grants carry no `cnf` until the sidecar exists.
+- **Upstream credentials** come from the box's secret store, named by
+  `secret_ref`; the first store is a file or Kubernetes Secrets.
 
 ### Later
 

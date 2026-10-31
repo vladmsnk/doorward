@@ -6,6 +6,13 @@ metadata:
 spec:
   audience: https://ledger.example.internal/mcp
   protocol: mcp
+  # The real MCP server wants an API key; the gateway adds it from the secret store.
+  upstream:
+    url: https://ledger-mcp.finance.svc.cluster.local/mcp
+    auth:
+      header: Authorization
+      prefix: "Bearer "
+      secret_ref: ledger-mcp-api-key
   operations:
     - name: list_unmatched
       description: Payments of one day that no invoice matches yet.

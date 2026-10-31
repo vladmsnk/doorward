@@ -110,6 +110,9 @@ var pathParam = regexp.MustCompile(`\{([^{}/]+)\}`)
 // Check enforces the rules of a manifest that span fields.
 func (m Manifest) Check() error {
 	var p problems
+	if m.Spec.Upstream.URL == m.Spec.Audience {
+		p.add("upstream.url equals audience: the audience is the gateway's address, the upstream is the resource behind it")
+	}
 	names := make(map[string]bool)
 	for _, op := range m.Spec.Operations {
 		if names[op.Name] {

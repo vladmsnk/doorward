@@ -229,6 +229,10 @@ func TestInvalidDocuments(t *testing.T) {
 		{"group route without groups", svcMandate, schema.Mandate, []edit{{del: "/spec/approval/approvers/groups"}}, "required"},
 
 		// Manifest.
+		{"manifest without upstream", manifest, schema.Manifest, []edit{{del: "/spec/upstream"}}, "required"},
+		{"upstream auth without secret", mcp, schema.Manifest, []edit{{del: "/spec/upstream/auth/secret_ref"}}, "required"},
+		{"upstream auth header with a space", mcp, schema.Manifest, []edit{{set: "/spec/upstream/auth/header", value: "X Api Key"}}, "pattern"},
+		{"upstream not a URL", manifest, schema.Manifest, []edit{{set: "/spec/upstream/url", value: "payments-api:8080"}}, "pattern"},
 		{"http operation without route", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/http"}}, "required"},
 		{"http param without location", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/params/~1invoice_id/in"}}, "required"},
 		{"operation without tier", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/sensitivity"}}, "required"},
@@ -357,6 +361,7 @@ func TestRuleChecks(t *testing.T) {
 		{"user call without a consent", allow, schema.Decision, []edit{{del: "/grant/consent"}}, "rests on a consent"},
 		{"service call with a consent", svcAllow, schema.Decision, []edit{{set: "/grant/consent", value: "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D"}}, "rests on no consent"},
 
+		{"upstream same as audience", manifest, schema.Manifest, []edit{{set: "/spec/upstream/url", value: "https://payments.example.internal"}}, "upstream.url equals audience"},
 		{"path segment without a param", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/params"}}, "path segment {invoice_id} has no param"},
 		{"path param not in the path", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1extra", value: map[string]any{"type": "string", "in": "path"}}}, "param /extra is in the path"},
 		{"operation declared twice", manifest, schema.Manifest, []edit{{set: "/spec/operations/1/name", value: "get_invoice"}}, `operation "get_invoice" is declared twice`},

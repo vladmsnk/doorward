@@ -6,6 +6,9 @@ metadata:
 spec:
   audience: https://payments.example.internal
   protocol: http
+  # The real API, behind the gateway. It trusts the gateway's mTLS certificate.
+  upstream:
+    url: https://payments-api.payments.svc.cluster.local
   operations:
     - name: get_invoice
       description: Read one invoice.
