@@ -12,6 +12,7 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/agentbox/api/v0"
+	"github.com/vladmsnk/agentbox/internal/core"
 	"github.com/vladmsnk/agentbox/internal/grant"
 	"github.com/vladmsnk/agentbox/internal/ids"
 	"github.com/vladmsnk/agentbox/internal/keys"
@@ -206,9 +207,11 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
 	issuer := fs.String("issuer", os.Getenv("AGENTBOX_ISSUER"), "the only iss accepted (or AGENTBOX_ISSUER); default: any")
 	aud := fs.String("aud", "", "the resource being called; without it the audience check is skipped")
+	action := fs.String("action", "", "an operation to check against the grant (needs --aud)")
+	argsJSON := fs.String("args", "{}", "the operation's arguments, a JSON object")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: agentbox grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nExit status: 0 accepted, 1 refused.")
+		fmt.Fprintln(stderr, "usage: agentbox grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nWith --action, also checks that the call lies inside the grant.\nExit status: 0 accepted, 1 refused.")
 		fs.PrintDefaults()
 	}
 	if code, ok := parseFlags(fs, args); !ok {
@@ -217,6 +220,19 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	if fs.NArg() != 1 {
 		fs.Usage()
 		return 2
+	}
+	var call *core.Call
+	if *action != "" {
+		if *aud == "" {
+			fmt.Fprintln(stderr, "agentbox grant verify: --action needs --aud, the resource being called")
+			return 2
+		}
+		args, err := readArgs(*argsJSON)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentbox grant verify: --args: %v\n", err)
+			return 2
+		}
+		call = &core.Call{Resource: *aud, Action: *action, Arguments: args}
 	}
 	tok := fs.Arg(0)
 	if tok == "-" {
@@ -250,6 +266,16 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	if err != nil {
 		fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
 	}
+	if call != nil && r.OK() {
+		m, err := manifestFor(ctx, st, v, call.Resource)
+		if err != nil {
+			fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+			return 1
+		}
+		check, reason := core.Subset(*r.Grant, core.Operation(m, call.Action), *call)
+		r.Checks = append(r.Checks, check)
+		r.Reason = reason
+	}
 	if *asJSON {
 		out, _ := json.MarshalIndent(r, "", "  ")
 		fmt.Fprintln(stdout, string(out))
@@ -278,6 +304,46 @@ func printResult(w io.Writer, r grant.Result) {
 	}
 	left := time.Until(time.Unix(g.Expiry, 0)).Round(time.Second)
 	fmt.Fprintf(w, "accepted: grant %s, agent %s acting for %s, mandate %s, expires in %s\n", g.ID, g.Actor.Subject, who, g.Mandate, left)
+}
+
+// readArgs decodes a call's arguments: one JSON object, no duplicate names.
+func readArgs(s string) (map[string]any, error) {
+	if err := schema.CheckDuplicateKeys([]byte(s)); err != nil {
+		return nil, err
+	}
+	var args map[string]any
+	dec := json.NewDecoder(strings.NewReader(s))
+	if err := dec.Decode(&args); err != nil {
+		return nil, err
+	}
+	if dec.More() {
+		return nil, errors.New("trailing data after the object")
+	}
+	if args == nil {
+		return nil, errors.New("want a JSON object")
+	}
+	return args, nil
+}
+
+// manifestFor finds the enabled manifest whose audience is aud.
+func manifestFor(ctx context.Context, st store.Store, v *schema.Validator, aud string) (v0.Manifest, error) {
+	docs, err := st.Documents().List(ctx, v0.KindManifest)
+	if err != nil {
+		return v0.Manifest{}, err
+	}
+	for _, d := range docs {
+		if d.Disabled {
+			continue
+		}
+		m, err := schema.Decode[v0.Manifest](v, d.Doc)
+		if err != nil {
+			return v0.Manifest{}, fmt.Errorf("manifest %s: %w", d.Name, err)
+		}
+		if m.Spec.Audience == aud {
+			return m, nil
+		}
+	}
+	return v0.Manifest{}, fmt.Errorf("no enabled manifest has audience %s", aud)
 }
 
 // readRecord reads one record of a kind from a JSON or YAML file and

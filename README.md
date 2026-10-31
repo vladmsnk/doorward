@@ -127,6 +127,31 @@ accepted: grant grt_01M68ZAY9YDFW1ZFC20G1RM7AM, agent invoice-assistant acting f
 
 `verify` exits 1 on a refusal; `--json` prints the checks and the reason.
 
+Given a call, `verify` also runs the subset check
+([`internal/core`](internal/core)): the grant must allow the operation at
+the resource, and every bound the grant sets on its arguments must hold.
+Bounds from every entry that names the operation apply together. A bound
+on an argument the call carries is always checked; a missing argument is
+refused only if the manifest declares it, since one entry may bound
+`/amount` for operations that take no amount.
+
+```sh
+agentbox grant verify --aud https://payments.example.internal \
+  --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}' - < grant.jwt
+```
+
+```
+...
+fail  subset     /amount
+refused: constraint_violated
+```
+
+| Refused with | When |
+|---|---|
+| `action_not_granted` | no entry names the operation at that resource, or the manifest no longer has it |
+| `field_missing` | a bounded argument the operation declares is absent or null |
+| `constraint_violated` | a value breaks a bound, or is not the type the manifest declares |
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the
@@ -295,6 +320,7 @@ internal/policy/   comparing permissions: tiers, constraints, "within"
 internal/keys/     signing keys: create, rotate, retire, JWK Set
 internal/sealer/   AES-256-GCM sealing under the master key
 internal/grant/    signing grants and verifying them (B1)
+internal/core/     the decision core: the subset check (B2)
 internal/ids/      record IDs: prefix_ULID
 schema/            the embedded schemas, the validator, strict YAML/JSON reading
 schema/v0/         the JSON Schemas

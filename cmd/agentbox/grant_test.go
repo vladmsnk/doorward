@@ -32,7 +32,7 @@ func grantEnv(t *testing.T) (dsn, masterKey string) {
 	}
 	// The store checks nothing but shape, so the documents go in directly;
 	// the Admin API's rules have their own tests.
-	for _, f := range []string{"mandate-invoices.yaml", "mandate-reconcile.yaml", "agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
+	for _, f := range []string{"manifest-payments-api.yaml", "mandate-invoices.yaml", "mandate-reconcile.yaml", "agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
 		data, err := os.ReadFile(filepath.Join("../../examples/v0/config", f))
 		if err != nil {
 			t.Fatal(err)
@@ -87,6 +87,26 @@ func TestGrantMintAndVerify(t *testing.T) {
 	if code != 1 || !strings.Contains(out, "refused: audience_mismatch") {
 		t.Fatalf("verify other audience: %d\n%s", code, out)
 	}
+	// With a call: the subset check runs after the grant's own checks.
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", `{"invoice_id":"inv_1","amount":1200,"currency":"EUR"}`, tok)
+	if code != 0 || !strings.Contains(out, "pass  subset") {
+		t.Fatalf("verify a payment inside the grant: %d\n%s", code, out)
+	}
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", `{"invoice_id":"inv_1","amount":7500,"currency":"EUR"}`, tok)
+	if code != 1 || !strings.Contains(out, "fail  subset     /amount") || !strings.Contains(out, "refused: constraint_violated") {
+		t.Fatalf("verify a payment over the grant: %d\n%s", code, out)
+	}
+	code, out, _ = verify("--aud", payments, "--action", "refund_payment", tok)
+	if code != 1 || !strings.Contains(out, "refused: action_not_granted") {
+		t.Fatalf("verify an operation outside the grant: %d\n%s", code, out)
+	}
+	if code, _, _ := verify("--action", "pay_invoice", tok); code != 2 {
+		t.Errorf("--action without --aud: %d", code)
+	}
+	if code, _, _ := verify("--aud", payments, "--action", "pay_invoice", "--args", `{"amount":1,"amount":2}`, tok); code != 2 {
+		t.Errorf("duplicate argument names: %d", code)
+	}
+
 	code, out, _ = verify("--json", "--issuer", "https://other.example", tok)
 	if code != 1 || !strings.Contains(out, `"code": "grant_malformed"`) {
 		t.Fatalf("verify other issuer: %d\n%s", code, out)
