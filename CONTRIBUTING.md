@@ -26,8 +26,10 @@ assistance is disclosed, not hidden:
 - Every commit is authored and signed off by the person who submits it,
   who answers for it under the DCO. An AI cannot certify the DCO, so a
   commit authored, committed or signed off by an AI identity is refused.
-- Commits written with an assistant say so with a `Co-Authored-By:`
-  trailer naming it.
+- Commits carry no AI attribution trailer (`Co-Authored-By:` naming an
+  assistant, `Claude-Session:`): the person who signs off is the
+  contributor. This section and the README are where the assistance is
+  stated.
 
 ## Before you push
 

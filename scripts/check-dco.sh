@@ -4,9 +4,10 @@
 #  - every non-merge commit carries a "Signed-off-by:" trailer that matches
 #    its author;
 #  - no commit, merges included, is authored, committed or signed off by an
-#    AI assistant. A sign-off certifies the Developer Certificate of Origin,
-#    which only a person can do. AI assistance is disclosed instead with a
-#    Co-Authored-By trailer, which this check allows.
+#    AI assistant, or names one as co-author or carries a Claude-Session
+#    trailer. A sign-off certifies the Developer Certificate of Origin,
+#    which only a person can do, and the person who signs off is the
+#    contributor. The README states that development is AI-assisted.
 #
 # CI runs it on every pull request and every push to main; run it locally
 # with `make dco-check`.
@@ -23,7 +24,7 @@ if [ -n "$base" ]; then
 fi
 
 # Identities that are not a person who can certify the DCO.
-not_a_person='@anthropic\.com>?$|^Claude <'
+not_a_person='@anthropic\.com>?$|^Claude([ <]|$)'
 
 status=0
 count=0
@@ -48,6 +49,17 @@ while read -r sha; do
 		echo "  is signed off by an AI assistant; only a person can certify the DCO" >&2
 		status=1
 	fi
+	coauthors="$(git show -s --format='%(trailers:key=Co-authored-by,valueonly)' "$sha")"
+	if grep -E "$not_a_person" <<<"$coauthors" | grep -q .; then
+		echo "commit $what" >&2
+		echo "  names an AI assistant as co-author; the README states the assistance, commits do not" >&2
+		status=1
+	fi
+	if git show -s --format='%B' "$sha" | grep -qi '^Claude-Session:'; then
+		echo "commit $what" >&2
+		echo "  carries a Claude-Session trailer" >&2
+		status=1
+	fi
 	if [ "$(git rev-list --no-walk --count --min-parents=2 "$sha")" = 0 ] && ! grep -qxF "$author" <<<"$signoffs"; then
 		echo "commit $what" >&2
 		echo "  has no trailer: Signed-off-by: $author" >&2
@@ -60,4 +72,4 @@ if [ "$status" -ne 0 ]; then
 	echo "Commit as yourself and sign off with 'git commit -s'; see CONTRIBUTING.md." >&2
 	exit "$status"
 fi
-echo "DCO: $count commit(s) authored and signed off by a person"
+echo "DCO: $count commit(s) authored and signed off by a person, with no AI attribution"

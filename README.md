@@ -11,9 +11,9 @@ interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 
 > `agentbox` is a working name.
 >
-> Development is AI-assisted: much of the code is written with Claude Code,
-> and every commit is authored and signed off by a human maintainer (see
-> [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
+> Development is AI-assisted: much of the code is written with Claude Code.
+> Every commit is authored and signed off by a human maintainer, who answers
+> for it (see [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
 
 ## Status
 

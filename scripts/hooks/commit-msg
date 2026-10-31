@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # Refuses a commit before it exists when it would fail scripts/check-dco.sh:
-# authored or committed by an AI assistant, signed off by one, or not signed
-# off by its author. Install with `make hooks`.
+# authored or committed by an AI assistant, signed off by one, naming one as
+# co-author, carrying a Claude-Session trailer, or not signed off by its
+# author. Install with `make hooks`.
 set -euo pipefail
 
 msg_file=$1
-not_a_person='@anthropic\.com>?$|^Claude <'
+not_a_person='@anthropic\.com>?$|^Claude([ <]|$)'
 
 ident() { git var "$1" | sed -E 's/ [0-9]+ [+-][0-9]{4}$//'; }
 author="$(ident GIT_AUTHOR_IDENT)"
@@ -21,6 +22,9 @@ grep -qE "$not_a_person" <<<"$author" && fail "the author is an AI assistant ($a
 grep -qE "$not_a_person" <<<"$committer" && fail "the committer is an AI assistant ($committer)"
 signoffs="$(git interpret-trailers --parse "$msg_file" | sed -n 's/^Signed-off-by: //p')"
 grep -E "$not_a_person" <<<"$signoffs" | grep -q . && fail "a sign-off names an AI assistant; only a person can certify the DCO"
+coauthors="$(git interpret-trailers --parse "$msg_file" | sed -n 's/^[Cc]o-[Aa]uthored-[Bb]y: //p')"
+grep -E "$not_a_person" <<<"$coauthors" | grep -q . && fail "a Co-Authored-By trailer names an AI assistant; the README states the assistance, commits do not"
+grep -qi '^Claude-Session:' "$msg_file" && fail "the message carries a Claude-Session trailer"
 # Merges are exempt from the sign-off itself, as in check-dco.sh.
 if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
 	grep -qxF "$author" <<<"$signoffs" || fail "no trailer: Signed-off-by: $author"
