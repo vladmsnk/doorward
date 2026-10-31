@@ -19,7 +19,7 @@
   },
   "principal": { "agent": "reconciler", "owner": "finance-platform" },
   "grant": { "id": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H", "mandate": "reconcile" },
-  "action_hash": "sha-256:example-hash-not-computed-action-0000000004",
+  "action_hash": "sha-256:W21_RhgxFuG8aytBSKVq3q2FwBiVzh7TqMc60t6pSyA",
   "sensitivity": "write",
   "outcome": "allow",
   "checks": [

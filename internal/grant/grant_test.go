@@ -42,11 +42,11 @@ func (brokenKeys) Public(context.Context, string) (*ecdsa.PublicKey, error) {
 // fakeStatus refuses the grant IDs it lists.
 type fakeStatus map[string]string
 
-func (f fakeStatus) Standing(_ context.Context, g v0.Grant) (string, error) {
+func (f fakeStatus) Standing(_ context.Context, g v0.Grant) (grant.Standing, error) {
 	if f["*"] == "error" {
-		return "", errors.New("database down")
+		return grant.Standing{}, errors.New("database down")
 	}
-	return f[g.ID], nil
+	return grant.Standing{Refusal: f[g.ID], Ceiling: v0.SensitivityCritical}, nil
 }
 
 type fixture struct {
@@ -146,6 +146,9 @@ func TestValidGrant(t *testing.T) {
 	}
 	if got := checks(r); got != "signature:pass status:pass pop:skip audience:pass time:pass" {
 		t.Errorf("checks: %s", got)
+	}
+	if r.Standing == nil || r.Standing.Ceiling != v0.SensitivityCritical {
+		t.Errorf("standing: %+v", r.Standing)
 	}
 	if r.Grant.ID != f.claims.ID || r.Grant.Subject != "alice@example.com" {
 		t.Errorf("grant: %+v", r.Grant)

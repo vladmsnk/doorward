@@ -14,7 +14,7 @@
     "location": "https://payments.example.internal",
     "arguments": { "amount": 1200, "currency": "EUR", "invoice_id": "inv_7Q2M9X4K" }
   },
-  "action_hash": "sha-256:example-hash-not-computed-action-0000000003",
+  "action_hash": "sha-256:gUi92kB2Ra9Uh-iK8Fg62NSU7pmAFgPjYOOHZ1mlHtg",
   "policy_version": "sha-256:example-hash-not-computed-policy-0000000001",
   "required": 1,
   "votes": [

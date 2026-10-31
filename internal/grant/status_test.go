@@ -64,8 +64,8 @@ func TestStoreStatus(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if (want == "") != (got == "") || !strings.Contains(got, want) {
-			t.Errorf("standing %q, want %q", got, want)
+		if (want == "") != (got.Refusal == "") || !strings.Contains(got.Refusal, want) {
+			t.Errorf("standing %q, want %q", got.Refusal, want)
 		}
 	}
 
@@ -88,6 +88,9 @@ func TestStoreStatus(t *testing.T) {
 	standing("agent invoice-assistant is not registered")
 	putAgent(t, s, v0.AgentVerified)
 	standing("")
+	if got, _ := st.Standing(ctx, f.claims); got.Ceiling != v0.SensitivityCritical || got.SingleUse {
+		t.Errorf("standing of a standing grant: %+v", got)
+	}
 	putAgent(t, s, v0.AgentSuspended)
 	standing("agent invoice-assistant is suspended")
 	putAgent(t, s, v0.AgentVerified)
@@ -96,6 +99,23 @@ func TestStoreStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	standing("was revoked at")
+
+	// A single-use grant stands, bound to its call, until it is spent.
+	once := f.claims
+	once.ID = "grt_01JBXR7D2F4H6K8M0P3R5T7V9X"
+	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: once, Agent: "invoice-assistant", SingleUse: true, ActionHash: "sha-256:" + strings.Repeat("a", 43)}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.Standing(ctx, once)
+	if err != nil || got.Refusal != "" || !got.SingleUse || got.ActionHash != "sha-256:"+strings.Repeat("a", 43) {
+		t.Fatalf("single-use grant: %+v %v", got, err)
+	}
+	if err := s.Grants().Spend(ctx, once.ID, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := st.Standing(ctx, once); !strings.Contains(got.Refusal, "was used at") {
+		t.Errorf("spent single-use grant: %+v", got)
+	}
 
 	// Through the verifier: the record of a revoked grant ends at status.
 	f.v.Status = st

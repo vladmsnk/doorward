@@ -28,3 +28,9 @@ func Operation(m v0.Manifest, name string) *v0.Operation {
 	}
 	return nil
 }
+
+// Hash is the call's action hash: the digest of its canonical form, as an
+// approval and a single-use grant name it.
+func (c Call) Hash() (string, error) {
+	return v0.ApprovedAction{Name: c.Action, Location: c.Resource, Arguments: c.Arguments}.Hash()
+}

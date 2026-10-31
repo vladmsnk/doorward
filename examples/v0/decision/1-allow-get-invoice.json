@@ -17,7 +17,7 @@
     "mandate": "invoices",
     "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D"
   },
-  "action_hash": "sha-256:example-hash-not-computed-action-0000000001",
+  "action_hash": "sha-256:tlCTElQb-WWqUrjwtZsXtVMci8VTI2qZN5zvEfUr_pA",
   "sensitivity": "read",
   "outcome": "allow",
   "checks": [
