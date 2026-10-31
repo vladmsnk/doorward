@@ -1,5 +1,5 @@
 // Package schema embeds the v0 JSON Schemas and validates documents against
-// them (F02).
+// them.
 //
 // Every document the box accepts — configuration a company writes, a grant
 // presented at a point of enforcement, a record read back as evidence — goes

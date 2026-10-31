@@ -17,13 +17,31 @@ interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 
 ## Status
 
-The contract, storage, Admin API, signing keys and grant verification are
-on main; the subset and sensitivity checks are on branches. Nothing yet
-sits in front of a real tool: the next steps close the fail-open paths,
-finish the decision core, and then build one end-to-end slice in which an
-off-the-shelf MCP client connects, a user consents, and a call is refused
-or approved. The order and the reasons are in
-[docs/ROADMAP.md](docs/ROADMAP.md).
+On main: the contract, PostgreSQL storage, the Admin API, signing keys and
+sealed secrets, grant verification, and the decision core's subset and
+sensitivity checks, with the fail-open paths found in review closed.
+Nothing yet sits in front of a real tool. Next come budgets and the
+evaluation endpoint, then one end-to-end slice in which an off-the-shelf
+MCP client connects, a user consents, and a call is refused or approved.
+The order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## What agentbox cannot see
+
+Agentbox decides only on calls that pass through it, to tools a company has
+described to it. It cannot see or stop:
+
+- **Calls that never reach it**: an agent acting on the machine it runs on
+  (a shell, local files, credentials stored there), or calling an API
+  directly with a credential it already holds.
+- **What the model decides**: prompt injection, a poisoned tool
+  description, a goal hijacked mid-task. Agentbox does not prevent an agent
+  from being manipulated; it bounds what a manipulated agent can do: which
+  operations, with which arguments, within which budgets, and which calls a
+  person approves first.
+- **What a tool does with an allowed call**: a compromised server behind
+  the gateway can misuse what it is allowed to receive. A constraint that
+  pins an argument, such as an email's recipient, narrows that; nothing
+  removes it.
 
 ## Quick start
 
@@ -225,7 +243,7 @@ as agents work.
 | [Mandate](schema/v0/mandate.schema.json) | company | What an agent may do for a principal and on what terms: permissions, limits, how long a user's consent stands, who approves critical calls |
 | [Consent](schema/v0/consent.schema.json) | the box | One person allowing one agent one mandate, given on the box's consent page |
 | [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent holds under a mandate |
-| [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision, with every element level L1 asks for |
+| [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision: who acted, for whom, under which grant and consent, what was asked, every check and its result, and where it was decided and enforced |
 | [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
 
 ### How an agent asks for authority
@@ -328,11 +346,14 @@ order, an allowed decision has no failed check, a manifest's path parameters
 match its routes, an approval's voters are distinct and match its route, and
 `min ≤ max` everywhere.
 
-Rules that need a second document belong to the features that load both: a
-mandate lying within an agent's permissions (F12), operations existing in a
-manifest (F08), an agent requesting only mandates it may (F11).
-The hashes, key thumbprints and tokens in the examples have the right format
-but are placeholders, not real values (F05, F10).
+Rules that need a second document run in the Admin API, over the whole
+configuration: a mandate lying within every agent that may hold it,
+operations existing in a manifest, an agent requesting only mandates it
+may, an identity claimed once.
+
+In the examples, action hashes and the consent's `mandate_version` are real
+digests, kept so by tests. Other IDs, chain hashes and policy versions have
+the right format but are placeholders.
 
 ### Decisions for the first implementation
 

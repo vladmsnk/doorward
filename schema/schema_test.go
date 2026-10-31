@@ -44,7 +44,7 @@ func example(t *testing.T, rel string, kind schema.Kind) []byte {
 	return srcs[0].JSON
 }
 
-// F02 "done when": every example passes validation, decodes into its Go type,
+// Every example passes validation, decodes into its Go type,
 // and comes back out of the Go type unchanged and still valid.
 func TestExamplesValidateAndRoundTrip(t *testing.T) {
 	v := newValidator(t)

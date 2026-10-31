@@ -1,6 +1,7 @@
-// Package v0 holds the Go types of the v0 schemas (F02): the grant, the
-// decision record, and the three documents a company writes — the manifest of
-// a resource's operations, the task type and the agent boundary.
+// Package v0 holds the Go types of the v0 schemas: the three documents a
+// company writes (the manifest of a resource's operations, the agent, and the
+// mandate) and the records the box produces (consent, grant, decision and
+// approval).
 //
 // The JSON Schemas in schema/v0 are the contract. These types mirror them
 // field for field; the drift test in package schema fails the build when the
@@ -125,7 +126,7 @@ type Limit struct {
 }
 
 // TimestampLayout is the one way a record writes a time: UTC, millisecond
-// precision. Records are hashed into a chain (F10), so a time must have a
+// precision. Records are hashed into a chain, so a time must have a
 // single serialization; RFC 3339 alone allows many.
 const TimestampLayout = "2006-01-02T15:04:05.000Z"
 
