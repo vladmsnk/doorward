@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vladmsnk/agentbox/internal/store"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // Store is a store.Store on a connection pool.
@@ -47,7 +47,7 @@ func (s *Store) Keys() store.Keys           { return signingKeys{s.pool} }
 func (s *Store) Secrets() store.Secrets     { return secrets{s.pool} }
 
 // configLock is the advisory lock key every configuration change holds.
-const configLock = "agentbox:config"
+const configLock = "doorward:config"
 
 func (s *Store) LockConfig(ctx context.Context, fn func(store.Config) error) error {
 	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {

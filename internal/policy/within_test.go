@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/policy"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/policy"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 func f(x float64) *float64 { return &x }

@@ -19,7 +19,7 @@ jobs:
         image: postgres:16-alpine
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: agentbox_test
+          POSTGRES_DB: doorward_test
         ports: ["5432:5432"]
         options: >-
           --health-cmd "pg_isready -U postgres"
@@ -28,7 +28,7 @@ jobs:
           --health-retries 10
 
     env:
-      AGENTBOX_TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/agentbox_test?sslmode=disable
+      DOORWARD_TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/doorward_test?sslmode=disable
 
     steps:
       - uses: actions/checkout@v4

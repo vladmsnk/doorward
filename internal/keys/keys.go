@@ -18,8 +18,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // Alg is the only signing algorithm v0 issues. ES256 is what every JWT

@@ -6,8 +6,8 @@ import (
 	"math"
 	"sort"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/policy"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/policy"
 )
 
 // Subset is the subset check (B2): the call lies inside the grant. The

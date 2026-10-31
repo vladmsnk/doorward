@@ -1,6 +1,6 @@
 # Roadmap
 
-What agentbox builds next, in order. Each step is one pull request that
+What doorward builds next, in order. Each step is one pull request that
 lands with its tests and a "how to validate" section, and depends only on
 the steps above it. There are no dates: order is what matters.
 
@@ -9,16 +9,16 @@ the steps above it. There are no dates: order is what matters.
 Companies will own their tools and data, not the agents that call them:
 most agents will be hosted by someone else (Claude, ChatGPT, Copilot,
 coding agents). The control point a company can always keep is on the
-resource side, in front of its own tools. Agentbox is that control point:
+resource side, in front of its own tools. Doorward is that control point:
 an authorization server agents connect to with standard OAuth, and a
 per-call decision point that checks, holds for approval, and records every
 call.
 
-Agentbox is the **decision, approval and evidence core**. Its gateway and
+Doorward is the **decision, approval and evidence core**. Its gateway and
 authorization server are deliberately thin, for a small company that has
 neither, and each can be replaced through a standard interface: decisions
 over AuthZEN 1.0, tokens as RFC 9068 JWTs with a JWK Set, login through
-OIDC federation, records over OpenTelemetry. Agentbox does not try to be a
+OIDC federation, records over OpenTelemetry. Doorward does not try to be a
 full MCP gateway (routing, federation, LLM traffic) or a full identity
 provider.
 
@@ -38,7 +38,7 @@ What sets it apart, and what no open-source project combines today:
 | Contract v0 | schemas, Go types, examples, validator | on main |
 | A1 | PostgreSQL storage | on main |
 | A2 | Admin API with rules across documents | on main |
-| A3 | CLI client of the Admin API | skipped; superseded by `agentbox apply` (O1) |
+| A3 | CLI client of the Admin API | skipped; superseded by `doorward apply` (O1) |
 | A4 | signing keys, sealed secrets, JWK Set | on main |
 | B1 | grant verification | on main |
 | B2 | subset check | on main |
@@ -65,7 +65,7 @@ and starts by reading the specification text.
 | Decision endpoint shaped like AuthZEN | a conformant AuthZEN 1.0 decision point | so other gateways can use the core |
 | Several grant entries may name one operation, bounds combined | one entry per operation in every grant | a reader that checks each entry on its own would allow too much |
 | Journal chain over Go's JSON output, inside PostgreSQL only | RFC 8785 canonical JSON, exported records, signed checkpoints later | tamper evidence that survives a database administrator |
-| Configuration only through the Admin API | the Admin API stays the only writer; `agentbox apply -f DIR` drives it, with a diff | platform teams keep configuration in review |
+| Configuration only through the Admin API | the Admin API stays the only writer; `doorward apply -f DIR` drives it, with a diff | platform teams keep configuration in review |
 
 ## Phase P: close the fail-open paths
 
@@ -75,12 +75,12 @@ are the first cases of the negative-test catalogue.
 | # | Step | What changes | How you validate |
 |---|---|---|---|
 | P1 | **Contradictory bounds deny** | Combining two constraints that cannot both hold (disjoint `one_of`, two different `equals`, prefixes that diverge, `min` above `max`) gives "unsatisfiable", never "unconstrained". The subset check refuses every call against it; the Admin API refuses a mandate or agent that contains one. | A grant whose two entries allow `currency` EUR and USD respectively: today any currency passes; after the fix every currency is refused with `constraint_violated`. |
-| P2 | **One entry per operation** | `Grant.Check` rejects a grant that names the same operation at the same location twice. Minting merges each operation's bounds into one entry. The example grant is rewritten. | `agentbox validate` refuses the old `pay-invoice.json` shape; the rewritten example passes; B2's tests still pass. |
+| P2 | **One entry per operation** | `Grant.Check` rejects a grant that names the same operation at the same location twice. Minting merges each operation's bounds into one entry. The example grant is rewritten. | `doorward validate` refuses the old `pay-invoice.json` shape; the rewritten example passes; B2's tests still pass. |
 | P3 | **Consent is checked fully** | Minting refuses an expired consent and a consent given to an older version of the mandate, and caps the grant's `exp` at the consent's expiry. The status check refuses a grant whose consent has expired or whose mandate is disabled. | Mint on an expired consent: refused. Widen the mandate, mint under the old consent: refused. Disable the mandate: the grant fails `status`. |
 | P4 | **The whole configuration is checked, in one transaction** | Every Admin API write validates the configuration as it would be after the write, manifests included, while holding one configuration lock. A manifest can no longer drop an operation a mandate names, or raise an operation above an agent's ceiling. | PUT the payments manifest without `pay_invoice`: refused, naming the mandate. A test runs conflicting writes in parallel: one wins, the other is refused. |
 | P5 | **Safe Admin API default** | The Admin API listens on `127.0.0.1:8081` unless told otherwise. | Start with defaults; the Admin API answers on localhost only. |
 | P6 | **Honest grants** | Minted grants carry no `cnf`; the examples drop it; the README says grants are Bearer tokens until proof of possession is enforced. | Decode a minted grant: no `cnf`. |
-| P7 | **README tells the truth** | The status table, the secret store (sealed in the database, not files), and a section on what agentbox cannot see: calls that never leave a machine, prompt injection, a compromised server. Undefined "L1 to L5" levels are replaced by plain descriptions of the evidence each record carries. | Read it. |
+| P7 | **README tells the truth** | The status table, the secret store (sealed in the database, not files), and a section on what doorward cannot see: calls that never leave a machine, prompt injection, a compromised server. Undefined "L1 to L5" levels are replaced by plain descriptions of the evidence each record carries. | Read it. |
 
 ## Phase B, continued: the decision core
 
@@ -109,7 +109,7 @@ documentation, and records in the pull request what it checked.
 | C5 | **Authorize and consent** | Code flow with PKCE; the `resource` parameter becomes the audience; the scope names the mandate. An unverified agent may ask only for open mandates. The consent page shows the agent, its publisher, the redirect host, and the mandate's text; Allow records a consent naming the mandate version. | In a browser: ask for `invoices` as an unverified agent, refused; `invoices-readonly`, consent page; Allow writes a consent record. |
 | C6 | **Token endpoint** | Code exchange and refresh with rotation. The grant is built as a pure function, mandate intersected with agent, one entry per operation, a `scope` claim, `exp` no later than the consent. Revoking a consent stops refresh. | Tests rebuild the example grants from the example configuration. **Milestone:** Claude Code and VS Code connect from the URL alone, Alice consents, tools are listed, 7,500 EUR is refused. |
 | C7 | **Approvals by retry** | A critical call opens an approval for its canonical call and returns a tool error saying it is pending, with the approval link (HTTP manifests: 202 with `Location`). The approver page requires a recent sign-in and counts N of a group. When the same call is retried under the same grant, its hash matches the approved request; the single-use grant the box keeps for it is spent atomically, and the call is forwarded once, with the approval as idempotency key. | **Milestone:** 1,200 EUR held, Alice approves, the client retries, the demo server receives exactly one payment; another retry is refused. |
-| C8 | **Quick start** | Container image; `docker compose up` with agentbox, PostgreSQL, Dex and the demo server; walkthroughs for Claude Code and VS Code; the MCP authorization conformance scenarios in CI. | Someone new sees a blocked call within ten minutes. |
+| C8 | **Quick start** | Container image; `docker compose up` with doorward, PostgreSQL, Dex and the demo server; walkthroughs for Claude Code and VS Code; the MCP authorization conformance scenarios in CI. | Someone new sees a blocked call within ten minutes. |
 
 ## Phase D: speak the standards, harden the evidence
 
@@ -120,9 +120,9 @@ documentation, and records in the pull request what it checked.
 | D3 | **Evidence v2** | Signed checkpoints of the chain head; export to write-once storage; an offline verifier; an OCSF mapping; a retention policy; call arguments kept outside the chain, encrypted per user so they can be erased; the single chain lock replaced by a sharded or batched chain. |
 | D4 | **Workload agents** | Kubernetes service-account tokens and JWT-SVIDs as client credentials (RFC 8693, RFC 7523); proof of possession end to end following the MCP DPoP profile, required per agent or mandate. |
 | D5 | **Enterprise interop** | Accept identity assertion grants (MCP Enterprise-Managed Authorization) at the token endpoint; publish a Token Status List; emit CAEP events on revocation; Keycloak tested as the authorization server. |
-| D6 | **Operability** | `agentbox apply -f DIR` with diff and prune, in one transaction; OIDC sign-in for administrators, each change attributed to a person; master key from a KMS or OpenBao Transit; key rotation that publishes the next key before using it; a Helm chart; cached status. |
+| D6 | **Operability** | `doorward apply -f DIR` with diff and prune, in one transaction; OIDC sign-in for administrators, each change attributed to a person; master key from a KMS or OpenBao Transit; key rotation that publishes the next key before using it; a Helm chart; cached status. |
 | D7 | **Rules without hand-writing** | Manifest import from OpenAPI and MCP `tools/list`, unknown operations defaulting to critical; mandate templates; mandates proposed from a week of observed calls; replay of a configuration change against the journal before applying it; tool-description pinning; unregistered clients shown as discovered agents. |
-| D8 | **Conformance bench and governance** | A suite of agent-authorization failure modes run against agentbox and at least two other gateways, results published; GOVERNANCE.md; a second maintainer from another organization. |
+| D8 | **Conformance bench and governance** | A suite of agent-authorization failure modes run against doorward and at least two other gateways, results published; GOVERNANCE.md; a second maintainer from another organization. |
 
 ## Later
 

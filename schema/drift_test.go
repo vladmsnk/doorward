@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // The schemas and the Go types are written by hand, side by side. These tests

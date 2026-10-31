@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
+	v0 "github.com/vladmsnk/doorward/api/v0"
 )
 
 func decode(t *testing.T, s string) any {

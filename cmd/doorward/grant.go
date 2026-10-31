@@ -11,21 +11,21 @@ import (
 	"strings"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/core"
-	"github.com/vladmsnk/agentbox/internal/grant"
-	"github.com/vladmsnk/agentbox/internal/ids"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/policy"
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/internal/store/postgres"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/core"
+	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/ids"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/policy"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 const grantUsage = `usage:
-  agentbox grant mint [flags] CLAIMS     sign and record a grant (until the token service exists)
-  agentbox grant verify [flags] TOKEN    run the grant's checks; TOKEN - reads stdin
+  doorward grant mint [flags] CLAIMS     sign and record a grant (until the token service exists)
+  doorward grant verify [flags] TOKEN    run the grant's checks; TOKEN - reads stdin
 `
 
 func runGrant(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -39,7 +39,7 @@ func runGrant(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "verify":
 		return runGrantVerify(args[1:], stdin, stdout, stderr)
 	default:
-		fmt.Fprintf(stderr, "agentbox grant: unknown command %q\n\n%s", args[0], grantUsage)
+		fmt.Fprintf(stderr, "doorward grant: unknown command %q\n\n%s", args[0], grantUsage)
 		return 2
 	}
 }
@@ -51,9 +51,9 @@ func runGrant(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("grant mint", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
-	masterKey := fs.String("master-key", os.Getenv("AGENTBOX_MASTER_KEY"), "master key (or AGENTBOX_MASTER_KEY)")
-	issuer := fs.String("issuer", os.Getenv("AGENTBOX_ISSUER"), "iss of the grant (or AGENTBOX_ISSUER); default: the claims' own")
+	dsn := fs.String("db", os.Getenv("DOORWARD_DB"), "PostgreSQL connection string (or DOORWARD_DB)")
+	masterKey := fs.String("master-key", os.Getenv("DOORWARD_MASTER_KEY"), "master key (or DOORWARD_MASTER_KEY)")
+	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "iss of the grant (or DOORWARD_ISSUER); default: the claims' own")
 	ttl := fs.Duration("ttl", 15*time.Minute, "lifetime of the grant")
 	consentFile := fs.String("consent", "", "Consent record to store first, for a grant to a user")
 	singleUse := fs.Bool("single-use", false, "issue a single-use grant for one call, given by --action, --args and --aud")
@@ -61,7 +61,7 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	argsJSON := fs.String("args", "{}", "with --single-use: the call's arguments, a JSON object")
 	aud := fs.String("aud", "", "with --single-use: the resource of the call; default: the grant's only audience")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: agentbox grant mint [flags] CLAIMS\n\nCLAIMS is a grant in JSON, such as examples/v0/grant/pay-invoice.json.\niat, exp and jti are replaced; the token goes to stdout.")
+		fmt.Fprintln(stderr, "usage: doorward grant mint [flags] CLAIMS\n\nCLAIMS is a grant in JSON, such as examples/v0/grant/pay-invoice.json.\niat, exp and jti are replaced; the token goes to stdout.")
 		fs.PrintDefaults()
 	}
 	if code, ok := parseFlags(fs, args); !ok {
@@ -72,34 +72,34 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *ttl <= 0 || *ttl > 24*time.Hour {
-		fmt.Fprintln(stderr, "agentbox grant mint: --ttl must be between 1s and 24h")
+		fmt.Fprintln(stderr, "doorward grant mint: --ttl must be between 1s and 24h")
 		return 2
 	}
 	if *singleUse != (*action != "") {
-		fmt.Fprintln(stderr, "agentbox grant mint: --single-use and --action go together")
+		fmt.Fprintln(stderr, "doorward grant mint: --single-use and --action go together")
 		return 2
 	}
 	var bound core.Call
 	if *singleUse {
 		args, err := readArgs(*argsJSON)
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox grant mint: --args: %v\n", err)
+			fmt.Fprintf(stderr, "doorward grant mint: --args: %v\n", err)
 			return 2
 		}
 		bound = core.Call{Resource: *aud, Action: *action, Arguments: args}
 	}
 	sl, err := sealer.Parse(*masterKey)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox grant mint: --master-key or AGENTBOX_MASTER_KEY: %v\n", err)
+		fmt.Fprintf(stderr, "doorward grant mint: --master-key or DOORWARD_MASTER_KEY: %v\n", err)
 		return 2
 	}
 	v, err := schema.NewValidator()
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox grant mint: %v\n", err)
+		fmt.Fprintf(stderr, "doorward grant mint: %v\n", err)
 		return 1
 	}
 	fail := func(format string, a ...any) int {
-		fmt.Fprintf(stderr, "agentbox grant mint: "+format+"\n", a...)
+		fmt.Fprintf(stderr, "doorward grant mint: "+format+"\n", a...)
 		return 1
 	}
 
@@ -334,14 +334,14 @@ func declaredParams(ctx context.Context, st store.Store, v *schema.Validator) (p
 func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("grant verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
-	issuer := fs.String("issuer", os.Getenv("AGENTBOX_ISSUER"), "the only iss accepted (or AGENTBOX_ISSUER); default: any")
+	dsn := fs.String("db", os.Getenv("DOORWARD_DB"), "PostgreSQL connection string (or DOORWARD_DB)")
+	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only iss accepted (or DOORWARD_ISSUER); default: any")
 	aud := fs.String("aud", "", "the resource being called; without it the audience check is skipped")
 	action := fs.String("action", "", "an operation to check against the grant (needs --aud)")
 	argsJSON := fs.String("args", "{}", "the operation's arguments, a JSON object")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: agentbox grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nWith --action, also checks that the call lies inside the grant and how risky it is.\nExit status: 0 accepted, 1 refused, 3 approval required.")
+		fmt.Fprintln(stderr, "usage: doorward grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nWith --action, also checks that the call lies inside the grant and how risky it is.\nExit status: 0 accepted, 1 refused, 3 approval required.")
 		fs.PrintDefaults()
 	}
 	if code, ok := parseFlags(fs, args); !ok {
@@ -354,12 +354,12 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	var call *core.Call
 	if *action != "" {
 		if *aud == "" {
-			fmt.Fprintln(stderr, "agentbox grant verify: --action needs --aud, the resource being called")
+			fmt.Fprintln(stderr, "doorward grant verify: --action needs --aud, the resource being called")
 			return 2
 		}
 		args, err := readArgs(*argsJSON)
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox grant verify: --args: %v\n", err)
+			fmt.Fprintf(stderr, "doorward grant verify: --args: %v\n", err)
 			return 2
 		}
 		call = &core.Call{Resource: *aud, Action: *action, Arguments: args}
@@ -368,14 +368,14 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	if tok == "-" {
 		data, err := io.ReadAll(io.LimitReader(stdin, grant.MaxTokenSize+2))
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+			fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
 			return 1
 		}
 		tok = strings.TrimSpace(string(data))
 	}
 	v, err := schema.NewValidator()
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+		fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
 		return 1
 	}
 	ctx := context.Background()
@@ -395,17 +395,17 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	held := false
 	r, err := verifier.Verify(ctx, tok, *aud)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+		fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
 	}
 	if call != nil && r.OK() {
 		m, err := manifestFor(ctx, st, v, call.Resource)
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+			fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
 			return 1
 		}
 		held, err = checkCall(&r, m, *call)
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox grant verify: %v\n", err)
+			fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
 			return 1
 		}
 	}
@@ -564,12 +564,12 @@ func readRecord[T schema.Document](v *schema.Validator, name string, kind schema
 
 func openStore(ctx context.Context, dsn, cmd string, stderr io.Writer) (*postgres.Store, int, bool) {
 	if dsn == "" {
-		fmt.Fprintf(stderr, "agentbox %s: --db or AGENTBOX_DB is required\n", cmd)
+		fmt.Fprintf(stderr, "doorward %s: --db or DOORWARD_DB is required\n", cmd)
 		return nil, 2, false
 	}
 	st, err := postgres.Open(ctx, dsn)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox %s: %v\n", cmd, err)
+		fmt.Fprintf(stderr, "doorward %s: %v\n", cmd, err)
 		return nil, 1, false
 	}
 	return st, 0, true

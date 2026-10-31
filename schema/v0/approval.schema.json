@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbox.dev/schema/v0/approval.schema.json",
+  "$id": "https://doorward.dev/schema/v0/approval.schema.json",
   "title": "Approval",
   "description": "Record of one approval request for one exact call: what the approvers saw, who voted, and how each of them signed in. An approved request lets the STS issue a single-use grant bound to action_hash.",
   "type": "object",

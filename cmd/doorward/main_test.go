@@ -46,7 +46,7 @@ func TestValidateExamples(t *testing.T) {
 func TestValidateReportsEveryFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")
-	doc := "apiVersion: agentbox/v0\nkind: Agent\nmetadata: {name: x}\nspec: {}\n---\napiVersion: agentbox/v0\nkind: Mandate\nmetadata: {name: y}\nspec: {}\n"
+	doc := "apiVersion: doorward/v0\nkind: Agent\nmetadata: {name: x}\nspec: {}\n---\napiVersion: doorward/v0\nkind: Mandate\nmetadata: {name: y}\nspec: {}\n"
 	if err := os.WriteFile(bad, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestUsageErrors(t *testing.T) {
 
 func TestVersion(t *testing.T) {
 	code, out, _ := runCLI("version")
-	if code != 0 || !strings.HasPrefix(out, "agentbox dev") {
+	if code != 0 || !strings.HasPrefix(out, "doorward dev") {
 		t.Errorf("exit %d, output %q", code, out)
 	}
 }

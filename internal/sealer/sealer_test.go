@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/vladmsnk/agentbox/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/sealer"
 )
 
 func TestSealAndOpen(t *testing.T) {

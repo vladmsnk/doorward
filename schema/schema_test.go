@@ -12,8 +12,8 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 const examples = "../examples/v0"
@@ -178,7 +178,7 @@ func TestInvalidDocuments(t *testing.T) {
 		keyword string // a schema keyword the error must mention
 	}{
 		// Envelope.
-		{"wrong apiVersion", agent, schema.Agent, []edit{{set: "/apiVersion", value: "agentbox/v1"}}, "const"},
+		{"wrong apiVersion", agent, schema.Agent, []edit{{set: "/apiVersion", value: "doorward/v1"}}, "const"},
 		{"unknown top-level field", agent, schema.Agent, []edit{{set: "/status", value: map[string]any{}}}, "additionalProperties"},
 		{"name with upper case", agent, schema.Agent, []edit{{set: "/metadata/name", value: "Invoice-Assistant"}}, "pattern"},
 
@@ -510,7 +510,7 @@ func TestDuplicateKeysAreRejected(t *testing.T) {
 		t.Errorf("nested duplicate: got %v", err)
 	}
 
-	yamlDoc := "apiVersion: agentbox/v0\nkind: Agent\nkind: TaskType\n"
+	yamlDoc := "apiVersion: doorward/v0\nkind: Agent\nkind: TaskType\n"
 	if _, err := schema.Read("x.yaml", []byte(yamlDoc), ""); err == nil || !strings.Contains(err.Error(), "already defined") {
 		t.Errorf("duplicate YAML key: got %v", err)
 	}
@@ -544,7 +544,7 @@ func TestReadMultiDocumentYAML(t *testing.T) {
 }
 
 func TestReadKindResolution(t *testing.T) {
-	agentDoc := []byte(`{"apiVersion":"agentbox/v0","kind":"Agent"}`)
+	agentDoc := []byte(`{"apiVersion":"doorward/v0","kind":"Agent"}`)
 	grant := []byte(`{"jti":"grt_0000000000"}`)
 
 	if _, err := schema.Read("g.json", grant, ""); err == nil {

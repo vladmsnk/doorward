@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // Server serves the Admin API.
@@ -494,7 +494,7 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 		if s.Token == "" || !ok || subtle.ConstantTimeCompare([]byte(got), []byte(s.Token)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="agentbox-admin"`)
+			w.Header().Set("WWW-Authenticate", `Bearer realm="doorward-admin"`)
 			writeError(w, http.StatusUnauthorized, "unauthorized", "an administrator token is required", nil)
 			return
 		}

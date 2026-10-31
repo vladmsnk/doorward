@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/vladmsnk/agentbox/internal/store"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // ---------------------------------------------------------------- signing keys

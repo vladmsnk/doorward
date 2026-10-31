@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/core"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/core"
 )
 
 // TestExampleDecisions replays the calls of the example decision records

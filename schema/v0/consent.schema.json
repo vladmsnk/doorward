@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbox.dev/schema/v0/consent.schema.json",
+  "$id": "https://doorward.dev/schema/v0/consent.schema.json",
   "title": "Consent",
   "description": "Record of one person allowing one agent one mandate, given on the box's consent page at the end of a standard OAuth authorization (code flow with PKCE). While it stands, the STS issues the agent grants under it; when it ends, by time or by revocation, it issues none.",
   "type": "object",

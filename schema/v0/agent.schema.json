@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbox.dev/schema/v0/agent.schema.json",
+  "$id": "https://doorward.dev/schema/v0/agent.schema.json",
   "title": "Agent",
   "description": "One agent the box knows: how it presented itself, how it proves who it is, who answers for it, and the most it may ever be granted. An agent an administrator registers is verified from the start. An agent that registers itself (OAuth dynamic client registration, or client metadata at a URL) starts unverified: it may request only open mandates, under the ceiling the box gives every unverified agent, until an administrator assigns an owner and verifies it.",
   "type": "object",

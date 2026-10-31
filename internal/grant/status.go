@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/store"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // StoreStatus reads a grant's standing from the box's own records: the

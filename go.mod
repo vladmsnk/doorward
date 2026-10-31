@@ -1,4 +1,4 @@
-module github.com/vladmsnk/agentbox
+module github.com/vladmsnk/doorward
 
 go 1.25
 

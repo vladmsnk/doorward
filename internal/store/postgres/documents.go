@@ -6,8 +6,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/store"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 type documents struct{ pool db }

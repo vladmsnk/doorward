@@ -8,9 +8,9 @@ import (
 	"slices"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // DefaultSkew is how far apart the issuer's clock and the verifier's may be.

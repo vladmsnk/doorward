@@ -1,11 +1,11 @@
 version: 2
 
-project_name: agentbox
+project_name: doorward
 
 builds:
-  - id: agentbox
-    main: ./cmd/agentbox
-    binary: agentbox
+  - id: doorward
+    main: ./cmd/doorward
+    binary: doorward
     env:
       - CGO_ENABLED=0
     goos: [linux, darwin]

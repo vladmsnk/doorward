@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/grant"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 const aud = "https://payments.example.internal"

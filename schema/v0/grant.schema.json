@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbox.dev/schema/v0/grant.schema.json",
+  "$id": "https://doorward.dev/schema/v0/grant.schema.json",
   "title": "Grant",
   "description": "Claims of an agent grant: a short-lived JWT access token (RFC 9068, header typ at+jwt) the STS issues under a mandate, bound to the agent's key. For a user mandate, sub is the user and the grant names the consent it rests on, so the resource sees the user as if they had called; for a service mandate the agent is its own sub, so sub equals client_id.",
   "type": "object",

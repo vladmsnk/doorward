@@ -17,7 +17,7 @@ import (
 )
 
 // APIVersion is the apiVersion of every v0 configuration document.
-const APIVersion = "agentbox/v0"
+const APIVersion = "doorward/v0"
 
 // TypeMeta is the envelope that tells documents of different kinds apart.
 type TypeMeta struct {

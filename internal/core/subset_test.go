@@ -5,9 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/core"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/core"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 const (

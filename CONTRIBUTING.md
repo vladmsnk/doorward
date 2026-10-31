@@ -20,7 +20,7 @@ git rebase --signoff origin/main
 
 ## AI-assisted development
 
-Much of agentbox is written with an AI coding assistant (Claude Code). The
+Much of doorward is written with an AI coding assistant (Claude Code). The
 assistance is disclosed, not hidden:
 
 - Every commit is authored and signed off by the person who submits it,

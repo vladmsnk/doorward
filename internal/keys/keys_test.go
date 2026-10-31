@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // memKeys is an in-memory store.Keys, enough to test the manager's logic

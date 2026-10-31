@@ -14,20 +14,20 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vladmsnk/agentbox/internal/admin"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store/postgres"
-	"github.com/vladmsnk/agentbox/schema"
+	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 const token = "test-admin-token-0123456789"
 
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	dsn := os.Getenv("AGENTBOX_TEST_POSTGRES_DSN")
+	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("AGENTBOX_TEST_POSTGRES_DSN not set")
+		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
 	st, err := postgres.Open(ctx, dsn)

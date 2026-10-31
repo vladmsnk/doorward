@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://agentbox.dev/schema/v0/decision.schema.json",
+  "$id": "https://doorward.dev/schema/v0/decision.schema.json",
   "title": "Decision",
   "description": "Record of one authorization decision: who acts, on whose behalf, where the decision was made, where it was enforced, and what was asked. The request is kept apart from the principal on purpose: what the agent asked for is not what it is allowed.",
   "type": "object",

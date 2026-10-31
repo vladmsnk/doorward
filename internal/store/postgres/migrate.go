@@ -85,7 +85,7 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 // migrationLock is the advisory lock key migrations hold; any fixed number.
-const migrationLock = 0x4147454e54424f58 // "AGENTBOX"
+const migrationLock = 0x4147454e54424f58 // "DOORWARD"
 
 func appliedVersions(ctx context.Context, conn *pgx.Conn) (map[int]bool, error) {
 	var exists bool

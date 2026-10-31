@@ -9,9 +9,9 @@ import (
 	"slices"
 	"sort"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/policy"
-	"github.com/vladmsnk/agentbox/internal/store"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/policy"
+	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // The rules that span documents. Each document's own schema and Check have

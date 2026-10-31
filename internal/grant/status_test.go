@@ -8,18 +8,18 @@ import (
 	"testing"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/grant"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/internal/store/postgres"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 func openStore(t *testing.T) *postgres.Store {
 	t.Helper()
-	dsn := os.Getenv("AGENTBOX_TEST_POSTGRES_DSN")
+	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("AGENTBOX_TEST_POSTGRES_DSN not set")
+		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
 	s, err := postgres.Open(ctx, dsn)

@@ -3,8 +3,8 @@ package core
 import (
 	"fmt"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/policy"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/policy"
 )
 
 // Binding says what kind of grant the call came with. A standing grant

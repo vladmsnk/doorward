@@ -4,7 +4,7 @@
 // endpoint that runs them in order and writes the record comes last (B5).
 package core
 
-import v0 "github.com/vladmsnk/agentbox/api/v0"
+import v0 "github.com/vladmsnk/doorward/api/v0"
 
 // Call is what an agent asks to do: one operation of a resource, with its
 // arguments, as the point of enforcement read them from the request.

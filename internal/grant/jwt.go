@@ -19,9 +19,9 @@ import (
 	"math/big"
 	"strings"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/schema"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // MaxTokenSize bounds what the parser looks at. A grant with a few

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
+	v0 "github.com/vladmsnk/doorward/api/v0"
 )
 
 // Tier orders sensitivity tiers: read < write < critical.

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vladmsnk/agentbox/internal/ids"
+	"github.com/vladmsnk/doorward/internal/ids"
 )
 
 // The schemas' id pattern, and the ULID shape on top of it.

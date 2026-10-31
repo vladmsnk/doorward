@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
+	v0 "github.com/vladmsnk/doorward/api/v0"
 )
 
 // OnePerOperation rewrites permissions so that each operation at each

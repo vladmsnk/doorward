@@ -32,4 +32,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/vladmsnk/agentbox
+        - github.com/vladmsnk/doorward

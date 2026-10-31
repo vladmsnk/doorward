@@ -22,7 +22,7 @@ import (
 
 	"github.com/santhosh-tekuri/jsonschema/v6"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
+	v0 "github.com/vladmsnk/doorward/api/v0"
 )
 
 //go:embed v0/*.schema.json
@@ -30,7 +30,7 @@ var files embed.FS
 
 // BaseURL is the base of every v0 schema's $id. The schemas are embedded;
 // nothing is fetched from it.
-const BaseURL = "https://agentbox.dev/schema/v0/"
+const BaseURL = "https://doorward.dev/schema/v0/"
 
 // Kind names a v0 document kind.
 type Kind string

@@ -1,4 +1,4 @@
-# Working on agentbox with Claude Code
+# Working on doorward with Claude Code
 
 ## Commits: a person authors and signs off; Claude appears nowhere
 
@@ -26,7 +26,7 @@
 
 ## Before pushing
 
-`make ci`. For the store tests, point `AGENTBOX_TEST_POSTGRES_DSN` at an
+`make ci`. For the store tests, point `DOORWARD_TEST_POSTGRES_DSN` at an
 empty PostgreSQL database (`make test-db` starts one).
 
 ## The plan

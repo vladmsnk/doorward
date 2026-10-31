@@ -1,16 +1,14 @@
-# agentbox
+# doorward
 
 A single distribution for authorizing AI agents: who an agent is, what it
 may do, for whom, on whose consent, and which calls a person must approve.
 It sits on the resource side, in front of a company's own tools, because
 that is the control point a company keeps when the agents themselves are
-hosted by someone else. Agentbox is the decision, approval and evidence
+hosted by someone else. Doorward is the decision, approval and evidence
 core; its gateway and authorization server are thin built-in parts for a
 company that has neither, and each can be replaced through a standard
 interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 
-> `agentbox` is a working name.
->
 > Development is AI-assisted: much of the code is written with Claude Code.
 > Every commit is authored and signed off by a human maintainer, who answers
 > for it (see [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
@@ -25,16 +23,16 @@ evaluation endpoint, then one end-to-end slice in which an off-the-shelf
 MCP client connects, a user consents, and a call is refused or approved.
 The order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
 
-## What agentbox cannot see
+## What doorward cannot see
 
-Agentbox decides only on calls that pass through it, to tools a company has
+Doorward decides only on calls that pass through it, to tools a company has
 described to it. It cannot see or stop:
 
 - **Calls that never reach it**: an agent acting on the machine it runs on
   (a shell, local files, credentials stored there), or calling an API
   directly with a credential it already holds.
 - **What the model decides**: prompt injection, a poisoned tool
-  description, a goal hijacked mid-task. Agentbox does not prevent an agent
+  description, a goal hijacked mid-task. Doorward does not prevent an agent
   from being manipulated; it bounds what a manipulated agent can do: which
   operations, with which arguments, within which budgets, and which calls a
   person approves first.
@@ -48,9 +46,9 @@ described to it. It cannot see or stop:
 ```sh
 make ci                                  # what CI runs: tidy, fmt, vet, lint, tests, examples
 make build
-bin/agentbox validate examples/v0/config/*.yaml
-bin/agentbox validate --kind grant examples/v0/grant/*.json
-bin/agentbox validate --kind approval examples/v0/approval/*.json
+bin/doorward validate examples/v0/config/*.yaml
+bin/doorward validate --kind grant examples/v0/grant/*.json
+bin/doorward validate --kind approval examples/v0/approval/*.json
 ```
 
 Configuration documents name their kind. Messages and records need `--kind`:
@@ -58,7 +56,7 @@ Configuration documents name their kind. Messages and records need `--kind`:
 
 Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
 PostgreSQL 16: `make test-db` starts a throwaway one and prints the
-`AGENTBOX_TEST_POSTGRES_DSN` to export; without that variable they skip.
+`DOORWARD_TEST_POSTGRES_DSN` to export; without that variable they skip.
 
 ## Admin API
 
@@ -75,11 +73,11 @@ authorizes every change. Expose it with `--admin-addr` only behind
 something that restricts who can reach it.
 
 ```sh
-export AGENTBOX_DB=postgres://… AGENTBOX_ADMIN_TOKEN=$(openssl rand -hex 16)
-export AGENTBOX_MASTER_KEY=$(agentbox master-key)   # keep it: it seals the signing keys and secrets
-agentbox serve                                      # public listener on :8080, Admin API on 127.0.0.1:8081
+export DOORWARD_DB=postgres://… DOORWARD_ADMIN_TOKEN=$(openssl rand -hex 16)
+export DOORWARD_MASTER_KEY=$(doorward master-key)   # keep it: it seals the signing keys and secrets
+doorward serve                                      # public listener on :8080, Admin API on 127.0.0.1:8081
 
-H="Authorization: Bearer $AGENTBOX_ADMIN_TOKEN"
+H="Authorization: Bearer $DOORWARD_ADMIN_TOKEN"
 curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \
   --data-binary @examples/v0/config/manifest-payments-api.yaml \
   localhost:8081/admin/v0/manifests/payments-api
@@ -98,7 +96,7 @@ curl -sS -X POST -H "$H" -d '{"owner":{"team":"support-tools"}}' \
 | `PUT /admin/v0/secrets/{name}` `{"value": …}`, `GET …`, `DELETE …/{name}` | upstream credentials a manifest's `secret_ref` names; values are never returned, and a secret an enabled manifest uses cannot be deleted |
 | `GET /admin/v0/keys`, `POST …/rotate`, `POST …/{kid}/retire` | the box's signing keys; a rotated-out key stays published until retired |
 
-Authentication is a bootstrap bearer token for now (`AGENTBOX_ADMIN_TOKEN`);
+Authentication is a bootstrap bearer token for now (`DOORWARD_ADMIN_TOKEN`);
 administrators from the identity provider come with the consent work.
 
 ## Keys and secrets
@@ -108,7 +106,7 @@ public half at `/.well-known/jwks.json` on the public listener; the `kid`
 is the key's RFC 7638 thumbprint. Rotation makes a new key active and keeps
 the old one published, so grants it signed still verify, until an
 administrator retires it. Private keys and upstream secrets are sealed with
-AES-256-GCM under the operator's master key (`AGENTBOX_MASTER_KEY`) before
+AES-256-GCM under the operator's master key (`DOORWARD_MASTER_KEY`) before
 they reach the database, each bound to its own slot, so the database never
 holds them in clear and a value cannot be moved from one slot to another.
 
@@ -143,9 +141,9 @@ grant. It needs the database and the master
 key, so it gives its user nothing they could not already do.
 
 ```sh
-agentbox grant mint --consent examples/v0/consent/alice-invoice-assistant.json \
+doorward grant mint --consent examples/v0/consent/alice-invoice-assistant.json \
   examples/v0/grant/pay-invoice.json > grant.jwt
-agentbox grant verify --aud https://payments.example.internal - < grant.jwt
+doorward grant verify --aud https://payments.example.internal - < grant.jwt
 ```
 
 ```
@@ -168,7 +166,7 @@ refused only if the manifest declares it, since one entry may bound
 `/amount` for operations that take no amount.
 
 ```sh
-agentbox grant verify --aud https://payments.example.internal \
+doorward grant verify --aud https://payments.example.internal \
   --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}' - < grant.jwt
 ```
 
@@ -203,7 +201,7 @@ so is the single-use grant issued once it is approved. `grant mint
 used single-use grant fails the status check.
 
 ```sh
-agentbox grant verify --aud https://payments.example.internal \
+doorward grant verify --aud https://payments.example.internal \
   --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":1200,"currency":"EUR"}' - < grant.jwt
 ```
 
@@ -394,7 +392,7 @@ each adds fields or documents without changing what is here:
 ## Layout
 
 ```
-cmd/agentbox/      the CLI: validate, serve, grant mint|verify, master-key, version
+cmd/doorward/      the CLI: validate, serve, grant mint|verify, master-key, version
 api/v0/            Go types of the v0 documents
 internal/store/    the Store interface; postgres/ implements it, with migrations
 internal/admin/    the Admin API and the rules across documents
@@ -423,7 +421,7 @@ To verify a download:
 cosign verify-blob checksums.txt \
   --bundle checksums.txt.sigstore.json \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/vladmsnk/agentbox/\.github/workflows/release\.yml@refs/tags/v'
+  --certificate-identity-regexp '^https://github.com/vladmsnk/doorward/\.github/workflows/release\.yml@refs/tags/v'
 sha256sum --check --ignore-missing checksums.txt
 ```
 

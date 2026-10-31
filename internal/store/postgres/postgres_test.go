@@ -11,21 +11,21 @@ import (
 	"testing"
 	"time"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/store"
-	"github.com/vladmsnk/agentbox/internal/store/postgres"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/store/postgres"
 )
 
 // The tests need a real PostgreSQL: the chain lock, the version lock and the
 // conditional counter update are what is being tested, and only the database
-// can arbitrate them. Point AGENTBOX_TEST_POSTGRES_DSN at an empty database;
+// can arbitrate them. Point DOORWARD_TEST_POSTGRES_DSN at an empty database;
 // without it the tests skip. Every package that uses the database truncates
 // it first, so `make test` runs packages one at a time (-p 1).
 func open(t *testing.T) *postgres.Store {
 	t.Helper()
-	dsn := os.Getenv("AGENTBOX_TEST_POSTGRES_DSN")
+	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("AGENTBOX_TEST_POSTGRES_DSN not set")
+		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
 	s, err := postgres.Open(ctx, dsn)

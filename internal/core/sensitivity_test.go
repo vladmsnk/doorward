@@ -3,8 +3,8 @@ package core_test
 import (
 	"testing"
 
-	v0 "github.com/vladmsnk/agentbox/api/v0"
-	"github.com/vladmsnk/agentbox/internal/core"
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/core"
 )
 
 func TestSensitivity(t *testing.T) {

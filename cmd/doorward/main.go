@@ -1,4 +1,4 @@
-// Command agentbox is the box's command-line tool: it validates documents,
+// Command doorward is the box's command-line tool: it validates documents,
 // runs the box, and signs and verifies grants.
 package main
 
@@ -10,7 +10,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/vladmsnk/agentbox/schema"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // Set by the release build (see .goreleaser.yaml).
@@ -24,11 +24,11 @@ func main() {
 }
 
 const usage = `usage:
-  agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
-  agentbox serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on 127.0.0.1:8081
-  agentbox grant mint|verify ...            sign and record a grant; run a grant's checks
-  agentbox master-key                       print a new master key for AGENTBOX_MASTER_KEY
-  agentbox version                          print the version
+  doorward validate [--kind KIND] FILE...   validate documents against the v0 schemas
+  doorward serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on 127.0.0.1:8081
+  doorward grant mint|verify ...            sign and record a grant; run a grant's checks
+  doorward master-key                       print a new master key for DOORWARD_MASTER_KEY
+  doorward version                          print the version
 
 Configuration documents (Manifest, Agent, Mandate) name their kind. Records
 need it given: --kind consent, grant, decision or approval.
@@ -55,7 +55,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprint(stdout, usage)
 		return 0
 	default:
-		fmt.Fprintf(stderr, "agentbox: unknown command %q\n\n%s", args[0], usage)
+		fmt.Fprintf(stderr, "doorward: unknown command %q\n\n%s", args[0], usage)
 		return 2
 	}
 }
@@ -71,7 +71,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if fs.NArg() == 0 {
-		fmt.Fprintln(stderr, "agentbox validate: no files given")
+		fmt.Fprintln(stderr, "doorward validate: no files given")
 		return 2
 	}
 
@@ -79,7 +79,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 	if *kindFlag != "" {
 		k, err := schema.ParseKind(*kindFlag)
 		if err != nil {
-			fmt.Fprintf(stderr, "agentbox validate: %v\n", err)
+			fmt.Fprintf(stderr, "doorward validate: %v\n", err)
 			return 2
 		}
 		kind = k
@@ -87,7 +87,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 
 	v, err := schema.NewValidator()
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox validate: %v\n", err)
+		fmt.Fprintf(stderr, "doorward validate: %v\n", err)
 		return 1
 	}
 
@@ -146,7 +146,7 @@ func versionString() string {
 		}
 	}
 	if c == "" {
-		return "agentbox " + v
+		return "doorward " + v
 	}
-	return "agentbox " + v + " (" + c + ")"
+	return "doorward " + v + " (" + c + ")"
 }

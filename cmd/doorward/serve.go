@@ -14,11 +14,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/vladmsnk/agentbox/internal/admin"
-	"github.com/vladmsnk/agentbox/internal/keys"
-	"github.com/vladmsnk/agentbox/internal/sealer"
-	"github.com/vladmsnk/agentbox/internal/store/postgres"
-	"github.com/vladmsnk/agentbox/schema"
+	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // defaultAdminAddr keeps the Admin API off the network unless an operator
@@ -31,11 +31,11 @@ const defaultAdminAddr = "127.0.0.1:8081"
 func runServe(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	dsn := fs.String("db", os.Getenv("AGENTBOX_DB"), "PostgreSQL connection string (or AGENTBOX_DB)")
-	masterKey := fs.String("master-key", os.Getenv("AGENTBOX_MASTER_KEY"), "32-byte key, hex or base64, that seals private keys and secrets (or AGENTBOX_MASTER_KEY)")
+	dsn := fs.String("db", os.Getenv("DOORWARD_DB"), "PostgreSQL connection string (or DOORWARD_DB)")
+	masterKey := fs.String("master-key", os.Getenv("DOORWARD_MASTER_KEY"), "32-byte key, hex or base64, that seals private keys and secrets (or DOORWARD_MASTER_KEY)")
 	addr := fs.String("addr", ":8080", "address of the public listener")
 	adminAddr := fs.String("admin-addr", defaultAdminAddr, "address of the Admin API; it changes configuration, so it listens on this machine only unless told otherwise")
-	adminToken := fs.String("admin-token", os.Getenv("AGENTBOX_ADMIN_TOKEN"), "bootstrap administrator token (or AGENTBOX_ADMIN_TOKEN)")
+	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -43,16 +43,16 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	if *dsn == "" {
-		fmt.Fprintln(stderr, "agentbox serve: --db or AGENTBOX_DB is required")
+		fmt.Fprintln(stderr, "doorward serve: --db or DOORWARD_DB is required")
 		return 2
 	}
 	if len(*adminToken) < 16 {
-		fmt.Fprintln(stderr, "agentbox serve: --admin-token or AGENTBOX_ADMIN_TOKEN must be at least 16 characters")
+		fmt.Fprintln(stderr, "doorward serve: --admin-token or DOORWARD_ADMIN_TOKEN must be at least 16 characters")
 		return 2
 	}
 	sl, err := sealer.Parse(*masterKey)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox serve: --master-key or AGENTBOX_MASTER_KEY: %v (generate one with: agentbox master-key)\n", err)
+		fmt.Fprintf(stderr, "doorward serve: --master-key or DOORWARD_MASTER_KEY: %v (generate one with: doorward master-key)\n", err)
 		return 2
 	}
 
@@ -62,21 +62,21 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 
 	st, err := postgres.Open(ctx, *dsn)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox serve: %v\n", err)
+		fmt.Fprintf(stderr, "doorward serve: %v\n", err)
 		return 1
 	}
 	defer func() { _ = st.Close() }()
 
 	v, err := schema.NewValidator()
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox serve: %v\n", err)
+		fmt.Fprintf(stderr, "doorward serve: %v\n", err)
 		return 1
 	}
 
 	km := keys.New(st.Keys(), sl)
 	signer, err := km.Ensure(ctx)
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox serve: signing key: %v\n", err)
+		fmt.Fprintf(stderr, "doorward serve: signing key: %v\n", err)
 		return 1
 	}
 
@@ -118,14 +118,14 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	for _, srv := range servers {
 		go func(srv *http.Server) { errc <- srv.ListenAndServe() }(srv)
 	}
-	log.Info("agentbox serving", "version", versionString(), "addr", *addr, "admin_addr", *adminAddr, "kid", signer.KID)
+	log.Info("doorward serving", "version", versionString(), "addr", *addr, "admin_addr", *adminAddr, "kid", signer.KID)
 
 	select {
 	case <-ctx.Done():
 		log.Info("shutting down")
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintf(stderr, "agentbox serve: %v\n", err)
+			fmt.Fprintf(stderr, "doorward serve: %v\n", err)
 			return 1
 		}
 	}
@@ -133,7 +133,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	defer cancel()
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintf(stderr, "agentbox serve: shutdown: %v\n", err)
+			fmt.Fprintf(stderr, "doorward serve: shutdown: %v\n", err)
 			return 1
 		}
 	}
@@ -144,7 +144,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 func runMasterKey(stdout, stderr io.Writer) int {
 	k, err := sealer.Generate()
 	if err != nil {
-		fmt.Fprintf(stderr, "agentbox master-key: %v\n", err)
+		fmt.Fprintf(stderr, "doorward master-key: %v\n", err)
 		return 1
 	}
 	fmt.Fprintln(stdout, k)

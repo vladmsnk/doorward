@@ -1,4 +1,4 @@
-apiVersion: agentbox/v0
+apiVersion: doorward/v0
 kind: Manifest
 metadata:
   name: ledger-mcp
