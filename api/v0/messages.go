@@ -8,14 +8,15 @@ const (
 	TokenTypeIDToken       = "urn:ietf:params:oauth:token-type:id_token"
 	TokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
 	TokenTypeTaskTicket    = "urn:agentbox:params:oauth:token-type:task-ticket"
+	TokenTypeAccessToken   = "urn:ietf:params:oauth:token-type:access_token"
 	ClientAssertionJWT     = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
 	AgentTaskType          = "agent_task"
 )
 
-// TaskRequest is what an application sends the STS to start a task: an
-// OAuth 2.0 token exchange (RFC 8693). On the wire it is form-encoded, with
-// AuthorizationDetails as a JSON string (RFC 9396). The user's identity,
-// sign-in strength and session come from SubjectToken.
+// TaskRequest starts a task: an OAuth 2.0 token exchange (RFC 8693). On the
+// wire it is form-encoded, with AuthorizationDetails as a JSON string
+// (RFC 9396). An application sends it for a user task and gets a ticket; an
+// agent's sidecar sends it for a service task and gets the grant.
 type TaskRequest struct {
 	GrantType          string `json:"grant_type"`
 	SubjectToken       string `json:"subject_token"`
@@ -23,41 +24,21 @@ type TaskRequest struct {
 	RequestedTokenType string `json:"requested_token_type"`
 	// AuthorizationDetails holds exactly one entry.
 	AuthorizationDetails []AgentTask `json:"authorization_details"`
-	ClientAssertionType  string      `json:"client_assertion_type,omitempty"`
-	ClientAssertion      string      `json:"client_assertion,omitempty"`
+	// Confirmation proves the user confirmed this exact task; required when
+	// the task type says so.
+	Confirmation        string `json:"confirmation,omitempty"`
+	ClientAssertionType string `json:"client_assertion_type,omitempty"`
+	ClientAssertion     string `json:"client_assertion,omitempty"`
 }
 
 // AgentTask names the task to start. Its scope comes from the task type,
 // never from the request.
 type AgentTask struct {
-	Type     string `json:"type"`
-	TaskType string `json:"task_type"`
-	ObjectID string `json:"object_id"`
-	// Agent is the agent the ticket is for.
-	Agent string `json:"agent"`
-}
-
-// Offer is a delegation offer as the STS records it: an agent proposes a
-// narrower grant for one named recipient. The offering agent fills To, TTL,
-// AuthorizationDetails, Limits and MaxDepth; the STS fills the rest.
-type Offer struct {
-	ID       string `json:"id"`
-	IssuedAt int64  `json:"iat"`
-	// Expiry is when the offer lapses if nobody redeems it.
-	Expiry int64 `json:"exp"`
-	// Parent is the offering agent's grant, the child's parent.
-	Parent string `json:"parent"`
-	From   string `json:"from"`
-	To     string `json:"to"`
-	// TTL is the child grant's lifetime from redemption, cut short at the
-	// parent's expiry.
-	TTL                  Duration              `json:"ttl"`
-	AuthorizationDetails []AuthorizationDetail `json:"authorization_details"`
-	Limits               []Limit               `json:"limits,omitempty"`
-	// MaxDepth is how many further delegation steps the child may take.
-	MaxDepth int `json:"max_depth,omitempty"`
-	// Redeemed is when the recipient redeemed the offer; at most once.
-	Redeemed int64 `json:"redeemed,omitempty"`
+	Type     string  `json:"type"`
+	TaskType string  `json:"task_type"`
+	ObjectID string  `json:"object_id"`
+	Agent    string  `json:"agent"`
+	Trigger  Trigger `json:"trigger"`
 }
 
 // ApprovalStatus is where an approval request stands.
@@ -81,8 +62,11 @@ type Approval struct {
 	// Grant is the grant the call was made under.
 	Grant string `json:"grant"`
 	Agent string `json:"agent"`
-	// User is the user the agent acts for; never an approver.
-	User SubjectID `json:"user"`
+	// User is the user of a user task: the only voter on a user route, never
+	// a voter on a group route.
+	User *SubjectID `json:"user,omitempty"`
+	// Route is who was asked, from the task type.
+	Route Approvers `json:"route"`
 	// Action is the call in canonical form, as the approvers saw it.
 	Action        ApprovedAction `json:"action"`
 	ActionHash    string         `json:"action_hash"`
@@ -116,5 +100,4 @@ type Vote struct {
 	Time     Timestamp `json:"time"`
 	AuthTime Timestamp `json:"auth_time"`
 	ACR      string    `json:"acr,omitempty"`
-	AMR      []string  `json:"amr,omitempty"`
 }

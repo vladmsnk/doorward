@@ -45,7 +45,6 @@ validate-examples: build
 	$(BIN) validate examples/v0/config/*.yaml
 	$(BIN) validate --kind taskrequest examples/v0/taskrequest/*.json
 	$(BIN) validate --kind grant examples/v0/grant/*.json
-	$(BIN) validate --kind offer examples/v0/offer/*.json
 	$(BIN) validate --kind decision examples/v0/decision/*.json
 	$(BIN) validate --kind approval examples/v0/approval/*.json
 

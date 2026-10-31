@@ -1,19 +1,17 @@
 apiVersion: agentbox/v0
-kind: Boundary
+kind: Agent
 metadata:
-  name: invoice-agent
-  description: Pays and inspects invoices for billing users.
+  name: invoice-assistant
+  description: The assistant in the billing app. Pays and inspects invoices for the signed-in user.
 spec:
   owner:
     team: payments
     contact: payments-oncall@example.com
-  # Either credential identifies this agent to the STS.
+  # Its client at the company's identity provider.
   identities:
-    - type: oauth_client
+    - type: jwt
       issuer: https://login.example.com
-      client_id: 0oa8f2k1LmN3pQ4rS5t6
-    - type: spiffe
-      id: spiffe://example.internal/ns/payments/sa/invoice-agent
+      subject: 0oa8f2k1LmN3pQ4rS5t6
   task_types: [pay-invoice]
   max_sensitivity: critical
   max_ttl: 30m
@@ -22,13 +20,8 @@ spec:
       actions: [get_invoice, list_payments, pay_invoice]
       constraints:
         /amount: { max: 10000 }
-    - locations: [https://ledger.example.internal/mcp]
-      actions: [lookup_account]
   limits:
     - name: payout-total
       kind: sum
       field: /amount
       max: 10000
-  delegation:
-    max_depth: 1
-    recipients: [ledger-agent]

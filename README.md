@@ -32,41 +32,50 @@ bin/agentbox validate --kind approval examples/v0/approval/*.json
 ```
 
 Configuration documents name their kind. Messages and records need `--kind`:
-`taskrequest`, `grant`, `offer`, `decision` or `approval`.
+`taskrequest`, `grant`, `decision` or `approval`.
 
 Go 1.24 and, for `make lint`, golangci-lint v2.
 
 ## The v0 schemas
 
-Nine documents, as JSON Schema (draft 2020-12) in [`schema/v0`](schema/v0)
+Eight documents, as JSON Schema (draft 2020-12) in [`schema/v0`](schema/v0)
 with matching Go types in [`api/v0`](api/v0). Four are configuration a
-company writes, in YAML or JSON; the other five are messages and records,
+company writes, in YAML or JSON; the other four are messages and records,
 in the order one task produces them.
 
 | Document | Written by | What it is |
 |---|---|---|
-| [Manifest](schema/v0/manifest.schema.json) | company | The operations one resource exposes (MCP tools or HTTP routes), the sensitivity tier of each, and where their constrainable arguments are |
-| [TaskType](schema/v0/tasktype.schema.json) | company | A kind of task an application may start: the object it is about, who may start it, its lifetime, permissions, shared limits, delegation plan and approvers |
-| [Boundary](schema/v0/boundary.schema.json) | company | One agent: how it proves who it is, who owns it, and the most it may ever be granted |
-| [Application](schema/v0/application.schema.json) | company | An application that starts tasks: how it authenticates, and which identity providers vouch for its users |
-| [TaskRequest](schema/v0/taskrequest.schema.json) | the application | The RFC 8693 token exchange that starts a task for a user and an agent |
+| [Manifest](schema/v0/manifest.schema.json) | company | The operations one resource exposes (MCP tools or HTTP routes), the tier of each (`read`, `write`, `critical`), and where their constrainable arguments are |
+| [Agent](schema/v0/agent.schema.json) | company | One agent: how it proves who it is, who owns it, and the most it may ever be granted |
+| [TaskType](schema/v0/tasktype.schema.json) | company | A kind of task: the object it is about, whom it runs as, how it may start, its lifetime, permissions, limits and approvers |
+| [Application](schema/v0/application.schema.json) | company | An application that starts tasks for users: how it authenticates, and which identity providers vouch for its users |
+| [TaskRequest](schema/v0/taskrequest.schema.json) | the application, or the agent | The RFC 8693 token exchange that starts a task |
 | [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent's sidecar holds for one task |
-| [Offer](schema/v0/offer.schema.json) | the agent and the STS | A delegation offer: a narrower grant proposed for one named recipient |
 | [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision, with every element level L1 asks for |
 | [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
 
-How they fit together: an application starts a task with a token exchange
-that carries the user's identity token and names a task type, an object and
-an agent. The STS checks the application and the user, intersects the task
-type with the agent's boundary, resolves references to the task's object,
-and issues a grant. At call time a point of enforcement sends the call to the
-decision core, which checks it against the grant, applies the operation's
-tier from the manifest, and writes a decision record. A critical call opens
-an approval; an agent hands work on through an offer. The examples in
-[`examples/v0`](examples/v0) follow one such task end to end: `billing-app`
-starts `pay-invoice` for Alice, `invoice-agent` receives the root grant and
-offers a read-only grant to `ledger-agent`, and the core allows one call,
-denies one, and holds one until two approvers say yes.
+### Two ways an agent runs
+
+| | Personal assistant (`runs_as: user`) | Deployed agent (`runs_as: service`) |
+|---|---|---|
+| Accountable | the user; `sub` in the grant, `sub_id` says which identity provider | the agent's owner team; the agent is `sub` and `client_id` |
+| Task started by | an application the user is in, from a button (`ui`) or a conversation (`chat`) | the agent itself, on a `schedule` or an `event` |
+| Before it starts | the user confirms the exact task when the task type says so; a `chat` trigger always does | nothing: the owner approved the task type |
+| Critical calls | approved by the user, or by a group | approved by a group: there is no user to ask |
+
+The STS checks whoever starts the task, intersects the task type with the
+agent's permissions, resolves references to the task's object, and issues a
+grant. At call time a point of enforcement sends the call to the decision
+core, which checks it against the grant, applies the operation's tier from
+the manifest, and writes a decision record. A critical call opens an
+approval.
+
+The examples in [`examples/v0`](examples/v0) tell both stories. Alice asks
+the assistant in `billing-app` to pay invoice `inv_7Q2M9X4K`, confirms it,
+and the core allows a read, denies an overlarge payment and holds a 1,200 EUR
+payment until Alice approves it. The `reconciler` runs `reconcile-day` at
+night on its own service-account token, posts entries, and two people from
+finance on-call approve a write-off.
 
 ### Conventions
 
@@ -75,7 +84,7 @@ denies one, and holds one until two approvers say yes.
   `constraints`.
 - **Constraints** are keyed by the argument's JSON Pointer and use a closed
   set of types, each of which can be compared with a narrower one. That is
-  what keeps "request ⊆ grant" and narrowing on delegation decidable:
+  what keeps "request ⊆ grant" decidable:
 
   | Type | Meaning |
   |---|---|
@@ -83,7 +92,7 @@ denies one, and holds one until two approvers say yes.
   | `one_of` | the value is one of a list |
   | `equals` | the value is exactly this |
   | `prefix` | a string starts with this |
-  | `task_object` | equals the task's object ID; boundaries and task types only, resolved to `equals` in a grant |
+  | `task_object` | equals the task's object ID; agents and task types only, resolved to `equals` in a grant |
 
   All bounds on a field must hold. A constrained field missing from the call
   fails the check.
@@ -93,10 +102,10 @@ denies one, and holds one until two approvers say yes.
 - **OAuth and OIDC shapes.** The grant is an RFC 9068 JWT access token
   (`typ: at+jwt`, with `client_id`), so ordinary resource servers can check
   it. Users are named with their identity provider (`sub_id`, RFC 9493),
-  since an OIDC `sub` is unique only per issuer, and the grant keeps how they
-  signed in (`acr`, `amr`, `auth_time`) and their session (`sid`). A grant
-  binds to a DPoP key or an mTLS certificate. Agents authenticate with the
-  box's own registration, an IdP client, a workload JWT or a SPIFFE ID.
+  since an OIDC `sub` is unique only per issuer. A grant binds to a DPoP key.
+  Agents authenticate with the box's own registration or with any JWT that
+  has an issuer and a subject: an IdP client, a Kubernetes service account,
+  a workload identity.
 - **Records have one serialization.** Times in records are UTC with exactly
   millisecond precision, since records are hash-chained.
 - **The schemas are the contract.** The Go types mirror them, and
@@ -115,16 +124,32 @@ grant, err := schema.Decode[v0.Grant](v, claimsJSON) // duplicate keys, schema, 
 
 JSON Schema checks each document's shape. Each Go type's `Check` adds the
 rules that span its own fields, and `Decode` and the CLI run them: `aud`
-equals the grant's locations, `scope` names nothing the grant does not, a
-root grant is its own root, times come in order, an allowed decision has no
-failed check, a manifest's path parameters match its routes, an approval's
-voters are distinct and never the user, and `min ≤ max` everywhere.
+equals the grant's locations, a user grant has `sub_id` and a service grant
+has none, times come in order, an allowed decision has no failed check, a
+manifest's path parameters match its routes, an approval's voters are
+distinct and match its route, and `min ≤ max` everywhere.
 
 Rules that need a second document belong to the features that load both: a
-task type lying within each agent's boundary (F12), operations existing in a
-manifest (F08), a child grant or offer lying within its parent (F15, F23).
+task type lying within an agent's permissions (F12), operations existing in
+a manifest (F08), a request's trigger being one the task type allows (F11).
 The hashes, key thumbprints and tokens in the examples have the right format
 but are placeholders, not real values (F05, F10).
+
+### Later
+
+v0 covers the two ways of running an agent and nothing else. Each of these
+is a known extension, and each adds fields or documents without changing
+what is here:
+
+| Extension | What it adds |
+|---|---|
+| Delegation between agents | optional `parent` and `depth` on a grant (a grant without them is a root), a nested `act.act`, `delegation` blocks on agents and task types, and an `Offer` record |
+| A user's own envelope (mandate) | a `Mandate` document the user signs, intersected with the task type and the agent |
+| mTLS-bound grants | `cnf.x5t#S256` beside `jkt` |
+| X.509 SPIFFE identities | a `spiffe` identity type on agents |
+| Session-bound revocation | `sid` on the grant, so an identity provider ending the session revokes the task |
+| Allow-and-notify | `obligations` on an allowed decision |
+| Scopes for plain resource servers | `scope` on the grant, derived from the actions |
 
 ## Layout
 

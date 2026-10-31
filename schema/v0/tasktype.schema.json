@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/tasktype.schema.json",
   "title": "TaskType",
-  "description": "A kind of task an application may start. The application sends only the task type and the object ID; the scope comes from here. The issuer, not the agent, defines the task.",
+  "description": "A kind of task. The starter sends only the task type and the object ID; the scope comes from here. Whoever defines the task type, not the agent, defines what the task may do.",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "spec"],
   "properties": {
@@ -11,7 +11,7 @@
     "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
     "spec": {
       "type": "object",
-      "required": ["object", "initiators", "ttl", "permissions"],
+      "required": ["object", "runs_as", "start", "ttl", "permissions"],
       "properties": {
         "object": {
           "description": "What the task is about: the type of object and the shape of its ID.",
@@ -28,15 +28,43 @@
           },
           "additionalProperties": false
         },
+        "runs_as": {
+          "description": "user: a personal assistant acting for a person, who is the grant's sub. service: a deployed agent acting for its owner; the agent is the grant's sub.",
+          "enum": ["user", "service"]
+        },
+        "start": {
+          "description": "How a task of this type may begin, and whether the user must confirm the exact task first.",
+          "type": "object",
+          "required": ["triggers", "confirmation"],
+          "properties": {
+            "triggers": {
+              "description": "ui: the user acted in an application. chat: a model proposed the task from a conversation. schedule and event: nobody was there.",
+              "type": "array",
+              "items": { "enum": ["ui", "chat", "schedule", "event"] },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "confirmation": {
+              "description": "user: the request must carry the user's confirmation of this exact task. none: starting is enough.",
+              "enum": ["user", "none"]
+            }
+          },
+          "additionalProperties": false,
+          "if": { "properties": { "triggers": { "contains": { "const": "chat" } } } },
+          "then": {
+            "description": "A task a model proposed is confirmed by the person before it starts.",
+            "properties": { "confirmation": { "const": "user" } }
+          }
+        },
         "initiators": {
-          "description": "Applications allowed to start this task type.",
+          "description": "Applications allowed to start this task type for a user. A service task is started by the agent itself and lists none.",
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/name" },
           "minItems": 1,
           "uniqueItems": true
         },
         "ttl": {
-          "description": "Lifetime of the task's root grant; capped by each agent's max_ttl.",
+          "description": "Lifetime of the task's grant; capped by the agent's max_ttl.",
           "$ref": "common.schema.json#/$defs/duration"
         },
         "permissions": {
@@ -48,53 +76,55 @@
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/limit" }
         },
-        "delegation": { "$ref": "common.schema.json#/$defs/delegation" },
         "approval": {
-          "description": "Who approves this task's calls that need approval, such as critical operations. Approvers are distinct people and never the user the task runs for.",
+          "description": "Who approves this task's critical calls, and how. Without it, a critical call is refused.",
           "type": "object",
           "required": ["required", "approvers", "max_auth_age", "expires_after"],
           "properties": {
             "required": {
-              "description": "How many distinct people must approve. A critical operation always needs at least 2.",
+              "description": "How many distinct approvals. A user route needs exactly 1; a group route for a critical call needs at least 2.",
               "type": "integer",
               "minimum": 1,
               "maximum": 5
             },
-            "approvers": {
-              "description": "Members of these groups at this identity provider may approve.",
-              "type": "object",
-              "required": ["issuer", "groups"],
-              "properties": {
-                "issuer": { "type": "string", "format": "uri" },
-                "groups": {
-                  "type": "array",
-                  "items": { "type": "string", "minLength": 1, "maxLength": 255 },
-                  "minItems": 1,
-                  "uniqueItems": true
-                }
-              },
-              "additionalProperties": false
-            },
+            "approvers": { "$ref": "common.schema.json#/$defs/approvers" },
             "max_auth_age": {
               "description": "An approver must have signed in this recently; an older session signs in again before voting.",
               "$ref": "common.schema.json#/$defs/duration"
-            },
-            "acr_values": {
-              "description": "Authentication context classes an approver's sign-in must have (OIDC acr).",
-              "type": "array",
-              "items": { "type": "string", "minLength": 1, "maxLength": 255 },
-              "minItems": 1,
-              "uniqueItems": true
             },
             "expires_after": {
               "description": "How long an approval request stays open.",
               "$ref": "common.schema.json#/$defs/duration"
             }
           },
-          "additionalProperties": false
+          "additionalProperties": false,
+          "if": { "properties": { "approvers": { "properties": { "kind": { "const": "user" } } } } },
+          "then": { "properties": { "required": { "const": 1 } } },
+          "else": { "properties": { "required": { "minimum": 2 } } }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "runs_as": { "const": "user" } } },
+          "then": {
+            "required": ["initiators"],
+            "properties": { "start": { "properties": { "triggers": { "items": { "enum": ["ui", "chat"] } } } } }
+          },
+          "else": {
+            "properties": {
+              "initiators": false,
+              "start": {
+                "properties": {
+                  "triggers": { "items": { "enum": ["schedule", "event"] } },
+                  "confirmation": { "const": "none" }
+                }
+              },
+              "approval": { "properties": { "approvers": { "properties": { "kind": { "const": "group" } } } } }
+            }
+          }
+        }
+      ]
     }
   },
   "additionalProperties": false

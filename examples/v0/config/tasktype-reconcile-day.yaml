@@ -1,0 +1,45 @@
+apiVersion: agentbox/v0
+kind: TaskType
+metadata:
+  name: reconcile-day
+  description: Match one day's payments to invoices and post the entries. Runs nightly, nobody present.
+spec:
+  object:
+    type: day
+    id_pattern: "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+  runs_as: service
+  start:
+    triggers: [schedule]
+    confirmation: none
+  ttl: 1h
+  permissions:
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [list_unmatched]
+      constraints:
+        /day: { task_object: true }
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [post_entry, write_off]
+      constraints:
+        /amount: { min: 0.01, max: 1000 }
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments]
+  limits:
+    - name: entries
+      kind: count
+      actions: [post_entry]
+      max: 500
+    - name: written-off
+      kind: sum
+      field: /amount
+      actions: [write_off]
+      max: 2000
+  # write_off is critical: two people from finance on-call approve it, since
+  # there is no user to ask.
+  approval:
+    required: 2
+    approvers:
+      kind: group
+      issuer: https://login.example.com
+      groups: [finance-oncall]
+    max_auth_age: 5m
+    expires_after: 12h

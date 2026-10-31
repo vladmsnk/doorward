@@ -26,7 +26,6 @@ func TestValidateExamples(t *testing.T) {
 		{nil, glob("config/*.yaml")},
 		{[]string{"--kind", "taskrequest"}, glob("taskrequest/*.json")},
 		{[]string{"--kind", "grant"}, glob("grant/*.json")},
-		{[]string{"--kind", "offer"}, glob("offer/*.json")},
 		{[]string{"--kind", "decision"}, glob("decision/*.json")},
 		{[]string{"--kind", "approval"}, glob("approval/*.json")},
 	} {
@@ -47,7 +46,7 @@ func TestValidateExamples(t *testing.T) {
 func TestValidateReportsEveryFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")
-	doc := "apiVersion: agentbox/v0\nkind: Boundary\nmetadata: {name: x}\nspec: {}\n---\napiVersion: agentbox/v0\nkind: TaskType\nmetadata: {name: y}\nspec: {}\n"
+	doc := "apiVersion: agentbox/v0\nkind: Agent\nmetadata: {name: x}\nspec: {}\n---\napiVersion: agentbox/v0\nkind: TaskType\nmetadata: {name: y}\nspec: {}\n"
 	if err := os.WriteFile(bad, []byte(doc), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +54,7 @@ func TestValidateReportsEveryFailure(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("exit %d, want 1", code)
 	}
-	for _, want := range []string{"bad.yaml#1 (Boundary)", "bad.yaml#2 (TaskType)", "missing.yaml", "3 document(s) failed"} {
+	for _, want := range []string{"bad.yaml#1 (Agent)", "bad.yaml#2 (TaskType)", "missing.yaml", "3 document(s) failed"} {
 		if !strings.Contains(errOut, want) {
 			t.Errorf("output lacks %q:\n%s", want, errOut)
 		}

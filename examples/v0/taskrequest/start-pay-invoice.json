@@ -8,9 +8,11 @@
       "type": "agent_task",
       "task_type": "pay-invoice",
       "object_id": "inv_7Q2M9X4K",
-      "agent": "invoice-agent"
+      "agent": "invoice-assistant",
+      "trigger": "chat"
     }
   ],
+  "confirmation": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImJpbGxpbmctYXBwIn0.ZXhhbXBsZS1jb25maXJtYXRpb24tb2YtcGF5LWludm9pY2U.ZXhhbXBsZS1zaWduYXR1cmU",
   "client_assertion_type": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
   "client_assertion": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImJpbGxpbmctYXBwIn0.ZXhhbXBsZS1hc3NlcnRpb24.ZXhhbXBsZS1zaWduYXR1cmU"
 }

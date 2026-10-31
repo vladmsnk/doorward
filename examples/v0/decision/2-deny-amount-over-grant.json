@@ -2,7 +2,7 @@
   "id": "dec_01JBXR5H4K6M8N0P2Q4R6S8T0V",
   "time": "2026-10-30T09:31:40.077Z",
   "request": {
-    "subject": { "type": "agent", "id": "invoice-agent" },
+    "subject": { "type": "agent", "id": "invoice-assistant" },
     "action": { "name": "pay_invoice" },
     "resource": {
       "type": "tool_call",
@@ -13,11 +13,9 @@
     },
     "context": { "grant": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA" }
   },
-  "principal": { "user": "alice@example.com", "agent": "invoice-agent" },
+  "principal": { "agent": "invoice-assistant", "user": "alice@example.com" },
   "grant": {
     "id": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
-    "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
-    "depth": 0,
     "task": { "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB", "type": "pay-invoice" }
   },
   "action_hash": "sha-256:example-hash-not-computed-action-0000000002",
@@ -37,7 +35,6 @@
     { "name": "pop", "result": "pass" },
     { "name": "audience", "result": "pass" },
     { "name": "time", "result": "pass" },
-    { "name": "delegation", "result": "skip", "detail": "root grant" },
     { "name": "subset", "result": "fail", "detail": "/amount" },
     { "name": "sensitivity", "result": "skip" },
     { "name": "policy", "result": "skip" },

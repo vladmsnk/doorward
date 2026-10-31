@@ -27,9 +27,9 @@ const usage = `usage:
   agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
   agentbox version                          print the version
 
-Configuration documents (Boundary, TaskType, Manifest, Application) name their
-kind. Messages and records need it given: --kind taskrequest, grant, offer,
-decision or approval.
+Configuration documents (Manifest, Agent, TaskType, Application) name their
+kind. Messages and records need it given: --kind taskrequest, grant, decision
+or approval.
 `
 
 func run(args []string, stdout, stderr io.Writer) int {

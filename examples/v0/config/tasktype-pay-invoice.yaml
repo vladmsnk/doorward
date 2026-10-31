@@ -2,11 +2,17 @@ apiVersion: agentbox/v0
 kind: TaskType
 metadata:
   name: pay-invoice
-  description: Pay one invoice the user picked in the billing app.
+  description: Pay one invoice the user picked in the billing app, by button or by asking the assistant.
 spec:
   object:
     type: invoice
     id_pattern: "^inv_[A-Za-z0-9]{6,32}$"
+  runs_as: user
+  start:
+    # A model may propose the task from chat, so the user confirms the
+    # exact invoice before anything starts.
+    triggers: [ui, chat]
+    confirmation: user
   # Only the billing app may start this task; an agent cannot.
   initiators: [billing-app]
   ttl: 15m
@@ -21,10 +27,7 @@ spec:
       constraints:
         /amount: { min: 0.01, max: 5000 }
         /currency: { one_of: [EUR, USD] }
-    - locations: [https://ledger.example.internal/mcp]
-      actions: [lookup_account]
   limits:
-    # Shared by every grant of the task, however it is delegated.
     - name: payout-total
       kind: sum
       field: /amount
@@ -33,15 +36,10 @@ spec:
     - name: calls
       kind: count
       max: 50
-  delegation:
-    max_depth: 1
-    recipients: [ledger-agent]
-  # pay_invoice is critical: two people from this group approve each payment.
+  # pay_invoice is critical: the user approves each exact payment, signed in
+  # within the last five minutes.
   approval:
-    required: 2
-    approvers:
-      issuer: https://login.example.com
-      groups: [payments-approvers]
+    required: 1
+    approvers: { kind: user }
     max_auth_age: 5m
-    acr_values: [urn:example:acr:phishing-resistant]
     expires_after: 30m

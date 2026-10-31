@@ -2,25 +2,28 @@ package v0
 
 // Kinds of the configuration documents, as their kind field spells them.
 const (
-	KindBoundary = "Boundary"
-	KindTaskType = "TaskType"
-	KindManifest = "Manifest"
+	KindAgent       = "Agent"
+	KindTaskType    = "TaskType"
+	KindManifest    = "Manifest"
+	KindApplication = "Application"
 )
 
-// Boundary is one agent: how it proves who it is, who owns it, and the most
-// it may ever be granted. Metadata.Name is the agent's name.
-type Boundary struct {
+// Agent is one agent: how it proves who it is, who owns it, and the most it
+// may ever be granted. Metadata.Name is the agent's name.
+type Agent struct {
 	TypeMeta
-	Metadata ObjectMeta   `json:"metadata"`
-	Spec     BoundarySpec `json:"spec"`
+	Metadata ObjectMeta `json:"metadata"`
+	Spec     AgentSpec  `json:"spec"`
 }
 
-type BoundarySpec struct {
+type AgentSpec struct {
+	// Owner answers for the agent, and is the accountable party of a service
+	// task.
 	Owner Owner `json:"owner"`
 	// Identities are the ways the agent may authenticate; the STS issues a
 	// grant only to a caller that presents one of them.
 	Identities []AgentIdentity `json:"identities"`
-	// TaskTypes the agent may be started for.
+	// TaskTypes the agent may run.
 	TaskTypes []string `json:"task_types"`
 	// MaxSensitivity is the highest tier of operation the agent may be granted.
 	MaxSensitivity Sensitivity `json:"max_sensitivity"`
@@ -28,8 +31,7 @@ type BoundarySpec struct {
 	MaxTTL      Duration     `json:"max_ttl"`
 	Permissions []Permission `json:"permissions"`
 	// Limits cap the task type's limits of the same name.
-	Limits     []Limit     `json:"limits,omitempty"`
-	Delegation *Delegation `json:"delegation,omitempty"`
+	Limits []Limit `json:"limits,omitempty"`
 }
 
 // IdentityType is how an agent authenticates.
@@ -39,65 +41,109 @@ const (
 	// IdentityRegistration is the box's own one-time token at deploy, with the
 	// key made in the sidecar.
 	IdentityRegistration IdentityType = "registration"
-	// IdentityOAuthClient is a client at an identity provider.
-	IdentityOAuthClient IdentityType = "oauth_client"
-	// IdentityJWT is a workload token with an issuer and a subject: a
-	// Kubernetes service account, a cloud workload identity, a JWT-SVID.
+	// IdentityJWT is a token with an issuer and a subject: an identity
+	// provider's client, a Kubernetes service account, a cloud workload
+	// identity, a JWT-SVID.
 	IdentityJWT IdentityType = "jwt"
-	// IdentitySPIFFE is a SPIFFE ID presented as an X.509 certificate.
-	IdentitySPIFFE IdentityType = "spiffe"
 )
 
-// AgentIdentity is one way an agent may authenticate. Which fields are set
-// depends on Type.
+// AgentIdentity is one way an agent may authenticate. Issuer and Subject are
+// set for IdentityJWT only.
 type AgentIdentity struct {
-	Type     IdentityType `json:"type"`
-	Issuer   string       `json:"issuer,omitempty"`
-	ClientID string       `json:"client_id,omitempty"`
-	Subject  string       `json:"subject,omitempty"`
-	// ID is a SPIFFE ID.
-	ID string `json:"id,omitempty"`
+	Type    IdentityType `json:"type"`
+	Issuer  string       `json:"issuer,omitempty"`
+	Subject string       `json:"subject,omitempty"`
 }
 
-// TaskType is a kind of task an application may start. The application
-// sends only the type and the object's ID; the scope comes from here.
+// TaskType is a kind of task. The starter sends only the type and the
+// object's ID; the scope comes from here.
 type TaskType struct {
 	TypeMeta
 	Metadata ObjectMeta   `json:"metadata"`
 	Spec     TaskTypeSpec `json:"spec"`
 }
 
+// RunsAs says whom a task's agent acts for.
+type RunsAs string
+
+const (
+	// RunsAsUser is a personal assistant acting for a person.
+	RunsAsUser RunsAs = "user"
+	// RunsAsService is a deployed agent acting for its owner.
+	RunsAsService RunsAs = "service"
+)
+
 type TaskTypeSpec struct {
 	Object TaskObjectSpec `json:"object"`
-	// Initiators are the applications allowed to start the task.
-	Initiators []string `json:"initiators"`
-	// TTL is the lifetime of the root grant, capped by each agent's MaxTTL.
+	RunsAs RunsAs         `json:"runs_as"`
+	Start  StartPolicy    `json:"start"`
+	// Initiators are the applications allowed to start a user task. A service
+	// task is started by the agent itself and lists none.
+	Initiators []string `json:"initiators,omitempty"`
+	// TTL is the lifetime of the task's grant, capped by the agent's MaxTTL.
 	TTL         Duration     `json:"ttl"`
 	Permissions []Permission `json:"permissions"`
 	Limits      []Limit      `json:"limits,omitempty"`
-	Delegation  *Delegation  `json:"delegation,omitempty"`
-	// Approval says who approves the task's calls that need approval.
+	// Approval says who approves the task's critical calls. Without it, a
+	// critical call is refused.
 	Approval *ApprovalPolicy `json:"approval,omitempty"`
 }
 
-// ApprovalPolicy says who approves, how many of them, and how fresh their
-// sign-in must be. Approvers are distinct people and never the task's user.
+// Trigger is how a task came about.
+type Trigger string
+
+const (
+	// TriggerUI: the user acted in an application.
+	TriggerUI Trigger = "ui"
+	// TriggerChat: a model proposed the task from a conversation.
+	TriggerChat Trigger = "chat"
+	// TriggerSchedule and TriggerEvent: nobody was there.
+	TriggerSchedule Trigger = "schedule"
+	TriggerEvent    Trigger = "event"
+)
+
+// Confirmation says whether the user must confirm the exact task first.
+type Confirmation string
+
+const (
+	ConfirmationUser Confirmation = "user"
+	ConfirmationNone Confirmation = "none"
+)
+
+// StartPolicy says how a task may begin.
+type StartPolicy struct {
+	Triggers     []Trigger    `json:"triggers"`
+	Confirmation Confirmation `json:"confirmation"`
+}
+
+// ApprovalPolicy says who approves critical calls, how many of them, and how
+// fresh their sign-in must be.
 type ApprovalPolicy struct {
-	// Required is the number of distinct approvals; a critical operation
-	// always needs at least 2.
+	// Required is the number of distinct approvals: 1 on a user route, at
+	// least 2 on a group route.
 	Required  int       `json:"required"`
 	Approvers Approvers `json:"approvers"`
 	// MaxAuthAge is how recently an approver must have signed in.
-	MaxAuthAge Duration `json:"max_auth_age"`
-	// ACRValues are the sign-in strengths an approver must have (OIDC acr).
-	ACRValues    []string `json:"acr_values,omitempty"`
+	MaxAuthAge   Duration `json:"max_auth_age"`
 	ExpiresAfter Duration `json:"expires_after"`
 }
 
-// Approvers are the members of these groups at this identity provider.
+// ApproverKind is who may approve.
+type ApproverKind string
+
+const (
+	// ApproverUser is the task's own user.
+	ApproverUser ApproverKind = "user"
+	// ApproverGroup is any member of Groups at Issuer.
+	ApproverGroup ApproverKind = "group"
+)
+
+// Approvers is an approval route. Issuer and Groups are set for
+// ApproverGroup only.
 type Approvers struct {
-	Issuer string   `json:"issuer"`
-	Groups []string `json:"groups"`
+	Kind   ApproverKind `json:"kind"`
+	Issuer string       `json:"issuer,omitempty"`
+	Groups []string     `json:"groups,omitempty"`
 }
 
 // TaskObjectSpec says what a task is about.
@@ -172,9 +218,6 @@ type Param struct {
 	// In is set for HTTP operations only.
 	In ParamIn `json:"in,omitempty"`
 }
-
-// KindApplication is the kind of an Application document.
-const KindApplication = "Application"
 
 // Application is an application that may start tasks for its users.
 // Metadata.Name is the name task types list as initiators.

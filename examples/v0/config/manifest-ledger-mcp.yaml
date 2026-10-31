@@ -7,14 +7,23 @@ spec:
   audience: https://ledger.example.internal/mcp
   protocol: mcp
   operations:
-    - name: lookup_account
-      sensitivity: low
+    - name: list_unmatched
+      description: Payments of one day that no invoice matches yet.
+      sensitivity: read
       params:
-        /account_id: { type: string }
+        /day: { type: string }
 
     - name: post_entry
-      sensitivity: high
+      sensitivity: write
       params:
         /account_id: { type: string }
         /amount: { type: number }
         /memo: { type: string }
+
+    # Critical: money leaves the books, so two people approve the exact call.
+    - name: write_off
+      sensitivity: critical
+      params:
+        /payment_id: { type: string }
+        /amount: { type: number }
+        /reason: { type: string }

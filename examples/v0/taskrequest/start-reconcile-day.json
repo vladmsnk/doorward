@@ -1,0 +1,15 @@
+{
+  "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
+  "subject_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6Ims4cyJ9.ZXhhbXBsZS1zZXJ2aWNlLWFjY291bnQtdG9rZW4.ZXhhbXBsZS1zaWduYXR1cmU",
+  "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
+  "requested_token_type": "urn:ietf:params:oauth:token-type:access_token",
+  "authorization_details": [
+    {
+      "type": "agent_task",
+      "task_type": "reconcile-day",
+      "object_id": "2026-10-29",
+      "agent": "reconciler",
+      "trigger": "schedule"
+    }
+  ]
+}

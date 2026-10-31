@@ -9,7 +9,7 @@ spec:
   operations:
     - name: get_invoice
       description: Read one invoice.
-      sensitivity: low
+      sensitivity: read
       http:
         method: GET
         path: /invoices/{invoice_id}
@@ -17,7 +17,7 @@ spec:
         /invoice_id: { type: string, in: path }
 
     - name: list_payments
-      sensitivity: low
+      sensitivity: read
       http:
         method: GET
         path: /invoices/{invoice_id}/payments
@@ -25,7 +25,7 @@ spec:
         /invoice_id: { type: string, in: path }
 
     - name: refund_payment
-      sensitivity: high
+      sensitivity: write
       http:
         method: POST
         path: /payments/{payment_id}/refund

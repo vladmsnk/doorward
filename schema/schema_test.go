@@ -52,7 +52,6 @@ func TestExamplesValidateAndRoundTrip(t *testing.T) {
 		"config":      "",
 		"taskrequest": schema.TaskRequest,
 		"grant":       schema.Grant,
-		"offer":       schema.Offer,
 		"decision":    schema.Decision,
 		"approval":    schema.Approval,
 	}
@@ -95,8 +94,8 @@ func roundTrip(t *testing.T, v *schema.Validator, src schema.Source) {
 	var out any
 	var err error
 	switch src.Kind {
-	case schema.Boundary:
-		out, err = schema.Decode[v0.Boundary](v, src.JSON)
+	case schema.Agent:
+		out, err = schema.Decode[v0.Agent](v, src.JSON)
 	case schema.TaskType:
 		out, err = schema.Decode[v0.TaskType](v, src.JSON)
 	case schema.Manifest:
@@ -107,8 +106,6 @@ func roundTrip(t *testing.T, v *schema.Validator, src schema.Source) {
 		out, err = schema.Decode[v0.TaskRequest](v, src.JSON)
 	case schema.Grant:
 		out, err = schema.Decode[v0.Grant](v, src.JSON)
-	case schema.Offer:
-		out, err = schema.Decode[v0.Offer](v, src.JSON)
 	case schema.Decision:
 		out, err = schema.Decode[v0.Decision](v, src.JSON)
 	case schema.Approval:
@@ -147,27 +144,29 @@ type edit struct {
 
 // The examples the negative tests start from.
 const (
-	boundary = "config/boundary-invoice-agent.yaml"
-	tasktype = "config/tasktype-pay-invoice.yaml"
-	manifest = "config/manifest-payments-api.yaml"
-	mcp      = "config/manifest-ledger-mcp.yaml"
-	app      = "config/application-billing-app.yaml"
-	taskreq  = "taskrequest/start-pay-invoice.json"
-	root     = "grant/root-invoice-agent.json"
-	child    = "grant/delegated-ledger-agent.json"
-	offer    = "offer/ledger-lookup.json"
-	allow    = "decision/1-allow-get-invoice.json"
-	deny     = "decision/2-deny-amount-over-grant.json"
-	hold     = "decision/3-approval-required-pay-invoice.json"
-	approval = "approval/pay-invoice-1200-eur.json"
+	agent     = "config/agent-invoice-assistant.yaml"
+	tasktype  = "config/tasktype-pay-invoice.yaml"
+	svcTask   = "config/tasktype-reconcile-day.yaml"
+	manifest  = "config/manifest-payments-api.yaml"
+	mcp       = "config/manifest-ledger-mcp.yaml"
+	app       = "config/application-billing-app.yaml"
+	taskreq   = "taskrequest/start-pay-invoice.json"
+	svcReq    = "taskrequest/start-reconcile-day.json"
+	userGrant = "grant/pay-invoice.json"
+	svcGrant  = "grant/reconcile-day.json"
+	allow     = "decision/1-allow-get-invoice.json"
+	deny      = "decision/2-deny-amount-over-grant.json"
+	hold      = "decision/3-approval-required-pay-invoice.json"
+	svcAllow  = "decision/4-allow-reconciler-post-entry.json"
+	userAppr  = "approval/pay-invoice-1200-eur.json"
+	groupAppr = "approval/write-off-rounding.json"
 )
 
 // Values the edits below put into documents.
 var (
-	thumbprint = "example-jkt-not-a-real-thumbprint-000000000"
-	alice      = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7"}
-	bob        = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u5b0bR7tLm2Qa"}
-	agentTask  = map[string]any{"type": "agent_task", "task_type": "pay-invoice", "object_id": "inv_7Q2M9X4K", "agent": "invoice-agent"}
+	alice     = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7"}
+	bob       = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u5b0bR7tLm2Qa"}
+	agentTask = map[string]any{"type": "agent_task", "task_type": "pay-invoice", "object_id": "inv_7Q2M9X4K", "agent": "invoice-assistant", "trigger": "ui"}
 )
 
 func TestInvalidDocuments(t *testing.T) {
@@ -180,104 +179,58 @@ func TestInvalidDocuments(t *testing.T) {
 		keyword string // a schema keyword the error must mention
 	}{
 		// Envelope.
-		{"wrong apiVersion", boundary, schema.Boundary, []edit{{set: "/apiVersion", value: "agentbox/v1"}}, "const"},
-		{"unknown top-level field", boundary, schema.Boundary, []edit{{set: "/status", value: map[string]any{}}}, "additionalProperties"},
-		{"name with upper case", boundary, schema.Boundary, []edit{{set: "/metadata/name", value: "Invoice-Agent"}}, "pattern"},
+		{"wrong apiVersion", agent, schema.Agent, []edit{{set: "/apiVersion", value: "agentbox/v1"}}, "const"},
+		{"unknown top-level field", agent, schema.Agent, []edit{{set: "/status", value: map[string]any{}}}, "additionalProperties"},
+		{"name with upper case", agent, schema.Agent, []edit{{set: "/metadata/name", value: "Invoice-Assistant"}}, "pattern"},
 
-		// Boundary.
-		{"boundary without owner", boundary, schema.Boundary, []edit{{del: "/spec/owner"}}, "required"},
-		{"owner contact not an email", boundary, schema.Boundary, []edit{{set: "/spec/owner/contact", value: "on-call"}}, "format"},
-		{"max_ttl in words", boundary, schema.Boundary, []edit{{set: "/spec/max_ttl", value: "1 day"}}, "pattern"},
-		{"unknown sensitivity tier", boundary, schema.Boundary, []edit{{set: "/spec/max_sensitivity", value: "extreme"}}, "enum"},
-		{"empty permissions", boundary, schema.Boundary, []edit{{set: "/spec/permissions", value: []any{}}}, "minItems"},
-		{"wildcard action", boundary, schema.Boundary, []edit{{set: "/spec/permissions/0/actions/0", value: "*"}}, "pattern"},
-		{"location not a URL", boundary, schema.Boundary, []edit{{set: "/spec/permissions/0/locations/0", value: "payments"}}, "format"},
-		{"unknown constraint type", boundary, schema.Boundary, []edit{{set: "/spec/permissions/0/constraints/~1amount", value: map[string]any{"regex": ".*"}}}, "unevaluatedProperties"},
-		{"empty constraint", boundary, schema.Boundary, []edit{{set: "/spec/permissions/0/constraints/~1amount", value: map[string]any{}}}, "minProperties"},
-		{"constraint key not a pointer", boundary, schema.Boundary, []edit{{set: "/spec/permissions/0/constraints/amount", value: map[string]any{"max": 1}}}, "pattern"},
-		{"delegation to anyone", boundary, schema.Boundary, []edit{{del: "/spec/delegation/recipients"}}, "required"},
-		{"sum limit without field", boundary, schema.Boundary, []edit{{del: "/spec/limits/0/field"}}, "required"},
+		// Agent.
+		{"agent without owner", agent, schema.Agent, []edit{{del: "/spec/owner"}}, "required"},
+		{"owner contact not an email", agent, schema.Agent, []edit{{set: "/spec/owner/contact", value: "on-call"}}, "format"},
+		{"agent without identities", agent, schema.Agent, []edit{{del: "/spec/identities"}}, "required"},
+		{"jwt identity without subject", agent, schema.Agent, []edit{{del: "/spec/identities/0/subject"}}, "required"},
+		{"registration with an issuer", agent, schema.Agent, []edit{{set: "/spec/identities/0", value: map[string]any{"type": "registration", "issuer": "https://x"}}}, "false schema"},
+		{"unknown identity type", agent, schema.Agent, []edit{{set: "/spec/identities/0/type", value: "password"}}, "enum"},
+		{"max_ttl in words", agent, schema.Agent, []edit{{set: "/spec/max_ttl", value: "1 day"}}, "pattern"},
+		{"unknown tier", agent, schema.Agent, []edit{{set: "/spec/max_sensitivity", value: "high"}}, "enum"},
+		{"empty permissions", agent, schema.Agent, []edit{{set: "/spec/permissions", value: []any{}}}, "minItems"},
+		{"wildcard action", agent, schema.Agent, []edit{{set: "/spec/permissions/0/actions/0", value: "*"}}, "pattern"},
+		{"location not a URL", agent, schema.Agent, []edit{{set: "/spec/permissions/0/locations/0", value: "payments"}}, "format"},
+		{"unknown constraint type", agent, schema.Agent, []edit{{set: "/spec/permissions/0/constraints/~1amount", value: map[string]any{"regex": ".*"}}}, "unevaluatedProperties"},
+		{"empty constraint", agent, schema.Agent, []edit{{set: "/spec/permissions/0/constraints/~1amount", value: map[string]any{}}}, "minProperties"},
+		{"constraint key not a pointer", agent, schema.Agent, []edit{{set: "/spec/permissions/0/constraints/amount", value: map[string]any{"max": 1}}}, "pattern"},
+		{"sum limit without field", agent, schema.Agent, []edit{{del: "/spec/limits/0/field"}}, "required"},
+		{"delegation is not in v0", agent, schema.Agent, []edit{{set: "/spec/delegation", value: map[string]any{"max_depth": 1}}}, "additionalProperties"},
 
 		// Task type.
-		{"task type without initiators", tasktype, schema.TaskType, []edit{{del: "/spec/initiators"}}, "required"},
-		{"empty initiators", tasktype, schema.TaskType, []edit{{set: "/spec/initiators", value: []any{}}}, "minItems"},
+		{"task type without runs_as", tasktype, schema.TaskType, []edit{{del: "/spec/runs_as"}}, "required"},
+		{"task type without start", tasktype, schema.TaskType, []edit{{del: "/spec/start"}}, "required"},
+		{"chat task without confirmation", tasktype, schema.TaskType, []edit{{set: "/spec/start/confirmation", value: "none"}}, "const"},
+		{"user task without initiators", tasktype, schema.TaskType, []edit{{del: "/spec/initiators"}}, "required"},
+		{"user task on a schedule", tasktype, schema.TaskType, []edit{{set: "/spec/start/triggers", value: []any{"schedule"}}}, "enum"},
 		{"unanchored id_pattern", tasktype, schema.TaskType, []edit{{set: "/spec/object/id_pattern", value: "inv_[0-9]+"}}, "pattern"},
 		{"id_pattern not a regex", tasktype, schema.TaskType, []edit{{set: "/spec/object/id_pattern", value: "^inv_[0-9+$"}}, "format"},
-		// The schema checks regexes with Go's regexp, which the STS also uses.
-		{"id_pattern Go cannot run", tasktype, schema.TaskType, []edit{{set: "/spec/object/id_pattern", value: "^(?=inv_)inv_[0-9]+$"}}, "format"},
 		{"count limit with a field", tasktype, schema.TaskType, []edit{{set: "/spec/limits/1/field", value: "/amount"}}, "false schema"},
 		{"count limit not whole", tasktype, schema.TaskType, []edit{{set: "/spec/limits/1/max", value: 2.5}}, "integer"},
 		{"task_object false", tasktype, schema.TaskType, []edit{{set: "/spec/permissions/0/constraints/~1invoice_id/task_object", value: false}}, "const"},
+		{"user route needing two", tasktype, schema.TaskType, []edit{{set: "/spec/approval/required", value: 2}}, "const"},
+		{"user route with groups", tasktype, schema.TaskType, []edit{{set: "/spec/approval/approvers/groups", value: []any{"x"}}}, "false schema"},
+		{"approval without sign-in age", tasktype, schema.TaskType, []edit{{del: "/spec/approval/max_auth_age"}}, "required"},
+		{"service task with initiators", svcTask, schema.TaskType, []edit{{set: "/spec/initiators", value: []any{"billing-app"}}}, "false schema"},
+		{"service task asking the user to confirm", svcTask, schema.TaskType, []edit{{set: "/spec/start/confirmation", value: "user"}}, "const"},
+		{"service task from chat", svcTask, schema.TaskType, []edit{{set: "/spec/start/triggers", value: []any{"chat"}}}, "enum"},
+		{"service task approved by its user", svcTask, schema.TaskType, []edit{{set: "/spec/approval/approvers", value: map[string]any{"kind": "user"}}, {set: "/spec/approval/required", value: 1}}, "const"},
+		{"group route needing one", svcTask, schema.TaskType, []edit{{set: "/spec/approval/required", value: 1}}, "minimum"},
+		{"group route without groups", svcTask, schema.TaskType, []edit{{del: "/spec/approval/approvers/groups"}}, "required"},
 
 		// Manifest.
 		{"http operation without route", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/http"}}, "required"},
 		{"http param without location", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/params/~1invoice_id/in"}}, "required"},
 		{"operation without tier", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/sensitivity"}}, "required"},
+		{"old tier name", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/sensitivity", value: "low"}}, "enum"},
 		{"object param", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1invoice_id/type", value: "object"}}, "enum"},
 		{"unknown protocol", manifest, schema.Manifest, []edit{{set: "/spec/protocol", value: "grpc"}}, "enum"},
 		{"mcp operation with a route", mcp, schema.Manifest, []edit{{set: "/spec/operations/0/http", value: map[string]any{"method": "GET", "path": "/"}}}, "false schema"},
-		{"mcp param with a location", mcp, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1account_id/in", value: "body"}}, "false schema"},
-
-		// Grant.
-		{"grant without act", root, schema.Grant, []edit{{del: "/act"}}, "required"},
-		{"grant without task", root, schema.Grant, []edit{{del: "/task"}}, "required"},
-		{"grant without client_id", root, schema.Grant, []edit{{del: "/client_id"}}, "required"},
-		{"grant without sub_id", root, schema.Grant, []edit{{del: "/sub_id"}}, "required"},
-		{"sub_id in another format", root, schema.Grant, []edit{{set: "/sub_id/format", value: "email"}}, "const"},
-		{"bound to a key and a certificate", root, schema.Grant, []edit{{set: "/cnf/x5t#S256", value: thumbprint}}, "maxProperties"},
-		{"bound to nothing", root, schema.Grant, []edit{{set: "/cnf", value: map[string]any{}}}, "minProperties"},
-		{"local actor with a foreign ID", root, schema.Grant, []edit{{set: "/act/sub", value: "spiffe://example.internal/agent"}}, "pattern"},
-		{"scope with a quote", root, schema.Grant, []edit{{set: "/scope", value: `pay_invoice "all"`}}, "pattern"},
-		{"empty amr", root, schema.Grant, []edit{{set: "/amr", value: []any{}}}, "minItems"},
-		{"aud as a string", root, schema.Grant, []edit{{set: "/aud", value: "https://payments.example.internal"}}, "type"},
-		{"empty aud", root, schema.Grant, []edit{{set: "/aud", value: []any{}}}, "minItems"},
-		{"exp as a date string", root, schema.Grant, []edit{{set: "/exp", value: "2026-10-30T10:00:00Z"}}, "type"},
-		{"short key thumbprint", root, schema.Grant, []edit{{set: "/cnf/jkt", value: "abc"}}, "pattern"},
-		{"unknown claim", root, schema.Grant, []edit{{set: "/roles", value: []any{"admin"}}}, "additionalProperties"},
-		{"unresolved task_object", root, schema.Grant, []edit{{set: "/authorization_details/0/constraints/~1invoice_id", value: map[string]any{"task_object": true}}}, "unevaluatedProperties"},
-		{"authorization detail without type", root, schema.Grant, []edit{{del: "/authorization_details/0/type"}}, "required"},
-		{"foreign authorization detail type", root, schema.Grant, []edit{{set: "/authorization_details/0/type", value: "payment_initiation"}}, "const"},
-		{"root grant with a parent", root, schema.Grant, []edit{{set: "/parent", value: "grt_01JBXR4T7Q2M9X4KZ8D3F6H1ZZ"}}, "not"},
-		{"child grant without a parent", child, schema.Grant, []edit{{del: "/parent"}}, "required"},
-		{"chain too deep", child, schema.Grant, []edit{{set: "/depth", value: 9}}, "maximum"},
-		{"actor name with spaces", child, schema.Grant, []edit{{set: "/act/act/sub", value: "invoice agent"}}, "pattern"},
-
-		// Decision.
-		{"unknown outcome", allow, schema.Decision, []edit{{set: "/outcome", value: "maybe"}}, "enum"},
-		{"allow without principal", allow, schema.Decision, []edit{{del: "/principal"}}, "required"},
-		{"allow without grant", allow, schema.Decision, []edit{{del: "/grant"}}, "required"},
-		{"allow without action hash", allow, schema.Decision, []edit{{del: "/action_hash"}}, "required"},
-		{"no checks", allow, schema.Decision, []edit{{set: "/checks", value: []any{}}}, "minItems"},
-		{"no point of enforcement", allow, schema.Decision, []edit{{del: "/pep"}}, "required"},
-		{"no point of decision", allow, schema.Decision, []edit{{del: "/pdp"}}, "required"},
-		{"request without subject", allow, schema.Decision, []edit{{del: "/request/subject"}}, "required"},
-		{"time not RFC 3339", allow, schema.Decision, []edit{{set: "/time", value: "30.10.2026 09:30"}}, "format"},
-		{"time without milliseconds", allow, schema.Decision, []edit{{set: "/time", value: "2026-10-30T09:30:12Z"}}, "pattern"},
-		{"time with an offset", allow, schema.Decision, []edit{{set: "/time", value: "2026-10-30T11:30:12.418+02:00"}}, "pattern"},
-		{"malformed action hash", allow, schema.Decision, []edit{{set: "/action_hash", value: "md5:abc"}}, "pattern"},
-		{"first record with prev", allow, schema.Decision, []edit{{set: "/chain/prev", value: "sha-256:example-hash-not-computed-record-0000000000"}}, "not"},
-		{"later record without prev", deny, schema.Decision, []edit{{del: "/chain/prev"}}, "required"},
-		{"deny without reasons", deny, schema.Decision, []edit{{del: "/reasons"}}, "required"},
-		{"deny with empty reasons", deny, schema.Decision, []edit{{set: "/reasons", value: []any{}}}, "minItems"},
-		{"deny spends budget", deny, schema.Decision, []edit{{set: "/limits", value: []any{map[string]any{"name": "calls", "consumed": 1, "remaining": 49}}}}, "false schema"},
-		{"unknown reason code", deny, schema.Decision, []edit{{set: "/reasons/0/code", value: "too_expensive"}}, "anyOf"},
-		{"hold without approval request", hold, schema.Decision, []edit{{del: "/approval"}}, "required"},
-		{"hold spends budget", hold, schema.Decision, []edit{{set: "/limits", value: []any{map[string]any{"name": "calls", "consumed": 1, "remaining": 49}}}}, "false schema"},
-		{"unknown check", hold, schema.Decision, []edit{{set: "/checks/0/name", value: "vibes"}}, "enum"},
-		{"unknown enforcement point kind", hold, schema.Decision, []edit{{set: "/pep/kind", value: "firewall"}}, "enum"},
-		{"approval_required as a reason", hold, schema.Decision, []edit{{set: "/reasons", value: []any{map[string]any{"code": "approval_required"}}}}, "anyOf"},
-
-		// Agent identities.
-		{"boundary without identities", boundary, schema.Boundary, []edit{{del: "/spec/identities"}}, "required"},
-		{"OAuth client without client_id", boundary, schema.Boundary, []edit{{del: "/spec/identities/0/client_id"}}, "required"},
-		{"SPIFFE identity with a client_id", boundary, schema.Boundary, []edit{{set: "/spec/identities/1/client_id", value: "abc"}}, "false schema"},
-		{"malformed SPIFFE ID", boundary, schema.Boundary, []edit{{set: "/spec/identities/1/id", value: "spiffe:/payments"}}, "pattern"},
-		{"unknown identity type", boundary, schema.Boundary, []edit{{set: "/spec/identities/0/type", value: "password"}}, "enum"},
-
-		// Approval policy.
-		{"approval without approvers", tasktype, schema.TaskType, []edit{{del: "/spec/approval/approvers"}}, "required"},
-		{"approval needing nobody", tasktype, schema.TaskType, []edit{{set: "/spec/approval/required", value: 0}}, "minimum"},
-		{"approval without sign-in age", tasktype, schema.TaskType, []edit{{del: "/spec/approval/max_auth_age"}}, "required"},
+		{"mcp param with a location", mcp, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1day/in", value: "body"}}, "false schema"},
 
 		// Application.
 		{"application without users", app, schema.Application, []edit{{del: "/spec/users"}}, "required"},
@@ -297,21 +250,68 @@ func TestInvalidDocuments(t *testing.T) {
 		{"not a token exchange", taskreq, schema.TaskRequest, []edit{{set: "/grant_type", value: "client_credentials"}}, "const"},
 		{"two tasks in one request", taskreq, schema.TaskRequest, []edit{{set: "/authorization_details", value: []any{agentTask, agentTask}}}, "maxItems"},
 		{"task without an agent", taskreq, schema.TaskRequest, []edit{{del: "/authorization_details/0/agent"}}, "required"},
+		{"task without a trigger", taskreq, schema.TaskRequest, []edit{{del: "/authorization_details/0/trigger"}}, "required"},
+		{"unknown trigger", taskreq, schema.TaskRequest, []edit{{set: "/authorization_details/0/trigger", value: "cron"}}, "enum"},
 		{"client assertion without its type", taskreq, schema.TaskRequest, []edit{{del: "/client_assertion_type"}}, "dependentRequired"},
 		{"access token as the user's identity", taskreq, schema.TaskRequest, []edit{{set: "/subject_token_type", value: "urn:ietf:params:oauth:token-type:access_token"}}, "enum"},
 
-		// Offer.
-		{"offer without recipient", offer, schema.Offer, []edit{{del: "/to"}}, "required"},
-		{"offer without lifetime", offer, schema.Offer, []edit{{del: "/ttl"}}, "required"},
-		{"offer with an unresolved task_object", offer, schema.Offer, []edit{{set: "/authorization_details/0/constraints", value: map[string]any{"/account_id": map[string]any{"task_object": true}}}}, "unevaluatedProperties"},
+		// Grant.
+		{"grant without act", userGrant, schema.Grant, []edit{{del: "/act"}}, "required"},
+		{"grant without task", userGrant, schema.Grant, []edit{{del: "/task"}}, "required"},
+		{"grant without client_id", userGrant, schema.Grant, []edit{{del: "/client_id"}}, "required"},
+		{"task without started", userGrant, schema.Grant, []edit{{del: "/task/started"}}, "required"},
+		{"sub_id in another format", userGrant, schema.Grant, []edit{{set: "/sub_id/format", value: "email"}}, "const"},
+		{"aud as a string", userGrant, schema.Grant, []edit{{set: "/aud", value: "https://payments.example.internal"}}, "type"},
+		{"empty aud", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{}}}, "minItems"},
+		{"exp as a date string", userGrant, schema.Grant, []edit{{set: "/exp", value: "2026-10-30T10:00:00Z"}}, "type"},
+		{"short key thumbprint", userGrant, schema.Grant, []edit{{set: "/cnf/jkt", value: "abc"}}, "pattern"},
+		{"unknown claim", userGrant, schema.Grant, []edit{{set: "/roles", value: []any{"admin"}}}, "additionalProperties"},
+		{"delegation claims are not in v0", userGrant, schema.Grant, []edit{{set: "/parent", value: "grt_01JBXR4T7Q2M9X4KZ8D3F6H1ZZ"}}, "additionalProperties"},
+		{"nested actor is not in v0", userGrant, schema.Grant, []edit{{set: "/act/act", value: map[string]any{"sub": "other"}}}, "additionalProperties"},
+		{"actor with a foreign ID", userGrant, schema.Grant, []edit{{set: "/act/sub", value: "spiffe://example.internal/agent"}}, "pattern"},
+		{"unresolved task_object", userGrant, schema.Grant, []edit{{set: "/authorization_details/0/constraints/~1invoice_id", value: map[string]any{"task_object": true}}}, "unevaluatedProperties"},
+		{"authorization detail without type", userGrant, schema.Grant, []edit{{del: "/authorization_details/0/type"}}, "required"},
+		{"foreign authorization detail type", userGrant, schema.Grant, []edit{{set: "/authorization_details/0/type", value: "payment_initiation"}}, "const"},
+
+		// Decision.
+		{"unknown outcome", allow, schema.Decision, []edit{{set: "/outcome", value: "maybe"}}, "enum"},
+		{"allow without principal", allow, schema.Decision, []edit{{del: "/principal"}}, "required"},
+		{"principal with nobody accountable", allow, schema.Decision, []edit{{del: "/principal/user"}}, "oneOf"},
+		{"principal with user and owner", allow, schema.Decision, []edit{{set: "/principal/owner", value: "payments"}}, "oneOf"},
+		{"allow without grant", allow, schema.Decision, []edit{{del: "/grant"}}, "required"},
+		{"allow without action hash", allow, schema.Decision, []edit{{del: "/action_hash"}}, "required"},
+		{"no checks", allow, schema.Decision, []edit{{set: "/checks", value: []any{}}}, "minItems"},
+		{"no point of enforcement", allow, schema.Decision, []edit{{del: "/pep"}}, "required"},
+		{"no point of decision", allow, schema.Decision, []edit{{del: "/pdp"}}, "required"},
+		{"request without subject", allow, schema.Decision, []edit{{del: "/request/subject"}}, "required"},
+		{"time not RFC 3339", allow, schema.Decision, []edit{{set: "/time", value: "30.10.2026 09:30"}}, "format"},
+		{"time without milliseconds", allow, schema.Decision, []edit{{set: "/time", value: "2026-10-30T09:30:12Z"}}, "pattern"},
+		{"time with an offset", allow, schema.Decision, []edit{{set: "/time", value: "2026-10-30T11:30:12.418+02:00"}}, "pattern"},
+		{"malformed action hash", allow, schema.Decision, []edit{{set: "/action_hash", value: "md5:abc"}}, "pattern"},
+		{"first record with prev", allow, schema.Decision, []edit{{set: "/chain/prev", value: "sha-256:example-hash-not-computed-record-0000000000"}}, "not"},
+		{"later record without prev", deny, schema.Decision, []edit{{del: "/chain/prev"}}, "required"},
+		{"deny without reasons", deny, schema.Decision, []edit{{del: "/reasons"}}, "required"},
+		{"deny with empty reasons", deny, schema.Decision, []edit{{set: "/reasons", value: []any{}}}, "minItems"},
+		{"deny spends budget", deny, schema.Decision, []edit{{set: "/limits", value: []any{map[string]any{"name": "calls", "consumed": 1, "remaining": 49}}}}, "false schema"},
+		{"unknown reason code", deny, schema.Decision, []edit{{set: "/reasons/0/code", value: "too_expensive"}}, "anyOf"},
+		{"hold without approval request", hold, schema.Decision, []edit{{del: "/approval"}}, "required"},
+		{"hold spends budget", hold, schema.Decision, []edit{{set: "/limits", value: []any{map[string]any{"name": "calls", "consumed": 1, "remaining": 49}}}}, "false schema"},
+		{"unknown check", hold, schema.Decision, []edit{{set: "/checks/0/name", value: "vibes"}}, "enum"},
+		{"delegation check is not in v0", hold, schema.Decision, []edit{{set: "/checks/0/name", value: "delegation"}}, "enum"},
+		{"unknown enforcement point kind", hold, schema.Decision, []edit{{set: "/pep/kind", value: "firewall"}}, "enum"},
+		{"approval_required as a reason", hold, schema.Decision, []edit{{set: "/reasons", value: []any{map[string]any{"code": "approval_required"}}}}, "anyOf"},
+		{"service decision naming a user", svcAllow, schema.Decision, []edit{{set: "/principal/user", value: "alice@example.com"}}, "oneOf"},
 
 		// Approval record.
-		{"approved without closing time", approval, schema.Approval, []edit{{del: "/closed"}}, "required"},
-		{"pending with a grant", approval, schema.Approval, []edit{{set: "/status", value: "pending"}}, "false schema"},
-		{"rejected with a grant", approval, schema.Approval, []edit{{set: "/status", value: "rejected"}}, "false schema"},
-		{"unknown verdict", approval, schema.Approval, []edit{{set: "/votes/0/verdict", value: "maybe"}}, "enum"},
-		{"vote without sign-in time", approval, schema.Approval, []edit{{del: "/votes/0/auth_time"}}, "required"},
-		{"approver in another format", approval, schema.Approval, []edit{{set: "/votes/0/approver/format", value: "email"}}, "const"},
+		{"approval without route", userAppr, schema.Approval, []edit{{del: "/route"}}, "required"},
+		{"user route without the user", userAppr, schema.Approval, []edit{{del: "/user"}}, "required"},
+		{"approved without closing time", userAppr, schema.Approval, []edit{{del: "/closed"}}, "required"},
+		{"pending with a grant", userAppr, schema.Approval, []edit{{set: "/status", value: "pending"}}, "false schema"},
+		{"rejected with a grant", groupAppr, schema.Approval, []edit{{set: "/status", value: "rejected"}}, "false schema"},
+		{"unknown verdict", groupAppr, schema.Approval, []edit{{set: "/votes/0/verdict", value: "maybe"}}, "enum"},
+		{"vote without sign-in time", groupAppr, schema.Approval, []edit{{del: "/votes/0/auth_time"}}, "required"},
+		{"approver in another format", groupAppr, schema.Approval, []edit{{set: "/votes/0/approver/format", value: "email"}}, "const"},
+		{"group route without groups", groupAppr, schema.Approval, []edit{{del: "/route/groups"}}, "required"},
 	}
 
 	for _, tc := range cases {
@@ -335,7 +335,6 @@ func TestInvalidDocuments(t *testing.T) {
 // The rules that span fields: each document has the right shape but breaks one.
 func TestRuleChecks(t *testing.T) {
 	v := newValidator(t)
-	other := "https://other.example.internal"
 	cases := []struct {
 		name  string
 		file  string
@@ -343,34 +342,41 @@ func TestRuleChecks(t *testing.T) {
 		edits []edit
 		want  string
 	}{
-		{"aud wider than the details", root, schema.Grant, []edit{{set: "/aud", value: []any{"https://payments.example.internal", "https://ledger.example.internal/mcp", other}}}, "aud must list exactly"},
-		{"scope wider than the details", root, schema.Grant, []edit{{set: "/scope", value: "get_invoice refund_payment"}}, `scope "refund_payment"`},
-		{"root grant naming another root", root, schema.Grant, []edit{{set: "/root", value: "grt_01JBXR4T7Q2M9X4KZ8D3F6H1ZZ"}}, "must name itself as root"},
-		{"expiring before issue", root, schema.Grant, []edit{{set: "/exp", value: 1793352000}}, "exp must be after iat"},
-		{"user signed in after issue", root, schema.Grant, []edit{{set: "/auth_time", value: 1793352700}}, "auth_time is after iat"},
-		{"act deeper than depth", root, schema.Grant, []edit{{set: "/act/act", value: map[string]any{"sub": "ledger-agent"}}}, "act nests 2 agents"},
-		{"min above max", root, schema.Grant, []edit{{set: "/authorization_details/1/constraints/~1amount/min", value: 9000}}, "min 9000 is above max 5000"},
-		{"limit defined twice", root, schema.Grant, []edit{{set: "/limits/1", value: map[string]any{"name": "payout-total", "kind": "count", "max": 3}}}, `limit "payout-total" is defined twice`},
+		{"aud wider than the details", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{"https://payments.example.internal", "https://other.example.internal"}}}, "aud must list exactly"},
+		{"expiring before issue", userGrant, schema.Grant, []edit{{set: "/exp", value: 1793352000}}, "exp must be after iat"},
+		{"confirmed after issue", userGrant, schema.Grant, []edit{{set: "/task/started/confirmed_at", value: 1793352700}}, "confirmed_at is after iat"},
+		{"user grant without sub_id", userGrant, schema.Grant, []edit{{del: "/sub_id"}}, "sub_id must say"},
+		{"user task without initiator", userGrant, schema.Grant, []edit{{del: "/task/initiator"}}, "names the application"},
+		{"min above max", userGrant, schema.Grant, []edit{{set: "/authorization_details/1/constraints/~1amount/min", value: 9000}}, "min 9000 is above max 5000"},
+		{"limit defined twice", userGrant, schema.Grant, []edit{{set: "/limits/1", value: map[string]any{"name": "payout-total", "kind": "count", "max": 3}}}, `limit "payout-total" is defined twice`},
+		{"service grant with sub_id", svcGrant, schema.Grant, []edit{{set: "/sub_id", value: alice}}, "service task and carries no sub_id"},
+		{"service grant with an initiator", svcGrant, schema.Grant, []edit{{set: "/task/initiator", value: "billing-app"}}, "has no initiator"},
+		{"service grant confirmed by nobody", svcGrant, schema.Grant, []edit{{set: "/task/started/confirmed_at", value: 1793322000}}, "nobody to confirm"},
 
 		{"allow with a failed check", allow, schema.Decision, []edit{{set: "/checks/1/result", value: "fail"}}, "cannot have failed checks"},
-		{"deny with nothing failed", deny, schema.Decision, []edit{{set: "/checks/7/result", value: "pass"}}, "must have a failed check"},
-		{"hold for another reason", hold, schema.Decision, []edit{{set: "/checks/7/result", value: "fail"}}, "fails the sensitivity check and nothing else"},
+		{"deny with nothing failed", deny, schema.Decision, []edit{{set: "/checks/6/result", value: "pass"}}, "must have a failed check"},
+		{"hold for another reason", hold, schema.Decision, []edit{{set: "/checks/6/result", value: "fail"}}, "fails the sensitivity check and nothing else"},
 		{"check listed twice", allow, schema.Decision, []edit{{set: "/checks/1/name", value: "request"}}, `check "request" is listed twice`},
 
 		{"path segment without a param", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/params"}}, "path segment {invoice_id} has no param"},
 		{"path param not in the path", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1extra", value: map[string]any{"type": "string", "in": "path"}}}, "param /extra is in the path"},
 		{"operation declared twice", manifest, schema.Manifest, []edit{{set: "/spec/operations/1/name", value: "get_invoice"}}, `operation "get_invoice" is declared twice`},
+		{"identity listed twice", agent, schema.Agent, []edit{{set: "/spec/identities", value: []any{
+			map[string]any{"type": "jwt", "issuer": "https://login.example.com", "subject": "0oa8f2k1LmN3pQ4rS5t6"},
+			map[string]any{"type": "jwt", "issuer": "https://login.example.com", "subject": "0oa8f2k1LmN3pQ4rS5t6"}}}}, "listed twice"},
 
-		{"identity listed twice", boundary, schema.Boundary, []edit{{set: "/spec/identities/1", value: map[string]any{"type": "oauth_client", "issuer": "https://login.example.com", "client_id": "0oa8f2k1LmN3pQ4rS5t6"}}}, "listed twice"},
+		{"user task asking for the grant itself", taskreq, schema.TaskRequest, []edit{{set: "/requested_token_type", value: "urn:ietf:params:oauth:token-type:access_token"}}, "asks for a ticket"},
+		{"service task asking for a ticket", svcReq, schema.TaskRequest, []edit{{set: "/requested_token_type", value: "urn:agentbox:params:oauth:token-type:task-ticket"}}, "asks for the grant itself"},
+		{"service task with a confirmation", svcReq, schema.TaskRequest, []edit{{set: "/confirmation", value: "eyJ.x.y"}}, "nobody to confirm"},
+		{"service task started with an ID token", svcReq, schema.TaskRequest, []edit{{set: "/subject_token_type", value: "urn:ietf:params:oauth:token-type:id_token"}}, "agent's own token"},
 
-		{"offer to itself", offer, schema.Offer, []edit{{set: "/to", value: "invoice-agent"}}, "offer to itself"},
-		{"redeemed after expiry", offer, schema.Offer, []edit{{set: "/redeemed", value: 1793352900}}, "redeemed must lie between"},
-
-		{"user approving their own call", approval, schema.Approval, []edit{{set: "/votes/0/approver", value: alice}}, "cannot approve the call"},
-		{"approver voting twice", approval, schema.Approval, []edit{{set: "/votes/1/approver", value: bob}}, "voted twice"},
-		{"approved with too few votes", approval, schema.Approval, []edit{{del: "/votes/1"}}, "approved needs 2 approvals"},
-		{"vote after closing", approval, schema.Approval, []edit{{set: "/votes/1/time", value: "2026-10-30T09:35:00.000Z"}}, "not open"},
-		{"signed in after voting", approval, schema.Approval, []edit{{set: "/votes/0/auth_time", value: "2026-10-30T09:33:20.000Z"}}, "auth_time is after the vote"},
+		{"someone else voting on a user route", userAppr, schema.Approval, []edit{{set: "/votes/0/approver", value: bob}}, "only the task's user votes"},
+		{"user route needing two", userAppr, schema.Approval, []edit{{set: "/required", value: 2}}, "exactly 1 approval"},
+		{"user voting on a group route", groupAppr, schema.Approval, []edit{{set: "/user", value: alice}, {set: "/votes/0/approver", value: alice}}, "cannot approve the call on a group route"},
+		{"approver voting twice", groupAppr, schema.Approval, []edit{{set: "/votes/1/approver", value: bob}}, "voted twice"},
+		{"approved with too few votes", groupAppr, schema.Approval, []edit{{del: "/votes/1"}}, "approved needs 2 approvals"},
+		{"vote after closing", groupAppr, schema.Approval, []edit{{set: "/votes/1/time", value: "2026-10-30T08:00:00.000Z"}}, "not open"},
+		{"signed in after voting", groupAppr, schema.Approval, []edit{{set: "/votes/0/auth_time", value: "2026-10-30T07:03:20.000Z"}}, "auth_time is after the vote"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -390,21 +396,10 @@ func TestRuleChecks(t *testing.T) {
 	}
 }
 
-// An agent from a partner's trust domain keeps the identifier its own domain
-// gives it; only local agents must use agent names.
-func TestForeignActorKeepsItsOwnID(t *testing.T) {
-	v := newValidator(t)
-	doc := applyEdits(t, example(t, root, schema.Grant), []edit{{set: "/act", value: map[string]any{
-		"sub": "spiffe://partner.example/agents/buyer", "iss": "https://sts.partner.example"}}})
-	if err := v.Check(schema.Grant, doc); err != nil {
-		t.Fatalf("foreign actor rejected: %v", err)
-	}
-}
-
 // A custom reason code is fine as long as it says it is one.
 func TestCustomReasonCode(t *testing.T) {
 	v := newValidator(t)
-	doc := applyEdits(t, example(t, "decision/2-deny-amount-over-grant.json", schema.Decision),
+	doc := applyEdits(t, example(t, deny, schema.Decision),
 		[]edit{{set: "/reasons/0/code", value: "x-fraud_score"}})
 	if err := v.Validate(schema.Decision, doc); err != nil {
 		t.Fatalf("custom code rejected: %v", err)
@@ -501,7 +496,7 @@ func TestDuplicateKeysAreRejected(t *testing.T) {
 	v := newValidator(t)
 
 	// The second "sub" would win in encoding/json; neither may win.
-	grant := example(t, "grant/root-invoice-agent.json", schema.Grant)
+	grant := example(t, userGrant, schema.Grant)
 	forged := strings.Replace(string(grant), `"sub":`, `"sub":"mallory@example.com","sub":`, 1)
 	if err := v.Validate(schema.Grant, []byte(forged)); err == nil || !strings.Contains(err.Error(), `duplicate key "sub"`) {
 		t.Errorf("duplicate sub in a grant: got %v", err)
@@ -512,7 +507,7 @@ func TestDuplicateKeysAreRejected(t *testing.T) {
 		t.Errorf("nested duplicate: got %v", err)
 	}
 
-	yamlDoc := "apiVersion: agentbox/v0\nkind: Boundary\nkind: TaskType\n"
+	yamlDoc := "apiVersion: agentbox/v0\nkind: Agent\nkind: TaskType\n"
 	if _, err := schema.Read("x.yaml", []byte(yamlDoc), ""); err == nil || !strings.Contains(err.Error(), "already defined") {
 		t.Errorf("duplicate YAML key: got %v", err)
 	}
@@ -526,7 +521,7 @@ func TestTrailingDataIsRejected(t *testing.T) {
 
 func TestReadMultiDocumentYAML(t *testing.T) {
 	var all []byte
-	for _, f := range []string{"boundary-invoice-agent.yaml", "tasktype-pay-invoice.yaml"} {
+	for _, f := range []string{"agent-invoice-assistant.yaml", "tasktype-pay-invoice.yaml"} {
 		data, err := os.ReadFile(filepath.Join(examples, "config", f))
 		if err != nil {
 			t.Fatal(err)
@@ -537,7 +532,7 @@ func TestReadMultiDocumentYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(srcs) != 2 || srcs[0].Kind != schema.Boundary || srcs[1].Kind != schema.TaskType {
+	if len(srcs) != 2 || srcs[0].Kind != schema.Agent || srcs[1].Kind != schema.TaskType {
 		t.Fatalf("got %+v", srcs)
 	}
 	if srcs[1].Name != "bundle.yaml#2" {
@@ -546,7 +541,7 @@ func TestReadMultiDocumentYAML(t *testing.T) {
 }
 
 func TestReadKindResolution(t *testing.T) {
-	boundary := []byte(`{"apiVersion":"agentbox/v0","kind":"Boundary"}`)
+	agentDoc := []byte(`{"apiVersion":"agentbox/v0","kind":"Agent"}`)
 	grant := []byte(`{"jti":"grt_0000000000"}`)
 
 	if _, err := schema.Read("g.json", grant, ""); err == nil {
@@ -555,8 +550,8 @@ func TestReadKindResolution(t *testing.T) {
 	if srcs, err := schema.Read("g.json", grant, schema.Grant); err != nil || srcs[0].Kind != schema.Grant {
 		t.Errorf("grant with kind: %v %+v", err, srcs)
 	}
-	if _, err := schema.Read("b.json", boundary, schema.TaskType); err == nil {
-		t.Error("Boundary read as TaskType")
+	if _, err := schema.Read("b.json", agentDoc, schema.TaskType); err == nil {
+		t.Error("Agent read as TaskType")
 	}
 	for _, k := range []string{"boundary", "Grant", "Policy"} {
 		doc := []byte(`{"kind":"` + k + `"}`)
@@ -568,7 +563,7 @@ func TestReadKindResolution(t *testing.T) {
 
 func TestDecodeRejectsAnInvalidDocument(t *testing.T) {
 	v := newValidator(t)
-	doc := applyEdits(t, example(t, "grant/root-invoice-agent.json", schema.Grant), []edit{{del: "/act"}})
+	doc := applyEdits(t, example(t, userGrant, schema.Grant), []edit{{del: "/act"}})
 	if _, err := schema.Decode[v0.Grant](v, doc); err == nil {
 		t.Fatal("Decode accepted a grant without act")
 	}

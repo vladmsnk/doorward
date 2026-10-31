@@ -4,20 +4,7 @@
   "title": "Approval",
   "description": "Record of one approval request for one exact call: what the approvers saw, who voted, and how each of them signed in. An approved request lets the STS issue a single-use grant bound to action_hash.",
   "type": "object",
-  "required": [
-    "id",
-    "created",
-    "status",
-    "task",
-    "grant",
-    "agent",
-    "user",
-    "action",
-    "action_hash",
-    "policy_version",
-    "required",
-    "votes"
-  ],
+  "required": ["id", "created", "status", "task", "grant", "agent", "route", "action", "action_hash", "policy_version", "required", "votes"],
   "properties": {
     "id": { "$ref": "common.schema.json#/$defs/id" },
     "created": { "$ref": "common.schema.json#/$defs/timestamp" },
@@ -41,8 +28,12 @@
     },
     "agent": { "$ref": "common.schema.json#/$defs/name" },
     "user": {
-      "description": "The user the agent acts for. Never one of the approvers.",
+      "description": "The user the agent acts for, on a user task. On a user route this is the only voter; on a group route they never vote.",
       "$ref": "common.schema.json#/$defs/subjectId"
+    },
+    "route": {
+      "description": "Who was asked, from the task type.",
+      "$ref": "common.schema.json#/$defs/approvers"
     },
     "action": {
       "description": "The call in canonical form, exactly as the approvers saw it.",
@@ -92,6 +83,11 @@
       "if": { "properties": { "status": { "const": "approved" } } },
       "then": { "properties": { "votes": { "minItems": 1 } } },
       "else": { "properties": { "single_use_grant": false } }
+    },
+    {
+      "description": "A user route needs the user.",
+      "if": { "properties": { "route": { "properties": { "kind": { "const": "user" } } } } },
+      "then": { "required": ["user"] }
     }
   ],
   "$defs": {
@@ -111,13 +107,6 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 255
-        },
-        "amr": {
-          "description": "Methods the approver signed in with (RFC 8176).",
-          "type": "array",
-          "items": { "type": "string", "minLength": 1, "maxLength": 64 },
-          "minItems": 1,
-          "uniqueItems": true
         }
       },
       "additionalProperties": false

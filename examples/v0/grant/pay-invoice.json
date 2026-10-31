@@ -2,17 +2,12 @@
   "iss": "https://sts.example.internal",
   "sub": "alice@example.com",
   "sub_id": { "format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7" },
-  "aud": ["https://payments.example.internal", "https://ledger.example.internal/mcp"],
+  "aud": ["https://payments.example.internal"],
   "client_id": "0oa8f2k1LmN3pQ4rS5t6",
-  "scope": "get_invoice list_payments pay_invoice lookup_account",
   "iat": 1793352600,
   "exp": 1793353500,
   "jti": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
-  "auth_time": 1793352540,
-  "acr": "urn:example:acr:mfa",
-  "amr": ["pwd", "otp", "mfa"],
-  "sid": "s7QpZ2r9xK1mW4",
-  "act": { "sub": "invoice-agent" },
+  "act": { "sub": "invoice-assistant" },
   "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000000" },
   "authorization_details": [
     {
@@ -29,21 +24,15 @@
         "/amount": { "min": 0.01, "max": 5000 },
         "/currency": { "one_of": ["EUR", "USD"] }
       }
-    },
-    {
-      "type": "tool_call",
-      "locations": ["https://ledger.example.internal/mcp"],
-      "actions": ["lookup_account"]
     }
   ],
   "task": {
     "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB",
     "type": "pay-invoice",
     "object": { "type": "invoice", "id": "inv_7Q2M9X4K" },
-    "initiator": "billing-app"
+    "initiator": "billing-app",
+    "started": { "trigger": "chat", "confirmed_at": 1793352585 }
   },
-  "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
-  "depth": 0,
   "limits": [
     {
       "name": "payout-total",

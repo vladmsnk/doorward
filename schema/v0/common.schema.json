@@ -27,7 +27,7 @@
       "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
     },
     "id": {
-      "description": "Opaque identifier issued by the box (grant, task, offer, decision, approval). By convention it starts with a type prefix such as grt_ or tsk_.",
+      "description": "Opaque identifier issued by the box (grant, task, decision, approval). By convention it starts with a type prefix such as grt_ or tsk_.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
     },
@@ -56,6 +56,25 @@
         "sub": { "type": "string", "minLength": 1, "maxLength": 255 }
       },
       "additionalProperties": false
+    },
+    "approvers": {
+      "description": "Who may approve: the task's own user, or members of groups at an identity provider.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["user", "group"] },
+        "issuer": { "type": "string", "format": "uri" },
+        "groups": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "kind": { "const": "group" } } },
+      "then": { "required": ["issuer", "groups"] },
+      "else": { "properties": { "issuer": false, "groups": false } }
     },
     "numericDate": {
       "description": "Seconds since the Unix epoch (RFC 7519 §2).",
@@ -98,8 +117,8 @@
       "type": ["string", "number", "boolean"]
     },
     "sensitivity": {
-      "description": "Sensitivity tier of an operation. The tier sets the grant lifetime, whether approval is needed, whether re-delegation is allowed and what happens on failure. Operations of the critical tier are the critical operations: they never run on a standing grant.",
-      "enum": ["low", "medium", "high", "critical"]
+      "description": "Tier of an operation. read runs on any valid grant. write runs too, and the record is kept for review. critical never runs on a standing grant: a person approves the exact call first.",
+      "enum": ["read", "write", "critical"]
     },
     "constraintBounds": {
       "description": "The ready-made constraint types. Every bound listed for a field must hold; a constrained field missing from the call fails the check. Each type can be compared with a narrower one, which is what makes 'request ⊆ grant' and narrowing on delegation decidable.",
@@ -124,7 +143,7 @@
       "unevaluatedProperties": false
     },
     "constraintTemplate": {
-      "description": "Constraint on one field, as written in a boundary or a task type. task_object: true means the field must equal the ID of the task's object; the STS resolves it to equals when it issues the grant.",
+      "description": "Constraint on one field, as written in an agent or a task type. task_object: true means the field must equal the ID of the task's object; the STS resolves it to equals when it issues the grant.",
       "type": "object",
       "$ref": "#/$defs/constraintBounds",
       "properties": {
@@ -134,7 +153,7 @@
       "unevaluatedProperties": false
     },
     "permission": {
-      "description": "What may be called, where, and with which argument values, as written in a boundary or a task type.",
+      "description": "What may be called, where, and with which argument values, as written in an agent or a task type.",
       "type": "object",
       "required": ["locations", "actions"],
       "properties": {
@@ -185,7 +204,7 @@
       "additionalProperties": false
     },
     "limit": {
-      "description": "Budget shared by every grant of one task: the limit holds in total, however the task is delegated. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts.",
+      "description": "Budget of one task. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts.",
       "type": "object",
       "required": ["name", "kind", "max"],
       "properties": {
@@ -213,23 +232,7 @@
           }
         }
       ]
-    },
-    "delegation": {
-      "description": "Who may receive a narrower grant from this one, and how deep the chain may go. Absent means no delegation. Recipients are always listed: there is no 'any agent'.",
-      "type": "object",
-      "required": ["max_depth"],
-      "properties": {
-        "max_depth": { "type": "integer", "minimum": 0, "maximum": 8 },
-        "recipients": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/name" },
-          "minItems": 1,
-          "uniqueItems": true
-        }
-      },
-      "additionalProperties": false,
-      "if": { "properties": { "max_depth": { "minimum": 1 } } },
-      "then": { "required": ["recipients"] }
     }
+
   }
 }

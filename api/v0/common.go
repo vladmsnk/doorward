@@ -48,19 +48,19 @@ type SubjectID struct {
 	Sub    string `json:"sub"`
 }
 
-// Sensitivity is the tier of an operation. Operations of the critical tier
-// never run on a standing grant.
+// Sensitivity is the tier of an operation. read runs on any valid grant;
+// write runs too, and the record is kept for review; critical never runs on
+// a standing grant: a person approves the exact call first.
 type Sensitivity string
 
 const (
-	SensitivityLow      Sensitivity = "low"
-	SensitivityMedium   Sensitivity = "medium"
-	SensitivityHigh     Sensitivity = "high"
+	SensitivityRead     Sensitivity = "read"
+	SensitivityWrite    Sensitivity = "write"
 	SensitivityCritical Sensitivity = "critical"
 )
 
 // Permission is what may be called, where, and with which argument values, as
-// written in a boundary or a task type. Its constraints may still refer to the
+// written in an agent or a task type. Its constraints may still refer to the
 // task's object; the STS resolves them into an AuthorizationDetail.
 type Permission struct {
 	Locations   []string                      `json:"locations"`
@@ -109,7 +109,7 @@ const (
 	LimitSum LimitKind = "sum"
 )
 
-// Limit is a budget shared by every grant of one task.
+// Limit is a budget of one task.
 type Limit struct {
 	Name string    `json:"name"`
 	Kind LimitKind `json:"kind"`
@@ -118,13 +118,6 @@ type Limit struct {
 	Field string `json:"field,omitempty"`
 	// Actions, when set, restricts the operations the limit counts.
 	Actions []string `json:"actions,omitempty"`
-}
-
-// Delegation says who may receive a narrower grant, and how deep the chain may
-// go.
-type Delegation struct {
-	MaxDepth   int      `json:"max_depth"`
-	Recipients []string `json:"recipients,omitempty"`
 }
 
 // TimestampLayout is the one way a record writes a time: UTC, millisecond

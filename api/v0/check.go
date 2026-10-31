@@ -6,15 +6,14 @@ import (
 	"regexp"
 	"slices"
 	"sort"
-	"strings"
 )
 
 // The schemas check each document's shape. The Check methods add the rules
 // JSON Schema cannot express: fields that must agree with each other, times
 // that must come in order, names that must be unique. They assume the
 // document has already passed its schema. Rules that need a second document,
-// such as a task type lying within a boundary, belong to the features that
-// load both.
+// such as a task type lying within an agent's permissions, belong to the
+// features that load both.
 
 type problems []error
 
@@ -28,41 +27,36 @@ func (g Grant) Check() error {
 	if g.Expiry <= g.IssuedAt {
 		p.add("exp must be after iat")
 	}
-	if g.NotBefore != 0 && (g.NotBefore < g.IssuedAt || g.NotBefore >= g.Expiry) {
-		p.add("nbf must lie between iat and exp")
+	if c := g.Task.Started.ConfirmedAt; c != 0 && c > g.IssuedAt {
+		p.add("task.started.confirmed_at is after iat: the user cannot confirm a task after its grant was issued")
 	}
-	if g.AuthTime > g.IssuedAt {
-		p.add("auth_time is after iat: the user cannot sign in after the grant was issued")
+	// A user task names the user and where that identity came from; a
+	// service task is issued to the agent itself.
+	if g.Subject == g.ClientID && g.SubjectID != nil {
+		p.add("sub equals client_id, so this is a service task and carries no sub_id")
 	}
-	if g.Depth == 0 && g.Root != g.ID {
-		p.add("a root grant (depth 0) must name itself as root")
+	if g.Subject != g.ClientID && g.SubjectID == nil {
+		p.add("sub is a user, so sub_id must say which identity provider named them")
 	}
-	if g.Depth > 0 && (g.Root == g.ID || g.Parent == g.ID) {
-		p.add("a grant at depth %d cannot be its own root or parent", g.Depth)
-	}
-	if n := g.Actor.chainLength(); n > g.Depth+1 {
-		p.add("act nests %d agents, more than depth %d allows", n, g.Depth)
-	}
-	locations, actions := detailSets(g.AuthorizationDetails)
-	if !sameSet(g.Audience, locations) {
-		p.add("aud must list exactly the locations of authorization_details")
-	}
-	for _, s := range strings.Fields(g.Scope) {
-		if !actions[s] {
-			p.add("scope %q names an operation authorization_details does not", s)
+	switch g.Task.Started.Trigger {
+	case TriggerUI, TriggerChat:
+		if g.Task.Initiator == "" {
+			p.add("a task a user started names the application that started it")
 		}
+	default:
+		if g.Task.Initiator != "" {
+			p.add("a %s task has no initiator: the agent started it", g.Task.Started.Trigger)
+		}
+		if g.Task.Started.ConfirmedAt != 0 {
+			p.add("a %s task has nobody to confirm it", g.Task.Started.Trigger)
+		}
+	}
+	if !sameSet(g.Audience, detailLocations(g.AuthorizationDetails)) {
+		p.add("aud must list exactly the locations of authorization_details")
 	}
 	p.checkDetails(g.AuthorizationDetails)
 	p.checkLimits(g.Limits)
 	return p.err()
-}
-
-func (a Actor) chainLength() int {
-	n := 1
-	for next := a.Actor; next != nil; next = next.Actor {
-		n++
-	}
-	return n
 }
 
 // Check enforces the rules of a decision record that span fields.
@@ -91,17 +85,6 @@ func (d Decision) Check() error {
 	case OutcomeApprovalRequired:
 		if !slices.Equal(failed, []CheckName{CheckSensitivity}) {
 			p.add("a held call fails the sensitivity check and nothing else, not %v", failed)
-		}
-	}
-	if g := d.Grant; g != nil {
-		if g.Depth == 0 && (g.Parent != "" || g.Root != g.ID) {
-			p.add("grant: at depth 0 it is its own root and has no parent")
-		}
-		if g.Depth > 0 && g.Parent == "" {
-			p.add("grant: at depth %d it needs a parent", g.Depth)
-		}
-		if d.Principal != nil && len(d.Principal.Actors) > g.Depth {
-			p.add("principal lists %d earlier agents but the grant is at depth %d", len(d.Principal.Actors), g.Depth)
 		}
 	}
 	return p.err()
@@ -139,18 +122,18 @@ func (m Manifest) Check() error {
 	return p.err()
 }
 
-// Check enforces the rules of a boundary that span fields.
-func (b Boundary) Check() error {
+// Check enforces the rules of an agent that span fields.
+func (a Agent) Check() error {
 	var p problems
 	seen := make(map[AgentIdentity]bool)
-	for _, id := range b.Spec.Identities {
+	for _, id := range a.Spec.Identities {
 		if seen[id] {
 			p.add("identity %+v is listed twice", id)
 		}
 		seen[id] = true
 	}
-	p.checkPermissions(b.Spec.Permissions)
-	p.checkLimits(b.Spec.Limits)
+	p.checkPermissions(a.Spec.Permissions)
+	p.checkLimits(a.Spec.Limits)
 	return p.err()
 }
 
@@ -162,20 +145,27 @@ func (t TaskType) Check() error {
 	return p.err()
 }
 
-// Check enforces the rules of an offer that span fields.
-func (o Offer) Check() error {
+// Check enforces the rules of a task request that span fields.
+func (r TaskRequest) Check() error {
 	var p problems
-	if o.Expiry <= o.IssuedAt {
-		p.add("exp must be after iat")
+	for _, t := range r.AuthorizationDetails {
+		switch t.Trigger {
+		case TriggerUI, TriggerChat:
+			if r.RequestedTokenType != TokenTypeTaskTicket {
+				p.add("an application starting a user task asks for a ticket, not %s", r.RequestedTokenType)
+			}
+		default:
+			if r.RequestedTokenType != TokenTypeAccessToken {
+				p.add("an agent starting a %s task asks for the grant itself", t.Trigger)
+			}
+			if r.Confirmation != "" {
+				p.add("a %s task has nobody to confirm it", t.Trigger)
+			}
+			if r.SubjectTokenType != TokenTypeJWT {
+				p.add("a %s task is started with the agent's own token, type jwt", t.Trigger)
+			}
+		}
 	}
-	if o.Redeemed != 0 && (o.Redeemed < o.IssuedAt || o.Redeemed > o.Expiry) {
-		p.add("redeemed must lie between iat and exp")
-	}
-	if o.From == o.To {
-		p.add("an agent cannot make an offer to itself")
-	}
-	p.checkDetails(o.AuthorizationDetails)
-	p.checkLimits(o.Limits)
 	return p.err()
 }
 
@@ -188,8 +178,15 @@ func (a Approval) Check() error {
 	voted := make(map[SubjectID]bool)
 	approvals, rejections := 0, 0
 	for i, v := range a.Votes {
-		if v.Approver == a.User {
-			p.add("vote %d: the user the agent acts for cannot approve the call", i)
+		switch a.Route.Kind {
+		case ApproverUser:
+			if a.User == nil || v.Approver != *a.User {
+				p.add("vote %d: on a user route only the task's user votes", i)
+			}
+		case ApproverGroup:
+			if a.User != nil && v.Approver == *a.User {
+				p.add("vote %d: the user the agent acts for cannot approve the call on a group route", i)
+			}
 		}
 		if voted[v.Approver] {
 			p.add("vote %d: %s voted twice", i, v.Approver.Sub)
@@ -206,6 +203,9 @@ func (a Approval) Check() error {
 		} else {
 			rejections++
 		}
+	}
+	if a.Route.Kind == ApproverUser && a.Required != 1 {
+		p.add("a user route needs exactly 1 approval, not %d", a.Required)
 	}
 	switch a.Status {
 	case ApprovalApproved:
@@ -252,21 +252,18 @@ func (p *problems) checkLimits(limits []Limit) {
 	}
 }
 
-func detailSets(details []AuthorizationDetail) (locations []string, actions map[string]bool) {
+func detailLocations(details []AuthorizationDetail) []string {
 	seen := make(map[string]bool)
-	actions = make(map[string]bool)
+	var out []string
 	for _, d := range details {
 		for _, l := range d.Locations {
 			if !seen[l] {
 				seen[l] = true
-				locations = append(locations, l)
+				out = append(out, l)
 			}
 		}
-		for _, a := range d.Actions {
-			actions[a] = true
-		}
 	}
-	return locations, actions
+	return out
 }
 
 func sameSet(a, b []string) bool {

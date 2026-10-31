@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/agent.schema.json",
+  "title": "Agent",
+  "description": "One agent: how it proves who it is, who owns it, and the most it may ever be granted. metadata.name is the agent's name. A task grant is the task type intersected with this document, never more.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "$ref": "common.schema.json#/$defs/apiVersion" },
+    "kind": { "const": "Agent" },
+    "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "required": ["owner", "identities", "task_types", "max_sensitivity", "max_ttl", "permissions"],
+      "properties": {
+        "owner": {
+          "description": "Who answers for this agent. For a service task, the owner is the accountable party in every record.",
+          "$ref": "common.schema.json#/$defs/owner"
+        },
+        "identities": {
+          "description": "How the agent proves who it is. The STS issues a grant only to a caller that presents one of these.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/identity" },
+          "minItems": 1
+        },
+        "task_types": {
+          "description": "Task types this agent may run.",
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/name" },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "max_sensitivity": {
+          "description": "Highest tier of operation this agent may be granted.",
+          "$ref": "common.schema.json#/$defs/sensitivity"
+        },
+        "max_ttl": {
+          "description": "Longest lifetime of any grant to this agent.",
+          "$ref": "common.schema.json#/$defs/duration"
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/permission" },
+          "minItems": 1
+        },
+        "limits": {
+          "description": "Per-task ceilings: a task type's limit with the same name is capped at this max.",
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/limit" }
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "identity": {
+      "description": "One way the agent may authenticate. registration: the box's own one-time token at deploy, with the key made in the sidecar. jwt: a token with an issuer and a subject, which covers an identity provider's client, a Kubernetes service account, a cloud workload identity or a SPIFFE JWT-SVID.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["registration", "jwt"] },
+        "issuer": { "type": "string", "format": "uri" },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "type": { "const": "jwt" } } },
+      "then": { "required": ["issuer", "subject"] },
+      "else": { "properties": { "issuer": false, "subject": false } }
+    }
+  }
+}
