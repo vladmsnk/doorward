@@ -38,6 +38,38 @@ Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
 PostgreSQL 16: `make test-db` starts a throwaway one and prints the
 `AGENTBOX_TEST_POSTGRES_DSN` to export; without that variable they skip.
 
+## Admin API
+
+Configuration enters the box through the Admin API, and only there. Every
+write is validated against the contract, then against the other documents
+(a mandate's operations exist, a mandate lies within every agent that may
+hold it, no identity is claimed twice), and stored as a new version. Nothing
+is overwritten; `…/versions` shows who changed what and when.
+
+```sh
+export AGENTBOX_DB=postgres://… AGENTBOX_ADMIN_TOKEN=$(openssl rand -hex 16)
+agentbox serve                                   # Admin API on :8081
+
+H="Authorization: Bearer $AGENTBOX_ADMIN_TOKEN"
+curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \
+  --data-binary @examples/v0/config/manifest-payments-api.yaml \
+  localhost:8081/admin/v0/manifests/payments-api
+curl -sS -H "$H" localhost:8081/admin/v0/mandates/invoices/versions
+curl -sS -X POST -H "$H" -d '{"owner":{"team":"support-tools"}}' \
+  localhost:8081/admin/v0/agents/desk-helper-7f3a/verify
+```
+
+| Route | Does |
+|---|---|
+| `PUT /admin/v0/{manifests\|agents\|mandates}/{name}` | validate and store the next version (YAML or JSON body) |
+| `GET …/{name}`, `GET …` | the current version; all current documents of a kind |
+| `GET …/{name}/versions`, `…/versions/{n}` | the history; one version |
+| `POST …/{name}/disable`, `/enable` | manifests and mandates; a manifest that enabled mandates name cannot be disabled |
+| `POST /admin/v0/agents/{name}/verify`, `/suspend` | an agent's status; suspending revokes its live grants |
+
+Authentication is a bootstrap bearer token for now (`AGENTBOX_ADMIN_TOKEN`);
+administrators from the identity provider come with the consent work.
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the

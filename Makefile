@@ -38,9 +38,10 @@ lint:
 # The store tests need PostgreSQL: point AGENTBOX_TEST_POSTGRES_DSN at an
 # empty database first; without it they skip. `make test-db` starts a
 # throwaway PostgreSQL 16 for them (needs the postgresql-16 package).
+# -p 1: the database tests of different packages share one database.
 .PHONY: test
 test:
-	$(GO) test -race -count=1 $(PKGS)
+	$(GO) test -race -count=1 -p 1 $(PKGS)
 
 PGDATA ?= .pg
 PGPORT ?= 55432

@@ -19,7 +19,8 @@ import (
 // The tests need a real PostgreSQL: the chain lock, the version lock and the
 // conditional counter update are what is being tested, and only the database
 // can arbitrate them. Point AGENTBOX_TEST_POSTGRES_DSN at an empty database;
-// without it the tests skip.
+// without it the tests skip. Every package that uses the database truncates
+// it first, so `make test` runs packages one at a time (-p 1).
 func open(t *testing.T) *postgres.Store {
 	t.Helper()
 	dsn := os.Getenv("AGENTBOX_TEST_POSTGRES_DSN")
@@ -62,8 +63,8 @@ func TestMigrateIsIdempotent(t *testing.T) {
 	if err := s.Pool().QueryRow(context.Background(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if n != 1 {
-		t.Errorf("%d migrations recorded, want 1", n)
+	if want := len(postgres.Migrations()); n != want {
+		t.Errorf("%d migrations recorded, want %d", n, want)
 	}
 }
 

@@ -16,6 +16,20 @@ import (
 //go:embed migrations/*.sql
 var migrations embed.FS
 
+// Migrations lists the embedded migration files, in order.
+func Migrations() []string {
+	entries, err := fs.ReadDir(migrations, "migrations")
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Migrate applies every migration file not yet recorded in schema_migrations,
 // in order, each in its own transaction. Files are named NNNN_name.sql.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
