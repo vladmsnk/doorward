@@ -107,6 +107,9 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail("%v", err)
 	}
+	if g.Confirmation != nil {
+		return fail("claims: cnf binds the grant to a key, but the box does not check proofs of possession yet, so it issues Bearer grants; remove cnf")
+	}
 	now := time.Now()
 	if *issuer != "" {
 		g.Issuer = *issuer

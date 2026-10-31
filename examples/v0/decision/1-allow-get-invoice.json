@@ -24,12 +24,12 @@
     { "name": "request", "result": "pass" },
     { "name": "signature", "result": "pass" },
     { "name": "status", "result": "pass" },
-    { "name": "pop", "result": "pass" },
+    { "name": "pop", "result": "skip", "detail": "proof of possession is not checked yet" },
     { "name": "audience", "result": "pass" },
     { "name": "time", "result": "pass" },
     { "name": "subset", "result": "pass" },
     { "name": "sensitivity", "result": "pass" },
-    { "name": "policy", "result": "pass" },
+    { "name": "policy", "result": "skip" },
     { "name": "limits", "result": "pass" }
   ],
   "pdp": {

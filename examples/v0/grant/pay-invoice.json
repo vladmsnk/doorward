@@ -8,7 +8,6 @@
   "exp": 1793353500,
   "jti": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
   "act": { "sub": "invoice-assistant" },
-  "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000000" },
   "mandate": "invoices",
   "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D",
   "authorization_details": [

@@ -305,6 +305,12 @@ func TestGrantMintAndVerify(t *testing.T) {
 		t.Errorf("verify under a disabled mandate: %d\n%s", code, out)
 	}
 
+	// P6: the box issues Bearer grants; claims that bind a key are refused.
+	bound := writeClaims(t, "bound.json", func(g map[string]any) { g["cnf"] = map[string]any{"jkt": strings.Repeat("k", 43)} })
+	if code, _, stderr := mint("--consent", consent, bound); code != 1 || !strings.Contains(stderr, "remove cnf") {
+		t.Errorf("mint with cnf: %d %s", code, stderr)
+	}
+
 	// Usage errors.
 	if code, _, _ := runCLI("grant"); code != 2 {
 		t.Errorf("grant with no command: %d", code)

@@ -260,7 +260,7 @@ func TestInvalidDocuments(t *testing.T) {
 		{"aud as a string", userGrant, schema.Grant, []edit{{set: "/aud", value: "https://payments.example.internal"}}, "type"},
 		{"empty aud", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{}}}, "minItems"},
 		{"exp as a date string", userGrant, schema.Grant, []edit{{set: "/exp", value: "2026-10-30T10:00:00Z"}}, "type"},
-		{"short key thumbprint", userGrant, schema.Grant, []edit{{set: "/cnf/jkt", value: "abc"}}, "pattern"},
+		{"short key thumbprint", userGrant, schema.Grant, []edit{{set: "/cnf", value: map[string]any{"jkt": "abc"}}}, "pattern"},
 		{"unknown claim", userGrant, schema.Grant, []edit{{set: "/roles", value: []any{"admin"}}}, "additionalProperties"},
 		{"task claim is gone", userGrant, schema.Grant, []edit{{set: "/task", value: map[string]any{"id": "tsk_0000000000"}}}, "additionalProperties"},
 		{"delegation claims are not in v0", userGrant, schema.Grant, []edit{{set: "/parent", value: "grt_01JBXR4T7Q2M9X4KZ8D3F6H1ZZ"}}, "additionalProperties"},

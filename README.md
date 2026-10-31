@@ -109,7 +109,7 @@ record, in the record's order, and stops at the first failure:
 |---|---|
 | `signature` | `grant_missing`, `grant_malformed`, `grant_signature_invalid` |
 | `status` | `grant_revoked`: the box has no record of the grant, revoked it, or it is a used single-use grant; its agent is suspended; its consent is revoked or expired; its mandate is disabled |
-| `pop` | recorded as `skip` until the sidecar sends DPoP proofs |
+| `pop` | recorded as `skip`: the box issues Bearer grants and does not check proofs of possession yet. A grant that carries `cnf` anyway fails with `pop_missing` |
 | `audience` | `audience_mismatch` |
 | `time` | `grant_expired`, `grant_not_yet_valid` (30 s of clock skew allowed) |
 

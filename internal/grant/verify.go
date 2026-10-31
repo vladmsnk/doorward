@@ -142,8 +142,14 @@ func (v *Verifier) Verify(ctx context.Context, tok, audience string) (Result, er
 	}
 	r.pass(v0.CheckStatus, detail)
 
-	// pop: proof that the caller holds the key in cnf. Recorded as skipped
-	// until the sidecar sends DPoP proofs.
+	// pop: proof that the caller holds the key in cnf. The box does not
+	// check proofs yet and issues no grant with cnf, so a grant without it
+	// records the check as skipped. A grant that claims a binding nobody
+	// would check fails: honouring it as a Bearer token would make the
+	// binding a lie.
+	if g.Confirmation != nil {
+		return r.fail(v0.CheckPoP, v0.ReasonPoPMissing, "the grant is bound to key %s, and this box does not check proofs of possession yet", g.Confirmation.JKT), nil
+	}
 	r.skip(v0.CheckPoP, "proof of possession is not checked yet")
 
 	// audience: the grant was issued for the resource being called.
