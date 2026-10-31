@@ -2,24 +2,24 @@
 
 A single distribution for authorizing AI agents: who an agent is, what it
 may do, for whom, on whose consent, and which calls a person must approve.
-It is built for a company that has none of the usual infrastructure: no IdP with
-token exchange, no policy engine, no service mesh. Everything is built in,
-every built-in part can be replaced through a standard interface, and the box
-grows level by level, L1 to L5, collecting the evidence for each level as it
-goes.
+It sits on the resource side, in front of a company's own tools, because
+that is the control point a company keeps when the agents themselves are
+hosted by someone else. Agentbox is the decision, approval and evidence
+core; its gateway and authorization server are thin built-in parts for a
+company that has neither, and each can be replaced through a standard
+interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
 
 > `agentbox` is a working name.
 
 ## Status
 
-Stage 0, the foundation:
-
-| Feature | | Status |
-|---|---|---|
-| F01 | Repository and CI | done; the first signed test release runs on the first tag |
-| F02 | Schemas v0 | done |
-| F03 | Negative test catalogue | not started |
-| F04 | Test bench | not started |
+The contract, storage, Admin API, signing keys and grant verification are
+on main; the subset and sensitivity checks are on branches. Nothing yet
+sits in front of a real tool: the next steps close the fail-open paths,
+finish the decision core, and then build one end-to-end slice in which an
+off-the-shelf MCP client connects, a user consents, and a call is refused
+or approved. The order and the reasons are in
+[docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Quick start
 
@@ -227,8 +227,9 @@ with the same scope.
 ### How an agent comes in
 
 An agent is an OAuth client of the box, as every MCP client already is.
-An administrator registers it, or it registers itself (dynamic client
-registration, or client metadata at a URL). A self-registered agent is
+An administrator registers it, or it introduces itself: by a client
+metadata document at a URL, as MCP clients do, or by dynamic client
+registration, kept for older clients. A self-registered agent is
 **unverified**: it may request only mandates marked `open`, under the small
 ceiling every unverified agent gets, until an administrator reviews it,
 names its owner and marks it **verified**. A **suspended** agent is refused
@@ -282,7 +283,10 @@ ask users only for the open, read-only mandate.
 - **OAuth and OIDC shapes.** The grant is an RFC 9068 JWT access token
   (`typ: at+jwt`, with `client_id`), so ordinary resource servers can check
   it. Users are named with their identity provider (`sub_id`, RFC 9493),
-  since an OIDC `sub` is unique only per issuer. A grant binds to a DPoP key.
+  since an OIDC `sub` is unique only per issuer. A grant is a Bearer token
+by default, as MCP clients send it; proof of possession (DPoP) will be
+required per agent or mandate, and a grant carries `cnf` only where the box
+checks the proof.
   Agents authenticate with the box's own registration or with any JWT that
   has an issuer and a subject: an IdP client, a Kubernetes service account,
   a workload identity.
@@ -318,14 +322,22 @@ but are placeholders, not real values (F05, F10).
 
 ### Decisions for the first implementation
 
-- **The gateway holds a critical call** while its approval is pending. The
-  agent gets a pending answer and polls; once approved, the gateway runs the
-  stored call on the single-use grant. No agent has to cooperate.
+- **Approve, then retry.** A critical call is answered at once: pending,
+  with a link to the approval. Once a person approves that exact call, the
+  client's retry of it, matched by its action hash, runs exactly once under
+  a single-use grant the box keeps. The gateway never holds a call open for
+  the length of an approval and never runs a stored call on its own.
+- **Bearer grants by default**, short-lived and checked for audience and
+  status on every call; proof of possession is a per-agent or per-mandate
+  requirement, enforced end to end where it is required.
+- **One entry per operation** in a grant, so a reader that checks each
+  `authorization_details` entry on its own reaches the same answer as the
+  box.
 - **Checks the first version does not run are recorded as `skip`**: `pop`
-  (no DPoP yet) and `policy` (the mandate is the policy). `status` reads
-  the box's own grant records; a published status list comes later.
-- **Upstream credentials** come from the box's secret store, named by
-  `secret_ref`; the first store is a file or Kubernetes Secrets.
+  and `policy` (the mandate is the policy). `status` reads the box's own
+  records; a published status list comes later.
+- **Upstream credentials** come from the box's sealed secret store, named
+  by `secret_ref`, and the client's token is never passed on.
 
 ### Later
 
