@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/taskrequest.schema.json",
+  "title": "TaskRequest",
+  "description": "What an application sends the STS to start a task: an OAuth 2.0 token exchange (RFC 8693), shown as JSON. On the wire it is form-encoded, with authorization_details as a JSON string (RFC 9396). The user's identity, sign-in strength and session come from subject_token; the response is a one-time ticket for the named agent.",
+  "type": "object",
+  "required": ["grant_type", "subject_token", "subject_token_type", "requested_token_type", "authorization_details"],
+  "properties": {
+    "grant_type": { "const": "urn:ietf:params:oauth:grant-type:token-exchange" },
+    "subject_token": {
+      "description": "The user's identity: an ID token from one of the application's idps, or a JWT the application signed itself when its users are self_asserted.",
+      "type": "string",
+      "minLength": 1
+    },
+    "subject_token_type": {
+      "enum": ["urn:ietf:params:oauth:token-type:id_token", "urn:ietf:params:oauth:token-type:jwt"]
+    },
+    "requested_token_type": {
+      "description": "Asks for a task ticket.",
+      "const": "urn:agentbox:params:oauth:token-type:task-ticket"
+    },
+    "authorization_details": {
+      "description": "Exactly one agent_task entry: which task, about which object, for which agent.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/agentTask" },
+      "minItems": 1,
+      "maxItems": 1
+    },
+    "client_assertion_type": {
+      "const": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
+    },
+    "client_assertion": {
+      "description": "The application's signed JWT, for private_key_jwt (RFC 7523 §2.2). Applications that authenticate another way send neither field.",
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "additionalProperties": false,
+  "dependentRequired": {
+    "client_assertion": ["client_assertion_type"],
+    "client_assertion_type": ["client_assertion"]
+  },
+  "$defs": {
+    "agentTask": {
+      "description": "The task to start. The scope comes from the task type, never from the request.",
+      "type": "object",
+      "required": ["type", "task_type", "object_id", "agent"],
+      "properties": {
+        "type": { "const": "agent_task" },
+        "task_type": { "$ref": "common.schema.json#/$defs/name" },
+        "object_id": {
+          "description": "ID of the object the task is about; it must match the task type's id_pattern.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "agent": {
+          "description": "The agent the ticket is for.",
+          "$ref": "common.schema.json#/$defs/name"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

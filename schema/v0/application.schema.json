@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/application.schema.json",
+  "title": "Application",
+  "description": "An application that may start tasks for its users: how it proves who it is to the STS, and whose word the STS takes for who the user is. metadata.name is the name task types list as initiators.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "$ref": "common.schema.json#/$defs/apiVersion" },
+    "kind": { "const": "Application" },
+    "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "required": ["owner", "authentication", "users"],
+      "properties": {
+        "owner": {
+          "description": "Who answers for this application.",
+          "$ref": "common.schema.json#/$defs/owner"
+        },
+        "authentication": {
+          "description": "How the application authenticates to the STS. private_key_jwt: it signs a JWT with its own key (RFC 7523), checked against jwks_uri or jwks. oauth_client: it is a client at an identity provider and presents that provider's token.",
+          "type": "object",
+          "required": ["method"],
+          "properties": {
+            "method": { "enum": ["private_key_jwt", "oauth_client"] },
+            "jwks_uri": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "jwks": { "$ref": "#/$defs/jwks" },
+            "issuer": { "type": "string", "format": "uri" },
+            "client_id": { "$ref": "common.schema.json#/$defs/clientId" }
+          },
+          "additionalProperties": false,
+          "allOf": [
+            {
+              "if": { "properties": { "method": { "const": "private_key_jwt" } } },
+              "then": {
+                "properties": { "issuer": false, "client_id": false },
+                "oneOf": [{ "required": ["jwks_uri"] }, { "required": ["jwks"] }]
+              }
+            },
+            {
+              "if": { "properties": { "method": { "const": "oauth_client" } } },
+              "then": {
+                "required": ["issuer", "client_id"],
+                "properties": { "jwks_uri": false, "jwks": false }
+              }
+            }
+          ]
+        },
+        "users": {
+          "description": "Whose word the STS takes for who the user is. At least one source.",
+          "type": "object",
+          "properties": {
+            "idps": {
+              "description": "Identity providers whose ID tokens the application may pass as the user's identity.",
+              "type": "array",
+              "items": { "type": "string", "format": "uri" },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "self_asserted": {
+              "description": "The application's own signed statement names the user, for companies whose identity provider issues no tokens the STS can check. Needs private_key_jwt.",
+              "const": true
+            }
+          },
+          "additionalProperties": false,
+          "minProperties": 1
+        }
+      },
+      "additionalProperties": false,
+      "if": {
+        "required": ["users"],
+        "properties": { "users": { "required": ["self_asserted"] } }
+      },
+      "then": {
+        "properties": { "authentication": { "properties": { "method": { "const": "private_key_jwt" } } } }
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "jwks": {
+      "description": "JSON Web Key Set (RFC 7517) with the application's public keys.",
+      "type": "object",
+      "required": ["keys"],
+      "properties": {
+        "keys": {
+          "type": "array",
+          "items": { "type": "object", "required": ["kty"] },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

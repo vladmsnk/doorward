@@ -23,12 +23,6 @@
   "action_hash": "sha-256:example-hash-not-computed-action-0000000003",
   "sensitivity": "critical",
   "outcome": "approval_required",
-  "reasons": [
-    {
-      "code": "approval_required",
-      "message": "pay_invoice is critical: it runs only on a single-use grant after two approvals"
-    }
-  ],
   "checks": [
     { "name": "request", "result": "pass" },
     { "name": "signature", "result": "pass" },

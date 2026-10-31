@@ -56,7 +56,8 @@ type Principal struct {
 	Actors []string `json:"actors,omitempty"`
 }
 
-// GrantRef points at the grant a decision was made against.
+// GrantRef points at the grant a decision was made against, copied at
+// decision time so the record reads on its own.
 type GrantRef struct {
 	ID     string  `json:"id"`
 	Root   string  `json:"root"`
@@ -111,7 +112,6 @@ const (
 	ReasonDelegationInvalid     ReasonCode = "delegation_invalid"
 	ReasonPolicyDenied          ReasonCode = "policy_denied"
 	ReasonLimitExceeded         ReasonCode = "limit_exceeded"
-	ReasonApprovalRequired      ReasonCode = "approval_required"
 	ReasonTimeUntrusted         ReasonCode = "time_untrusted"
 	ReasonInternalError         ReasonCode = "internal_error"
 )

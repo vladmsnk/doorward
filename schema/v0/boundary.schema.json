@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/boundary.schema.json",
   "title": "Boundary",
-  "description": "The most one agent may ever be granted: the boundary is a maximum. metadata.name is the agent's name. A task grant is the task type intersected with this boundary, never more.",
+  "description": "One agent: how it proves who it is, who owns it, and the most it may ever be granted. metadata.name is the agent's name. A task grant is the task type intersected with this boundary, never more.",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "spec"],
   "properties": {
@@ -11,17 +11,17 @@
     "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
     "spec": {
       "type": "object",
-      "required": ["owner", "task_types", "max_sensitivity", "max_ttl", "permissions"],
+      "required": ["owner", "identities", "task_types", "max_sensitivity", "max_ttl", "permissions"],
       "properties": {
         "owner": {
           "description": "Who answers for this agent.",
-          "type": "object",
-          "required": ["team"],
-          "properties": {
-            "team": { "$ref": "common.schema.json#/$defs/name" },
-            "contact": { "type": "string", "format": "email" }
-          },
-          "additionalProperties": false
+          "$ref": "common.schema.json#/$defs/owner"
+        },
+        "identities": {
+          "description": "How the agent proves who it is. The STS issues a grant only to a caller that presents one of these.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/identity" },
+          "minItems": 1
         },
         "task_types": {
           "description": "Task types this agent may be started for.",
@@ -53,5 +53,42 @@
       "additionalProperties": false
     }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "$defs": {
+    "identity": {
+      "description": "One way the agent may authenticate. registration: the box's own one-time token at deploy, with the key made in the sidecar. oauth_client: a client at an identity provider such as Okta, Entra or Keycloak. jwt: a workload token with an issuer and a subject, such as a Kubernetes service account, a cloud workload identity or a SPIFFE JWT-SVID. spiffe: a SPIFFE ID presented as an X.509 certificate over mTLS.",
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["registration", "oauth_client", "jwt", "spiffe"] },
+        "issuer": { "type": "string", "format": "uri" },
+        "client_id": { "$ref": "common.schema.json#/$defs/clientId" },
+        "subject": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "id": {
+          "description": "SPIFFE ID.",
+          "type": "string",
+          "pattern": "^spiffe://[a-z0-9._-]+(/[A-Za-z0-9._-]+)*$"
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "registration" } } },
+          "then": { "properties": { "issuer": false, "client_id": false, "subject": false, "id": false } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "oauth_client" } } },
+          "then": { "required": ["issuer", "client_id"], "properties": { "subject": false, "id": false } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "jwt" } } },
+          "then": { "required": ["issuer", "subject"], "properties": { "client_id": false, "id": false } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "spiffe" } } },
+          "then": { "required": ["id"], "properties": { "issuer": false, "client_id": false, "subject": false } }
+        }
+      ]
+    }
+  }
 }

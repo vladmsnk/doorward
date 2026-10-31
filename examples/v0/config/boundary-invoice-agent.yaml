@@ -7,6 +7,13 @@ spec:
   owner:
     team: payments
     contact: payments-oncall@example.com
+  # Either credential identifies this agent to the STS.
+  identities:
+    - type: oauth_client
+      issuer: https://login.example.com
+      client_id: 0oa8f2k1LmN3pQ4rS5t6
+    - type: spiffe
+      id: spiffe://example.internal/ns/payments/sa/invoice-agent
   task_types: [pay-invoice]
   max_sensitivity: critical
   max_ttl: 30m

@@ -2,12 +2,14 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/grant.schema.json",
   "title": "Grant",
-  "description": "Claims of an agent grant: a short-lived JWT the STS issues for one task, bound to the sidecar's key and placed in the task's grant tree. The agent's model never sees it.",
+  "description": "Claims of an agent grant: a short-lived JWT access token the STS issues for one task, bound to the sidecar's key and placed in the task's grant tree. It is a JWT access token in the sense of RFC 9068, sent with the header typ at+jwt, so ordinary OAuth resource servers can validate it. The agent's model never sees it.",
   "type": "object",
   "required": [
     "iss",
     "sub",
+    "sub_id",
     "aud",
+    "client_id",
     "iat",
     "exp",
     "jti",
@@ -15,8 +17,7 @@
     "authorization_details",
     "task",
     "root",
-    "depth",
-    "flow"
+    "depth"
   ],
   "properties": {
     "iss": {
@@ -25,38 +26,80 @@
       "format": "uri"
     },
     "sub": {
-      "description": "The user on whose behalf the agent acts. sub and act are kept separate.",
+      "description": "The user on whose behalf the agent acts, unique across every identity provider the box trusts. sub and act are kept separate.",
       "type": "string",
       "minLength": 1,
       "maxLength": 255
     },
+    "sub_id": {
+      "description": "Where the user's identity came from: the identity provider and the subject it gave the user.",
+      "$ref": "common.schema.json#/$defs/subjectId"
+    },
     "aud": {
-      "description": "Resource servers that accept the grant.",
+      "description": "Resource servers that accept the grant: exactly the locations of authorization_details.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/audience" },
       "minItems": 1,
       "uniqueItems": true
     },
-    "iat": { "$ref": "#/$defs/numericDate" },
-    "nbf": { "$ref": "#/$defs/numericDate" },
-    "exp": { "$ref": "#/$defs/numericDate" },
+    "client_id": {
+      "description": "The OAuth client the grant was issued to: the agent, as the identity it authenticated with names it, or its agent name for registration identities (RFC 9068).",
+      "$ref": "common.schema.json#/$defs/clientId"
+    },
+    "scope": {
+      "description": "The operation names again, as OAuth scopes, for resource servers that read only scope. Never names an operation authorization_details does not.",
+      "type": "string",
+      "pattern": "^[\\x21\\x23-\\x5B\\x5D-\\x7E]+( [\\x21\\x23-\\x5B\\x5D-\\x7E]+)*$"
+    },
+    "iat": { "$ref": "common.schema.json#/$defs/numericDate" },
+    "nbf": { "$ref": "common.schema.json#/$defs/numericDate" },
+    "exp": { "$ref": "common.schema.json#/$defs/numericDate" },
     "jti": { "$ref": "common.schema.json#/$defs/id" },
+    "auth_time": {
+      "description": "When the user signed in at the identity provider, from the identity token the task started with.",
+      "$ref": "common.schema.json#/$defs/numericDate"
+    },
+    "acr": {
+      "description": "How strongly the user signed in (OIDC acr), from the same identity token.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
+    "amr": {
+      "description": "Methods the user signed in with (RFC 8176), from the same identity token.",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 64 },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "sid": {
+      "description": "The user's session at the identity provider. When the provider ends it, the STS revokes the task's grant tree.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 255
+    },
     "act": {
       "description": "The agent acting now; prior agents of a delegation chain are nested inside (RFC 8693 §4.1).",
       "$ref": "#/$defs/actor"
     },
     "cnf": {
-      "description": "Key the grant is bound to (RFC 9449 §6.1). Every grant from the box's own STS carries one; it is optional here only for clients that cannot hold a key, such as hosted agents run by a vendor.",
+      "description": "What the grant is bound to: a DPoP key (RFC 9449) or a TLS client certificate (RFC 8705), exactly one. Every grant from the box's own STS carries one; it is optional here only for clients that cannot hold a key, such as hosted agents run by a vendor.",
       "type": "object",
-      "required": ["jkt"],
       "properties": {
         "jkt": {
-          "description": "JWK SHA-256 thumbprint (RFC 7638), base64url.",
+          "description": "JWK SHA-256 thumbprint of the DPoP key (RFC 7638), base64url.",
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "x5t#S256": {
+          "description": "SHA-256 thumbprint of the client certificate, base64url.",
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{43}$"
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "minProperties": 1,
+      "maxProperties": 1
     },
     "authorization_details": {
       "type": "array",
@@ -87,7 +130,7 @@
       "additionalProperties": false
     },
     "root": {
-      "description": "jti of the task's root grant. Revoking it revokes the whole tree.",
+      "description": "jti of the task's root grant; the root grant names itself. Revoking it revokes the whole tree, and every grant of one tree carries the same root, so a chain from another task cannot be spliced in.",
       "$ref": "common.schema.json#/$defs/id"
     },
     "parent": {
@@ -100,12 +143,8 @@
       "minimum": 0,
       "maximum": 8
     },
-    "flow": {
-      "description": "The delegation flow the grant belongs to. An offer and its redeem must carry the same flow, so two chains cannot be spliced together.",
-      "$ref": "common.schema.json#/$defs/id"
-    },
     "limits": {
-      "description": "Budgets this grant draws from, shared with the rest of the task's tree by name.",
+      "description": "Budgets this grant draws from, shared with the rest of the task's tree by name. A child repeats its parent's definition with a max no higher; the STS checks that when it issues the child.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/limit" }
     },
@@ -132,16 +171,16 @@
   "then": { "not": { "required": ["parent"] } },
   "else": { "required": ["parent"] },
   "$defs": {
-    "numericDate": {
-      "description": "Seconds since the Unix epoch (RFC 7519 §2).",
-      "type": "integer",
-      "minimum": 0
-    },
     "actor": {
       "type": "object",
       "required": ["sub"],
       "properties": {
-        "sub": { "$ref": "common.schema.json#/$defs/name" },
+        "sub": {
+          "description": "The agent. Without iss, its agent name in this box; with iss, the identifier its own trust domain gives it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
         "iss": {
           "description": "Trust domain of the actor, when it is not this box's own: an agent of a federated partner.",
           "type": "string",
@@ -149,7 +188,9 @@
         },
         "act": { "$ref": "#/$defs/actor" }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": { "not": { "required": ["iss"] } },
+      "then": { "properties": { "sub": { "$ref": "common.schema.json#/$defs/name" } } }
     }
   }
 }

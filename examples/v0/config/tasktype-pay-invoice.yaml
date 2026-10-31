@@ -36,3 +36,12 @@ spec:
   delegation:
     max_depth: 1
     recipients: [ledger-agent]
+  # pay_invoice is critical: two people from this group approve each payment.
+  approval:
+    required: 2
+    approvers:
+      issuer: https://login.example.com
+      groups: [payments-approvers]
+    max_auth_age: 5m
+    acr_values: [urn:example:acr:phishing-resistant]
+    expires_after: 30m

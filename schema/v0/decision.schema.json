@@ -8,10 +8,8 @@
   "properties": {
     "id": { "$ref": "common.schema.json#/$defs/id" },
     "time": {
-      "description": "When the decision was made, by the box's trusted time source. Always UTC with millisecond precision, so the record has one serialization for the hash chain.",
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+      "description": "When the decision was made, by the box's trusted time source.",
+      "$ref": "common.schema.json#/$defs/timestamp"
     },
     "request": {
       "description": "The decision core's input, an AuthZEN 1.0 evaluation request, as the point of enforcement sent it.",
@@ -49,7 +47,7 @@
       "additionalProperties": false
     },
     "grant": {
-      "description": "The grant the decision was made against.",
+      "description": "The grant the decision was made against, copied at decision time so the record reads on its own without the journal.",
       "type": "object",
       "required": ["id", "root", "depth", "task"],
       "properties": {
@@ -207,7 +205,6 @@
                 "delegation_invalid",
                 "policy_denied",
                 "limit_exceeded",
-                "approval_required",
                 "time_untrusted",
                 "internal_error"
               ]

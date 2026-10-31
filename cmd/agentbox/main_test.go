@@ -15,16 +15,20 @@ func runCLI(args ...string) (code int, stdout, stderr string) {
 }
 
 func TestValidateExamples(t *testing.T) {
-	config, _ := filepath.Glob("../../examples/v0/config/*.yaml")
-	grants, _ := filepath.Glob("../../examples/v0/grant/*.json")
-	decisions, _ := filepath.Glob("../../examples/v0/decision/*.json")
+	glob := func(pattern string) []string {
+		files, _ := filepath.Glob("../../examples/v0/" + pattern)
+		return files
+	}
 	for _, tc := range []struct {
 		args  []string
 		files []string
 	}{
-		{nil, config},
-		{[]string{"--kind", "grant"}, grants},
-		{[]string{"--kind", "decision"}, decisions},
+		{nil, glob("config/*.yaml")},
+		{[]string{"--kind", "taskrequest"}, glob("taskrequest/*.json")},
+		{[]string{"--kind", "grant"}, glob("grant/*.json")},
+		{[]string{"--kind", "offer"}, glob("offer/*.json")},
+		{[]string{"--kind", "decision"}, glob("decision/*.json")},
+		{[]string{"--kind", "approval"}, glob("approval/*.json")},
 	} {
 		if len(tc.files) == 0 {
 			t.Fatal("no example files found")

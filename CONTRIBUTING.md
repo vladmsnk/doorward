@@ -35,9 +35,12 @@ A schema change is one change across four places, in the same commit:
    field names, on what is required (required fields are not `omitempty`,
    optional ones are) and on enum members;
 3. an example in `examples/v0` that uses the new field, if it is new;
-4. a case in `TestInvalidDocuments` for each rule the change adds, showing
-   that a document breaking the rule is rejected.
+4. a case for each rule the change adds, showing that a document breaking
+   it is rejected: in `TestInvalidDocuments` for a rule in the schema, in
+   `TestRuleChecks` for a rule in the type's `Check` method.
 
-Within v0, a change must keep accepting every document the previous v0
-accepted: it may add an optional field or an enum member. Removing a field,
-making one required, or narrowing a pattern or an enum is a new version.
+From the first tagged release on, a v0 change must keep accepting every
+document the previous release accepted: it may add an optional field or an
+enum member. Removing a field, making one required, or narrowing a pattern
+or an enum is a new version. Until that release, v0 is a draft and may still
+change in any way.

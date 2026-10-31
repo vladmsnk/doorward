@@ -31,6 +31,23 @@ type ObjectMeta struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 }
 
+// Owner is who answers for an agent or an application.
+type Owner struct {
+	Team    string `json:"team"`
+	Contact string `json:"contact,omitempty"`
+}
+
+// SubjectIDFormat is the only RFC 9493 format v0 uses.
+const SubjectIDFormat = "iss_sub"
+
+// SubjectID is a person as their identity provider names them. An OIDC sub
+// is unique only within its issuer, so the two travel together (RFC 9493).
+type SubjectID struct {
+	Format string `json:"format"`
+	Issuer string `json:"iss"`
+	Sub    string `json:"sub"`
+}
+
 // Sensitivity is the tier of an operation. Operations of the critical tier
 // never run on a standing grant.
 type Sensitivity string

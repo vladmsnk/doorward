@@ -48,7 +48,51 @@
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/limit" }
         },
-        "delegation": { "$ref": "common.schema.json#/$defs/delegation" }
+        "delegation": { "$ref": "common.schema.json#/$defs/delegation" },
+        "approval": {
+          "description": "Who approves this task's calls that need approval, such as critical operations. Approvers are distinct people and never the user the task runs for.",
+          "type": "object",
+          "required": ["required", "approvers", "max_auth_age", "expires_after"],
+          "properties": {
+            "required": {
+              "description": "How many distinct people must approve. A critical operation always needs at least 2.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "approvers": {
+              "description": "Members of these groups at this identity provider may approve.",
+              "type": "object",
+              "required": ["issuer", "groups"],
+              "properties": {
+                "issuer": { "type": "string", "format": "uri" },
+                "groups": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+                  "minItems": 1,
+                  "uniqueItems": true
+                }
+              },
+              "additionalProperties": false
+            },
+            "max_auth_age": {
+              "description": "An approver must have signed in this recently; an older session signs in again before voting.",
+              "$ref": "common.schema.json#/$defs/duration"
+            },
+            "acr_values": {
+              "description": "Authentication context classes an approver's sign-in must have (OIDC acr).",
+              "type": "array",
+              "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+              "minItems": 1,
+              "uniqueItems": true
+            },
+            "expires_after": {
+              "description": "How long an approval request stays open.",
+              "$ref": "common.schema.json#/$defs/duration"
+            }
+          },
+          "additionalProperties": false
+        }
       },
       "additionalProperties": false
     }

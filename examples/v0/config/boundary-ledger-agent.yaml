@@ -6,6 +6,9 @@ metadata:
 spec:
   owner:
     team: finance-platform
+  # Registered with the box's one-time token; its key lives in the sidecar.
+  identities:
+    - type: registration
   task_types: [pay-invoice]
   max_sensitivity: low
   max_ttl: 10m

@@ -1,10 +1,17 @@
 {
   "iss": "https://sts.example.internal",
   "sub": "alice@example.com",
+  "sub_id": { "format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7" },
   "aud": ["https://payments.example.internal", "https://ledger.example.internal/mcp"],
+  "client_id": "0oa8f2k1LmN3pQ4rS5t6",
+  "scope": "get_invoice list_payments pay_invoice lookup_account",
   "iat": 1793352600,
   "exp": 1793353500,
   "jti": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+  "auth_time": 1793352540,
+  "acr": "urn:example:acr:mfa",
+  "amr": ["pwd", "otp", "mfa"],
+  "sid": "s7QpZ2r9xK1mW4",
   "act": { "sub": "invoice-agent" },
   "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000000" },
   "authorization_details": [
@@ -12,9 +19,7 @@
       "type": "tool_call",
       "locations": ["https://payments.example.internal"],
       "actions": ["get_invoice", "list_payments", "pay_invoice"],
-      "constraints": {
-        "/invoice_id": { "equals": "inv_7Q2M9X4K" }
-      }
+      "constraints": { "/invoice_id": { "equals": "inv_7Q2M9X4K" } }
     },
     {
       "type": "tool_call",
@@ -39,12 +44,15 @@
   },
   "root": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
   "depth": 0,
-  "flow": "flw_01JBXR4T7Q2M9X4KZ8D3F6H1CC",
   "limits": [
-    { "name": "payout-total", "kind": "sum", "field": "/amount", "actions": ["pay_invoice"], "max": 5000 },
+    {
+      "name": "payout-total",
+      "kind": "sum",
+      "field": "/amount",
+      "actions": ["pay_invoice"],
+      "max": 5000
+    },
     { "name": "calls", "kind": "count", "max": 50 }
   ],
-  "status": {
-    "status_list": { "idx": 1042, "uri": "https://sts.example.internal/status/1" }
-  }
+  "status": { "status_list": { "idx": 1042, "uri": "https://sts.example.internal/status/1" } }
 }

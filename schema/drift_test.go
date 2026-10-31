@@ -23,11 +23,15 @@ import (
 func TestTypesMatchSchemas(t *testing.T) {
 	r := newResolver(t)
 	types := map[schema.Kind]reflect.Type{
-		schema.Boundary: reflect.TypeFor[v0.Boundary](),
-		schema.TaskType: reflect.TypeFor[v0.TaskType](),
-		schema.Manifest: reflect.TypeFor[v0.Manifest](),
-		schema.Grant:    reflect.TypeFor[v0.Grant](),
-		schema.Decision: reflect.TypeFor[v0.Decision](),
+		schema.Boundary:    reflect.TypeFor[v0.Boundary](),
+		schema.TaskType:    reflect.TypeFor[v0.TaskType](),
+		schema.Manifest:    reflect.TypeFor[v0.Manifest](),
+		schema.Application: reflect.TypeFor[v0.Application](),
+		schema.TaskRequest: reflect.TypeFor[v0.TaskRequest](),
+		schema.Grant:       reflect.TypeFor[v0.Grant](),
+		schema.Offer:       reflect.TypeFor[v0.Offer](),
+		schema.Decision:    reflect.TypeFor[v0.Decision](),
+		schema.Approval:    reflect.TypeFor[v0.Approval](),
 	}
 	for kind, typ := range types {
 		t.Run(string(kind), func(t *testing.T) {
@@ -62,10 +66,21 @@ func TestEnumsMatchSchemas(t *testing.T) {
 			v0.ReasonPoPInvalid, v0.ReasonPoPReplayed, v0.ReasonAudienceMismatch, v0.ReasonActionNotGranted,
 			v0.ReasonFieldMissing, v0.ReasonConstraintViolated, v0.ReasonSensitivityExceeded,
 			v0.ReasonDelegationInvalid, v0.ReasonPolicyDenied, v0.ReasonLimitExceeded,
-			v0.ReasonApprovalRequired, v0.ReasonTimeUntrusted, v0.ReasonInternalError)},
+			v0.ReasonTimeUntrusted, v0.ReasonInternalError)},
 		{"boundary.schema.json#/properties/kind", []string{v0.KindBoundary}},
 		{"tasktype.schema.json#/properties/kind", []string{v0.KindTaskType}},
 		{"manifest.schema.json#/properties/kind", []string{v0.KindManifest}},
+		{"application.schema.json#/properties/kind", []string{v0.KindApplication}},
+		{"common.schema.json#/$defs/subjectId/properties/format", []string{v0.SubjectIDFormat}},
+		{"boundary.schema.json#/$defs/identity/properties/type", strs(v0.IdentityRegistration, v0.IdentityOAuthClient, v0.IdentityJWT, v0.IdentitySPIFFE)},
+		{"application.schema.json#/properties/spec/properties/authentication/properties/method", strs(v0.AuthPrivateKeyJWT, v0.AuthOAuthClient)},
+		{"taskrequest.schema.json#/properties/grant_type", []string{v0.GrantTypeTokenExchange}},
+		{"taskrequest.schema.json#/properties/subject_token_type", []string{v0.TokenTypeIDToken, v0.TokenTypeJWT}},
+		{"taskrequest.schema.json#/properties/requested_token_type", []string{v0.TokenTypeTaskTicket}},
+		{"taskrequest.schema.json#/properties/client_assertion_type", []string{v0.ClientAssertionJWT}},
+		{"taskrequest.schema.json#/$defs/agentTask/properties/type", []string{v0.AgentTaskType}},
+		{"approval.schema.json#/properties/status", strs(v0.ApprovalPending, v0.ApprovalApproved, v0.ApprovalRejected, v0.ApprovalExpired)},
+		{"approval.schema.json#/$defs/vote/properties/verdict", strs(v0.VerdictApprove, v0.VerdictReject)},
 	}
 	for _, tc := range cases {
 		file, frag, _ := strings.Cut(tc.ref, "#")

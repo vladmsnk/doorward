@@ -27,8 +27,9 @@ const usage = `usage:
   agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
   agentbox version                          print the version
 
-Configuration documents (Boundary, TaskType, Manifest) name their kind; grants
-and decision records need --kind grant or --kind decision.
+Configuration documents (Boundary, TaskType, Manifest, Application) name their
+kind. Messages and records need it given: --kind taskrequest, grant, offer,
+decision or approval.
 `
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -97,7 +98,7 @@ func runValidate(args []string, stdout, stderr io.Writer) int {
 			continue
 		}
 		for _, src := range sources {
-			if err := v.Validate(src.Kind, src.JSON); err != nil {
+			if err := v.Check(src.Kind, src.JSON); err != nil {
 				fmt.Fprintf(stderr, "FAIL %s (%s)\n%v\n", src.Name, src.Kind, err)
 				failed++
 				continue

@@ -28,7 +28,7 @@ type Source struct {
 //
 // kind, when not empty, is the kind every document must be. When it is empty
 // each document's kind comes from its kind field, which only configuration
-// documents carry; grants and decision records need kind set.
+// documents carry; messages and records need kind set.
 func Read(name string, data []byte, kind Kind) ([]Source, error) {
 	var docs [][]byte
 	switch strings.ToLower(filepath.Ext(name)) {
@@ -69,13 +69,19 @@ func kindOfDocument(doc []byte, want Kind) (Kind, error) {
 
 	if head.Kind == nil {
 		if want == "" {
-			return "", errors.New("document has no kind field; give the kind explicitly for grants and decision records")
+			return "", errors.New("document has no kind field; give the kind explicitly for messages and records such as grants")
 		}
 		return want, nil
 	}
 	got, err := ParseKind(*head.Kind)
 	if err != nil || !got.Enveloped() || string(got) != *head.Kind {
-		return "", fmt.Errorf("kind %q is not a configuration kind (Boundary, TaskType, Manifest)", *head.Kind)
+		var config []string
+		for _, k := range Kinds {
+			if k.Enveloped() {
+				config = append(config, string(k))
+			}
+		}
+		return "", fmt.Errorf("kind %q is not a configuration kind (%s)", *head.Kind, strings.Join(config, ", "))
 	}
 	if want != "" && got != want {
 		return "", fmt.Errorf("document is a %s, expected a %s", got, want)
