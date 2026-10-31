@@ -8,10 +8,8 @@
   "properties": {
     "id": { "$ref": "common.schema.json#/$defs/id" },
     "time": {
-      "description": "When the decision was made, by the box's trusted time source. Always UTC with millisecond precision, so the record has one serialization for the hash chain.",
-      "type": "string",
-      "format": "date-time",
-      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+      "description": "When the decision was made, by the box's trusted time source.",
+      "$ref": "common.schema.json#/$defs/timestamp"
     },
     "request": {
       "description": "The decision core's input, an AuthZEN 1.0 evaluation request, as the point of enforcement sent it.",
@@ -34,38 +32,25 @@
       "additionalProperties": false
     },
     "principal": {
-      "description": "Who acted and for whom, as established from the verified grant. Absent when no grant could be verified.",
+      "description": "Who acted and who answers for it, as established from the verified grant: the user who consented, or the owning team of a service agent. Absent when no grant could be verified.",
       "type": "object",
-      "required": ["user", "agent"],
+      "required": ["agent"],
       "properties": {
-        "user": { "type": "string", "minLength": 1, "maxLength": 255 },
         "agent": { "$ref": "common.schema.json#/$defs/name" },
-        "actors": {
-          "description": "Agents earlier in the delegation chain, nearest first.",
-          "type": "array",
-          "items": { "$ref": "common.schema.json#/$defs/name" }
-        }
+        "user": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "owner": { "$ref": "common.schema.json#/$defs/name" }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["user"] }, { "required": ["owner"] }]
     },
     "grant": {
-      "description": "The grant the decision was made against.",
+      "description": "The grant the decision was made against, copied at decision time so the record reads on its own without the journal.",
       "type": "object",
-      "required": ["id", "root", "depth", "task"],
+      "required": ["id", "mandate"],
       "properties": {
         "id": { "$ref": "common.schema.json#/$defs/id" },
-        "root": { "$ref": "common.schema.json#/$defs/id" },
-        "parent": { "$ref": "common.schema.json#/$defs/id" },
-        "depth": { "type": "integer", "minimum": 0, "maximum": 8 },
-        "task": {
-          "type": "object",
-          "required": ["id", "type"],
-          "properties": {
-            "id": { "$ref": "common.schema.json#/$defs/id" },
-            "type": { "$ref": "common.schema.json#/$defs/name" }
-          },
-          "additionalProperties": false
-        }
+        "mandate": { "$ref": "common.schema.json#/$defs/name" },
+        "consent": { "$ref": "common.schema.json#/$defs/id" }
       },
       "additionalProperties": false
     },
@@ -204,10 +189,8 @@
                 "field_missing",
                 "constraint_violated",
                 "sensitivity_exceeded",
-                "delegation_invalid",
                 "policy_denied",
                 "limit_exceeded",
-                "approval_required",
                 "time_untrusted",
                 "internal_error"
               ]
@@ -235,7 +218,6 @@
             "pop",
             "audience",
             "time",
-            "delegation",
             "subset",
             "sensitivity",
             "policy",

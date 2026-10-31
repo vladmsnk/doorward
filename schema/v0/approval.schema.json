@@ -1,0 +1,111 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/approval.schema.json",
+  "title": "Approval",
+  "description": "Record of one approval request for one exact call: what the approvers saw, who voted, and how each of them signed in. An approved request lets the STS issue a single-use grant bound to action_hash.",
+  "type": "object",
+  "required": ["id", "created", "status", "mandate", "grant", "agent", "route", "action", "action_hash", "policy_version", "required", "votes"],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/id" },
+    "created": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "status": { "enum": ["pending", "approved", "rejected", "expired"] },
+    "closed": {
+      "description": "When the request stopped being pending.",
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "mandate": { "$ref": "common.schema.json#/$defs/name" },
+    "consent": {
+      "description": "The consent the grant rests on, for a user mandate.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "grant": {
+      "description": "jti of the grant the call was made under.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
+    "agent": { "$ref": "common.schema.json#/$defs/name" },
+    "user": {
+      "description": "The user the agent acts for, under a user mandate. On a user route this is the only voter; on a group route they never vote.",
+      "$ref": "common.schema.json#/$defs/subjectId"
+    },
+    "route": {
+      "description": "Who was asked, from the mandate.",
+      "$ref": "common.schema.json#/$defs/approvers"
+    },
+    "action": {
+      "description": "The call in canonical form, exactly as the approvers saw it.",
+      "type": "object",
+      "required": ["name", "location", "arguments"],
+      "properties": {
+        "name": { "$ref": "common.schema.json#/$defs/operation" },
+        "location": { "$ref": "common.schema.json#/$defs/audience" },
+        "arguments": { "type": "object" }
+      },
+      "additionalProperties": false
+    },
+    "action_hash": {
+      "description": "Digest of action's canonical form (RFC 8785). The single-use grant is bound to it.",
+      "$ref": "common.schema.json#/$defs/digest"
+    },
+    "policy_version": {
+      "description": "The policy in force when the request was made. A change of policy voids the request.",
+      "$ref": "common.schema.json#/$defs/digest"
+    },
+    "required": {
+      "description": "How many distinct approvals were needed, from the mandate.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "votes": {
+      "description": "Every vote cast, in order.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/vote" }
+    },
+    "single_use_grant": {
+      "description": "jti of the single-use grant the STS issued once the request was approved.",
+      "$ref": "common.schema.json#/$defs/id"
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "description": "An open request has no closing time and no grant.",
+      "if": { "properties": { "status": { "const": "pending" } } },
+      "then": { "properties": { "closed": false, "single_use_grant": false } },
+      "else": { "required": ["closed"] }
+    },
+    {
+      "description": "Only an approved request leads to a grant.",
+      "if": { "properties": { "status": { "const": "approved" } } },
+      "then": { "properties": { "votes": { "minItems": 1 } } },
+      "else": { "properties": { "single_use_grant": false } }
+    },
+    {
+      "description": "A user route needs the user.",
+      "if": { "properties": { "route": { "properties": { "kind": { "const": "user" } } } } },
+      "then": { "required": ["user", "consent"] }
+    }
+  ],
+  "$defs": {
+    "vote": {
+      "type": "object",
+      "required": ["approver", "verdict", "time", "auth_time"],
+      "properties": {
+        "approver": { "$ref": "common.schema.json#/$defs/subjectId" },
+        "verdict": { "enum": ["approve", "reject"] },
+        "time": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "auth_time": {
+          "description": "When the approver signed in for this vote; no earlier than the mandate's max_auth_age allows.",
+          "$ref": "common.schema.json#/$defs/timestamp"
+        },
+        "acr": {
+          "description": "How strongly the approver signed in (OIDC acr).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

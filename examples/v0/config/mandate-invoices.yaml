@@ -1,0 +1,38 @@
+apiVersion: agentbox/v0
+kind: Mandate
+metadata:
+  name: invoices
+  description: Let an assistant read and pay the user's invoices.
+spec:
+  principal: user
+  consent:
+    text: >-
+      Read your invoices and payments, and pay invoices of up to 5,000 EUR or
+      USD each, 5,000 a month in total. You approve every payment yourself.
+    max_duration: 720h
+  ttl: 15m
+  permissions:
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments, pay_invoice]
+    - locations: [https://payments.example.internal]
+      actions: [pay_invoice]
+      constraints:
+        /amount: { min: 0.01, max: 5000 }
+        /currency: { one_of: [EUR, USD] }
+  limits:
+    - name: payout-month
+      kind: sum
+      field: /amount
+      actions: [pay_invoice]
+      per: month
+      max: 5000
+    - name: calls
+      kind: count
+      max: 50
+  # pay_invoice is critical: the user approves each exact payment, signed in
+  # within the last five minutes.
+  approval:
+    required: 1
+    approvers: { kind: user }
+    max_auth_age: 5m
+    expires_after: 30m

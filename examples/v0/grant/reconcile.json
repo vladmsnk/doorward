@@ -1,0 +1,41 @@
+{
+  "iss": "https://sts.example.internal",
+  "sub": "system:serviceaccount:finance:reconciler",
+  "aud": ["https://ledger.example.internal/mcp", "https://payments.example.internal"],
+  "client_id": "system:serviceaccount:finance:reconciler",
+  "iat": 1793322000,
+  "exp": 1793325600,
+  "jti": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
+  "act": { "sub": "reconciler" },
+  "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000002" },
+  "mandate": "reconcile",
+  "authorization_details": [
+    {
+      "type": "tool_call",
+      "locations": ["https://ledger.example.internal/mcp"],
+      "actions": ["list_unmatched"]
+    },
+    {
+      "type": "tool_call",
+      "locations": ["https://ledger.example.internal/mcp"],
+      "actions": ["post_entry", "write_off"],
+      "constraints": { "/amount": { "min": 0.01, "max": 1000 } }
+    },
+    {
+      "type": "tool_call",
+      "locations": ["https://payments.example.internal"],
+      "actions": ["get_invoice", "list_payments"]
+    }
+  ],
+  "limits": [
+    { "name": "entries", "kind": "count", "actions": ["post_entry"], "max": 500 },
+    {
+      "name": "written-off",
+      "kind": "sum",
+      "field": "/amount",
+      "actions": ["write_off"],
+      "max": 2000
+    }
+  ],
+  "status": { "status_list": { "idx": 1031, "uri": "https://sts.example.internal/status/1" } }
+}

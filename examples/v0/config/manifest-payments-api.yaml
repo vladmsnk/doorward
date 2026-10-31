@@ -6,10 +6,13 @@ metadata:
 spec:
   audience: https://payments.example.internal
   protocol: http
+  # The real API, behind the gateway. It trusts the gateway's mTLS certificate.
+  upstream:
+    url: https://payments-api.payments.svc.cluster.local
   operations:
     - name: get_invoice
       description: Read one invoice.
-      sensitivity: low
+      sensitivity: read
       http:
         method: GET
         path: /invoices/{invoice_id}
@@ -17,7 +20,7 @@ spec:
         /invoice_id: { type: string, in: path }
 
     - name: list_payments
-      sensitivity: low
+      sensitivity: read
       http:
         method: GET
         path: /invoices/{invoice_id}/payments
@@ -25,7 +28,7 @@ spec:
         /invoice_id: { type: string, in: path }
 
     - name: refund_payment
-      sensitivity: high
+      sensitivity: write
       http:
         method: POST
         path: /payments/{payment_id}/refund
@@ -34,7 +37,8 @@ spec:
         /amount: { type: number, in: body }
 
     # Critical: never runs on a standing grant, only on a single-use grant
-    # issued after two people approve the exact call.
+    # issued after a person approves the exact call. Who approves is up to
+    # the mandate: the user, or two people from a group.
     - name: pay_invoice
       sensitivity: critical
       http:

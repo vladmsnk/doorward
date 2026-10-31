@@ -1,0 +1,42 @@
+{
+  "iss": "https://sts.example.internal",
+  "sub": "alice@example.com",
+  "sub_id": { "format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7" },
+  "aud": ["https://payments.example.internal"],
+  "client_id": "acme-invoice-assistant",
+  "iat": 1793352600,
+  "exp": 1793353500,
+  "jti": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+  "act": { "sub": "invoice-assistant" },
+  "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000000" },
+  "mandate": "invoices",
+  "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D",
+  "authorization_details": [
+    {
+      "type": "tool_call",
+      "locations": ["https://payments.example.internal"],
+      "actions": ["get_invoice", "list_payments", "pay_invoice"]
+    },
+    {
+      "type": "tool_call",
+      "locations": ["https://payments.example.internal"],
+      "actions": ["pay_invoice"],
+      "constraints": {
+        "/amount": { "min": 0.01, "max": 5000 },
+        "/currency": { "one_of": ["EUR", "USD"] }
+      }
+    }
+  ],
+  "limits": [
+    {
+      "name": "payout-month",
+      "kind": "sum",
+      "field": "/amount",
+      "actions": ["pay_invoice"],
+      "per": "month",
+      "max": 5000
+    },
+    { "name": "calls", "kind": "count", "max": 50 }
+  ],
+  "status": { "status_list": { "idx": 1042, "uri": "https://sts.example.internal/status/1" } }
+}

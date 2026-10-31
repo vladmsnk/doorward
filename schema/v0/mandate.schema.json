@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/mandate.schema.json",
+  "title": "Mandate",
+  "description": "What an agent may do for a principal, and on what terms. A user mandate is what a person consents to on the box's consent page: an agent may act for them, within these permissions and limits, for at most this long, with these calls approved one by one. A service mandate is what an owner gives a deployed agent that acts on its own. A grant is a mandate intersected with the agent's own permissions, never more. The mandate's name is the OAuth scope an agent requests to get it; the gateway lists the scopes a resource accepts in its protected-resource metadata (RFC 9728), so a standard MCP client finds them without configuration.",
+  "type": "object",
+  "required": ["apiVersion", "kind", "metadata", "spec"],
+  "properties": {
+    "apiVersion": { "$ref": "common.schema.json#/$defs/apiVersion" },
+    "kind": { "const": "Mandate" },
+    "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
+    "spec": {
+      "type": "object",
+      "required": ["principal", "ttl", "permissions"],
+      "properties": {
+        "principal": {
+          "description": "user: the agent acts for a person who consented, and that person is the grant's sub. service: the agent acts for its owner on its own workload identity, and is the grant's sub itself.",
+          "enum": ["user", "service"]
+        },
+        "open": {
+          "description": "Any registered agent may request this mandate, unverified ones included. Without it, only agents that list the mandate may.",
+          "const": true
+        },
+        "consent": {
+          "description": "Terms of a user's consent. The text is what the consent page shows, in the user's words.",
+          "type": "object",
+          "required": ["text", "max_duration"],
+          "properties": {
+            "text": { "type": "string", "minLength": 1, "maxLength": 1024 },
+            "max_duration": {
+              "description": "Longest a consent may stand before the user is asked again.",
+              "$ref": "common.schema.json#/$defs/duration"
+            }
+          },
+          "additionalProperties": false
+        },
+        "ttl": {
+          "description": "Lifetime of one grant. Under a standing consent the agent gets a fresh grant when one expires; capped by the agent's max_ttl.",
+          "$ref": "common.schema.json#/$defs/duration"
+        },
+        "permissions": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/permission" },
+          "minItems": 1
+        },
+        "limits": {
+          "type": "array",
+          "items": { "$ref": "common.schema.json#/$defs/limit" }
+        },
+        "approval": {
+          "description": "Who approves this mandate's critical calls, and how. Without it, a critical call is refused.",
+          "type": "object",
+          "required": ["required", "approvers", "max_auth_age", "expires_after"],
+          "properties": {
+            "required": {
+              "description": "How many distinct approvals. A user route needs exactly 1; a group route needs at least 2.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            },
+            "approvers": { "$ref": "common.schema.json#/$defs/approvers" },
+            "max_auth_age": {
+              "description": "An approver must have signed in this recently; an older session signs in again before voting.",
+              "$ref": "common.schema.json#/$defs/duration"
+            },
+            "expires_after": {
+              "description": "How long an approval request stays open.",
+              "$ref": "common.schema.json#/$defs/duration"
+            }
+          },
+          "additionalProperties": false,
+          "if": { "properties": { "approvers": { "properties": { "kind": { "const": "user" } } } } },
+          "then": { "properties": { "required": { "const": 1 } } },
+          "else": { "properties": { "required": { "minimum": 2 } } }
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "principal": { "const": "user" } } },
+      "then": { "required": ["consent"] },
+      "else": {
+        "properties": {
+          "consent": false,
+          "open": false,
+          "approval": { "properties": { "approvers": { "properties": { "kind": { "const": "group" } } } } }
+        }
+      }
+    }
+  },
+  "additionalProperties": false
+}

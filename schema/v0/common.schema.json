@@ -22,14 +22,70 @@
       "additionalProperties": false
     },
     "name": {
-      "description": "Name of an agent, application, task type, manifest or limit: lower case, digits, '.', '_' and '-', starting and ending with a letter or digit.",
+      "description": "Name of an agent, mandate, manifest, team or limit: lower case, digits, '.', '_' and '-', starting and ending with a letter or digit.",
       "type": "string",
       "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
     },
     "id": {
-      "description": "Opaque identifier issued by the box (grant, task, flow, decision, approval). By convention it starts with a type prefix such as grt_ or tsk_.",
+      "description": "Opaque identifier issued by the box (grant, consent, decision, approval). By convention it starts with a type prefix such as grt_ or cns_.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
+    },
+    "clientId": {
+      "description": "OAuth client identifier (RFC 6749 §2.2), as an identity provider or the box issued it.",
+      "type": "string",
+      "pattern": "^[\\x21-\\x7E]{1,255}$"
+    },
+    "owner": {
+      "description": "Who answers for an agent.",
+      "type": "object",
+      "required": ["team"],
+      "properties": {
+        "team": { "$ref": "#/$defs/name" },
+        "contact": { "type": "string", "format": "email" }
+      },
+      "additionalProperties": false
+    },
+    "subjectId": {
+      "description": "A person as their identity provider names them. An OIDC sub is unique only within its issuer, so the two travel together (RFC 9493, iss_sub format).",
+      "type": "object",
+      "required": ["format", "iss", "sub"],
+      "properties": {
+        "format": { "const": "iss_sub" },
+        "iss": { "type": "string", "format": "uri" },
+        "sub": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      "additionalProperties": false
+    },
+    "approvers": {
+      "description": "Who may approve: the user the agent acts for, or members of groups at an identity provider.",
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": { "enum": ["user", "group"] },
+        "issuer": { "type": "string", "format": "uri" },
+        "groups": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1, "maxLength": 255 },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false,
+      "if": { "properties": { "kind": { "const": "group" } } },
+      "then": { "required": ["issuer", "groups"] },
+      "else": { "properties": { "issuer": false, "groups": false } }
+    },
+    "numericDate": {
+      "description": "Seconds since the Unix epoch (RFC 7519 §2).",
+      "type": "integer",
+      "minimum": 0
+    },
+    "timestamp": {
+      "description": "Time in a record: UTC with exactly millisecond precision, so the record has one serialization for the hash chain.",
+      "type": "string",
+      "format": "date-time",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
     },
     "operation": {
       "description": "Name of an operation as the manifest declares it: the MCP tool name, or the name given to an HTTP route. No wildcards: a grant lists every operation it covers.",
@@ -61,8 +117,8 @@
       "type": ["string", "number", "boolean"]
     },
     "sensitivity": {
-      "description": "Sensitivity tier of an operation. The tier sets the grant lifetime, whether approval is needed, whether re-delegation is allowed and what happens on failure. Operations of the critical tier are the critical operations: they never run on a standing grant.",
-      "enum": ["low", "medium", "high", "critical"]
+      "description": "Tier of an operation. read runs on any valid grant. write runs too, and the record is kept for review. critical never runs on a standing grant: a person approves the exact call first.",
+      "enum": ["read", "write", "critical"]
     },
     "constraintBounds": {
       "description": "The ready-made constraint types. Every bound listed for a field must hold; a constrained field missing from the call fails the check. Each type can be compared with a narrower one, which is what makes 'request ⊆ grant' and narrowing on delegation decidable.",
@@ -80,24 +136,14 @@
       }
     },
     "constraint": {
-      "description": "Constraint on one field, as it appears in a grant: fully resolved.",
+      "description": "Constraint on one field, keyed in its permission by the argument's JSON Pointer.",
       "type": "object",
       "$ref": "#/$defs/constraintBounds",
-      "minProperties": 1,
-      "unevaluatedProperties": false
-    },
-    "constraintTemplate": {
-      "description": "Constraint on one field, as written in a boundary or a task type. task_object: true means the field must equal the ID of the task's object; the STS resolves it to equals when it issues the grant.",
-      "type": "object",
-      "$ref": "#/$defs/constraintBounds",
-      "properties": {
-        "task_object": { "const": true }
-      },
       "minProperties": 1,
       "unevaluatedProperties": false
     },
     "permission": {
-      "description": "What may be called, where, and with which argument values, as written in a boundary or a task type.",
+      "description": "What may be called, where, and with which argument values, as written in an agent or a mandate.",
       "type": "object",
       "required": ["locations", "actions"],
       "properties": {
@@ -116,7 +162,7 @@
         "constraints": {
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/pointer" },
-          "additionalProperties": { "$ref": "#/$defs/constraintTemplate" }
+          "additionalProperties": { "$ref": "#/$defs/constraint" }
         }
       },
       "additionalProperties": false
@@ -148,13 +194,14 @@
       "additionalProperties": false
     },
     "limit": {
-      "description": "Budget shared by every grant of one task: the limit holds in total, however the task is delegated. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts.",
+      "description": "A budget. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts. per says over what the budget runs: one grant, or a calendar day or month of the consent.",
       "type": "object",
       "required": ["name", "kind", "max"],
       "properties": {
         "name": { "$ref": "#/$defs/name" },
         "kind": { "enum": ["count", "sum"] },
         "max": { "type": "number", "minimum": 0 },
+        "per": { "enum": ["grant", "day", "month"], "default": "grant" },
         "field": { "$ref": "#/$defs/pointer" },
         "actions": {
           "type": "array",
@@ -176,23 +223,7 @@
           }
         }
       ]
-    },
-    "delegation": {
-      "description": "Who may receive a narrower grant from this one, and how deep the chain may go. Absent means no delegation. Recipients are always listed: there is no 'any agent'.",
-      "type": "object",
-      "required": ["max_depth"],
-      "properties": {
-        "max_depth": { "type": "integer", "minimum": 0, "maximum": 8 },
-        "recipients": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/name" },
-          "minItems": 1,
-          "uniqueItems": true
-        }
-      },
-      "additionalProperties": false,
-      "if": { "properties": { "max_depth": { "minimum": 1 } } },
-      "then": { "required": ["recipients"] }
     }
+
   }
 }

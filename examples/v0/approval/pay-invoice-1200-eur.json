@@ -1,0 +1,34 @@
+{
+  "id": "apr_01JBXR5R2T4V6X8Z0B2D4F6H8K",
+  "created": "2026-10-30T09:32:05.902Z",
+  "status": "approved",
+  "closed": "2026-10-30T09:33:10.000Z",
+  "mandate": "invoices",
+  "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D",
+  "grant": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
+  "agent": "invoice-assistant",
+  "user": { "format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7" },
+  "route": { "kind": "user" },
+  "action": {
+    "name": "pay_invoice",
+    "location": "https://payments.example.internal",
+    "arguments": { "amount": 1200, "currency": "EUR", "invoice_id": "inv_7Q2M9X4K" }
+  },
+  "action_hash": "sha-256:example-hash-not-computed-action-0000000003",
+  "policy_version": "sha-256:example-hash-not-computed-policy-0000000001",
+  "required": 1,
+  "votes": [
+    {
+      "approver": {
+        "format": "iss_sub",
+        "iss": "https://login.example.com",
+        "sub": "00u8a1iceQ2xYz7"
+      },
+      "verdict": "approve",
+      "time": "2026-10-30T09:33:10.000Z",
+      "auth_time": "2026-10-30T09:33:01.000Z",
+      "acr": "urn:example:acr:phishing-resistant"
+    }
+  ],
+  "single_use_grant": "grt_01JBXR7D2F4H6K8M0P3R5T7V9X"
+}

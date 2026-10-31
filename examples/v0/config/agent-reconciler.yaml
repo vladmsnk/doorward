@@ -1,0 +1,25 @@
+apiVersion: agentbox/v0
+kind: Agent
+metadata:
+  name: reconciler
+  description: Deployed in the finance namespace; reconciles the ledger every night.
+spec:
+  status: verified
+  owner:
+    team: finance-platform
+    contact: finance-oncall@example.com
+  # Its Kubernetes service account token.
+  identities:
+    - type: jwt
+      issuer: https://kubernetes.example.internal
+      subject: system:serviceaccount:finance:reconciler
+  mandates: [reconcile]
+  max_sensitivity: critical
+  max_ttl: 2h
+  permissions:
+    - locations: [https://ledger.example.internal/mcp]
+      actions: [list_unmatched, post_entry, write_off]
+      constraints:
+        /amount: { max: 5000 }
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments]

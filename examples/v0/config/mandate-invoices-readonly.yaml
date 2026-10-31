@@ -1,0 +1,21 @@
+apiVersion: agentbox/v0
+kind: Mandate
+metadata:
+  name: invoices-readonly
+  description: Let any assistant, known or not, read the user's invoices.
+spec:
+  principal: user
+  # Open: an unverified agent may request it, under its own small ceiling.
+  open: true
+  consent:
+    text: Read your invoices and payments. Nothing is changed or paid.
+    max_duration: 168h
+  ttl: 10m
+  permissions:
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments]
+  limits:
+    - name: calls
+      kind: count
+      per: day
+      max: 200

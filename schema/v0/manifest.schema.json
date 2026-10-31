@@ -11,9 +11,42 @@
     "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
     "spec": {
       "type": "object",
-      "required": ["audience", "protocol", "operations"],
+      "required": ["audience", "protocol", "upstream", "operations"],
       "properties": {
-        "audience": { "$ref": "common.schema.json#/$defs/audience" },
+        "audience": {
+          "description": "The resource's identifier as grants name it: the address agents call, which is the gateway's. For an MCP resource it is also the resource identifier the gateway publishes in its protected-resource metadata (RFC 9728).",
+          "$ref": "common.schema.json#/$defs/audience"
+        },
+        "upstream": {
+          "description": "Where the gateway forwards allowed calls, and how it authenticates there. The credential lives in the box's secret store; agents never see it.",
+          "type": "object",
+          "required": ["url"],
+          "properties": {
+            "url": { "type": "string", "format": "uri", "pattern": "^https?://" },
+            "auth": {
+              "description": "A header the gateway sets on every forwarded call, from a secret. Absent means the upstream trusts the gateway by network or mTLS.",
+              "type": "object",
+              "required": ["header", "secret_ref"],
+              "properties": {
+                "header": {
+                  "type": "string",
+                  "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$"
+                },
+                "prefix": {
+                  "description": "Put before the secret's value, such as \"Bearer \".",
+                  "type": "string",
+                  "maxLength": 32
+                },
+                "secret_ref": {
+                  "description": "Name of the secret in the box's secret store.",
+                  "$ref": "common.schema.json#/$defs/name"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
         "protocol": { "enum": ["http", "mcp"] },
         "operations": {
           "type": "array",

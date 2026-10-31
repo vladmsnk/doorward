@@ -1,0 +1,26 @@
+apiVersion: agentbox/v0
+kind: Agent
+metadata:
+  name: desk-helper-7f3a
+  description: Registered itself through dynamic client registration; nobody has reviewed it yet.
+spec:
+  status: unverified
+  publisher:
+    name: Desk Helper
+    uri: https://deskhelper.example
+  # A public client: no keys, so its grants are bound to its DPoP key alone.
+  identities:
+    - type: oauth_client
+      client_id: dcr_7f3a9c2e1b
+      redirect_uris: [http://127.0.0.1:43127/callback]
+  # The ceiling the box gives every unverified agent.
+  max_sensitivity: read
+  max_ttl: 10m
+  permissions:
+    - locations: [https://payments.example.internal]
+      actions: [get_invoice, list_payments]
+  limits:
+    - name: calls
+      kind: count
+      per: day
+      max: 200

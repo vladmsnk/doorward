@@ -23,11 +23,13 @@ import (
 func TestTypesMatchSchemas(t *testing.T) {
 	r := newResolver(t)
 	types := map[schema.Kind]reflect.Type{
-		schema.Boundary: reflect.TypeFor[v0.Boundary](),
-		schema.TaskType: reflect.TypeFor[v0.TaskType](),
 		schema.Manifest: reflect.TypeFor[v0.Manifest](),
+		schema.Agent:    reflect.TypeFor[v0.Agent](),
+		schema.Mandate:  reflect.TypeFor[v0.Mandate](),
+		schema.Consent:  reflect.TypeFor[v0.Consent](),
 		schema.Grant:    reflect.TypeFor[v0.Grant](),
 		schema.Decision: reflect.TypeFor[v0.Decision](),
+		schema.Approval: reflect.TypeFor[v0.Approval](),
 	}
 	for kind, typ := range types {
 		t.Run(string(kind), func(t *testing.T) {
@@ -43,29 +45,38 @@ func TestEnumsMatchSchemas(t *testing.T) {
 		ref  string
 		want []string
 	}{
-		{"common.schema.json#/$defs/sensitivity", strs(v0.SensitivityLow, v0.SensitivityMedium, v0.SensitivityHigh, v0.SensitivityCritical)},
+		{"common.schema.json#/$defs/sensitivity", strs(v0.SensitivityRead, v0.SensitivityWrite, v0.SensitivityCritical)},
 		{"common.schema.json#/$defs/limit/properties/kind", strs(v0.LimitCount, v0.LimitSum)},
+		{"common.schema.json#/$defs/limit/properties/per", strs(v0.PerGrant, v0.PerDay, v0.PerMonth)},
 		{"common.schema.json#/$defs/authorizationDetail/properties/type", []string{v0.AuthorizationDetailType}},
 		{"common.schema.json#/$defs/apiVersion", []string{v0.APIVersion}},
+		{"common.schema.json#/$defs/subjectId/properties/format", []string{v0.SubjectIDFormat}},
+		{"common.schema.json#/$defs/approvers/properties/kind", strs(v0.ApproverUser, v0.ApproverGroup)},
+		{"manifest.schema.json#/properties/kind", []string{v0.KindManifest}},
 		{"manifest.schema.json#/properties/spec/properties/protocol", strs(v0.ProtocolHTTP, v0.ProtocolMCP)},
 		{"manifest.schema.json#/$defs/param/properties/type", strs(v0.ParamString, v0.ParamNumber, v0.ParamInteger, v0.ParamBoolean)},
 		{"manifest.schema.json#/$defs/param/properties/in", strs(v0.ParamInPath, v0.ParamInQuery, v0.ParamInBody)},
+		{"agent.schema.json#/properties/kind", []string{v0.KindAgent}},
+		{"agent.schema.json#/properties/spec/properties/status", strs(v0.AgentUnverified, v0.AgentVerified, v0.AgentSuspended)},
+		{"agent.schema.json#/$defs/identity/properties/type", strs(v0.IdentityRegistration, v0.IdentityJWT, v0.IdentityOAuthClient)},
+		{"mandate.schema.json#/properties/kind", []string{v0.KindMandate}},
+		{"mandate.schema.json#/properties/spec/properties/principal", strs(v0.PrincipalUser, v0.PrincipalService)},
+		{"consent.schema.json#/properties/status", strs(v0.ConsentActive, v0.ConsentExpired, v0.ConsentRevoked)},
+		{"consent.schema.json#/properties/revoked_by", strs(v0.RevokedByUser, v0.RevokedByAdmin, v0.RevokedByIdP)},
 		{"decision.schema.json#/properties/outcome", strs(v0.OutcomeAllow, v0.OutcomeDeny, v0.OutcomeApprovalRequired)},
 		{"decision.schema.json#/properties/pep/properties/kind", strs(v0.PEPGateway, v0.PEPExtAuthz, v0.PEPSDK, v0.PEPBroker)},
 		{"decision.schema.json#/$defs/check/properties/name", strs(
 			v0.CheckRequest, v0.CheckSignature, v0.CheckStatus, v0.CheckPoP, v0.CheckAudience, v0.CheckTime,
-			v0.CheckDelegation, v0.CheckSubset, v0.CheckSensitivity, v0.CheckPolicy, v0.CheckLimits)},
+			v0.CheckSubset, v0.CheckSensitivity, v0.CheckPolicy, v0.CheckLimits)},
 		{"decision.schema.json#/$defs/check/properties/result", strs(v0.CheckPass, v0.CheckFail, v0.CheckSkip)},
 		{"decision.schema.json#/$defs/reason/properties/code/anyOf/0", strs(
 			v0.ReasonRequestMalformed, v0.ReasonGrantMissing, v0.ReasonGrantMalformed, v0.ReasonGrantSignatureInvalid,
 			v0.ReasonGrantExpired, v0.ReasonGrantNotYetValid, v0.ReasonGrantRevoked, v0.ReasonPoPMissing,
 			v0.ReasonPoPInvalid, v0.ReasonPoPReplayed, v0.ReasonAudienceMismatch, v0.ReasonActionNotGranted,
 			v0.ReasonFieldMissing, v0.ReasonConstraintViolated, v0.ReasonSensitivityExceeded,
-			v0.ReasonDelegationInvalid, v0.ReasonPolicyDenied, v0.ReasonLimitExceeded,
-			v0.ReasonApprovalRequired, v0.ReasonTimeUntrusted, v0.ReasonInternalError)},
-		{"boundary.schema.json#/properties/kind", []string{v0.KindBoundary}},
-		{"tasktype.schema.json#/properties/kind", []string{v0.KindTaskType}},
-		{"manifest.schema.json#/properties/kind", []string{v0.KindManifest}},
+			v0.ReasonPolicyDenied, v0.ReasonLimitExceeded, v0.ReasonTimeUntrusted, v0.ReasonInternalError)},
+		{"approval.schema.json#/properties/status", strs(v0.ApprovalPending, v0.ApprovalApproved, v0.ApprovalRejected, v0.ApprovalExpired)},
+		{"approval.schema.json#/$defs/vote/properties/verdict", strs(v0.VerdictApprove, v0.VerdictReject)},
 	}
 	for _, tc := range cases {
 		file, frag, _ := strings.Cut(tc.ref, "#")

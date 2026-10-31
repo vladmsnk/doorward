@@ -2,22 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/grant.schema.json",
   "title": "Grant",
-  "description": "Claims of an agent grant: a short-lived JWT the STS issues for one task, bound to the sidecar's key and placed in the task's grant tree. The agent's model never sees it.",
+  "description": "Claims of an agent grant: a short-lived JWT access token (RFC 9068, header typ at+jwt) the STS issues under a mandate, bound to the agent's key. For a user mandate, sub is the user and the grant names the consent it rests on, so the resource sees the user as if they had called; for a service mandate the agent is its own sub, so sub equals client_id.",
   "type": "object",
-  "required": [
-    "iss",
-    "sub",
-    "aud",
-    "iat",
-    "exp",
-    "jti",
-    "act",
-    "authorization_details",
-    "task",
-    "root",
-    "depth",
-    "flow"
-  ],
+  "required": ["iss", "sub", "aud", "client_id", "iat", "exp", "jti", "act", "mandate", "authorization_details"],
   "properties": {
     "iss": {
       "description": "The STS that issued the grant.",
@@ -25,87 +12,70 @@
       "format": "uri"
     },
     "sub": {
-      "description": "The user on whose behalf the agent acts. sub and act are kept separate.",
+      "description": "Whom the agent acts for: the user, unique across every identity provider the box trusts, or, under a service mandate, the agent itself.",
       "type": "string",
       "minLength": 1,
       "maxLength": 255
     },
+    "sub_id": {
+      "description": "Where the user's identity came from. Present exactly when sub is a user, that is, when sub differs from client_id.",
+      "$ref": "common.schema.json#/$defs/subjectId"
+    },
     "aud": {
-      "description": "Resource servers that accept the grant.",
+      "description": "Resource servers that accept the grant: exactly the locations of authorization_details.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/audience" },
       "minItems": 1,
       "uniqueItems": true
     },
-    "iat": { "$ref": "#/$defs/numericDate" },
-    "nbf": { "$ref": "#/$defs/numericDate" },
-    "exp": { "$ref": "#/$defs/numericDate" },
+    "client_id": {
+      "description": "The OAuth client the grant was issued to: the agent, as the identity it authenticated with names it, or its agent name for a registration identity (RFC 9068).",
+      "$ref": "common.schema.json#/$defs/clientId"
+    },
+    "iat": { "$ref": "common.schema.json#/$defs/numericDate" },
+    "exp": { "$ref": "common.schema.json#/$defs/numericDate" },
     "jti": { "$ref": "common.schema.json#/$defs/id" },
     "act": {
-      "description": "The agent acting now; prior agents of a delegation chain are nested inside (RFC 8693 §4.1).",
-      "$ref": "#/$defs/actor"
+      "description": "The agent acting (RFC 8693 §4.1).",
+      "type": "object",
+      "required": ["sub"],
+      "properties": {
+        "sub": {
+          "description": "The agent's name.",
+          "$ref": "common.schema.json#/$defs/name"
+        }
+      },
+      "additionalProperties": false
     },
     "cnf": {
-      "description": "Key the grant is bound to (RFC 9449 §6.1). Every grant from the box's own STS carries one; it is optional here only for clients that cannot hold a key, such as hosted agents run by a vendor.",
+      "description": "The DPoP key the grant is bound to (RFC 9449 §6.1). Every grant from the box's own STS carries one; it is optional here only for clients that cannot hold a key, such as hosted agents run by a vendor.",
       "type": "object",
       "required": ["jkt"],
       "properties": {
         "jkt": {
-          "description": "JWK SHA-256 thumbprint (RFC 7638), base64url.",
+          "description": "JWK SHA-256 thumbprint of the key (RFC 7638), base64url.",
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]{43}$"
         }
       },
       "additionalProperties": false
     },
+    "mandate": {
+      "description": "The mandate the grant was issued under.",
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "consent": {
+      "description": "The consent the grant rests on. Present exactly when sub is a user.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
     "authorization_details": {
+      "description": "What the grant allows: the mandate's permissions intersected with the agent's.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/authorizationDetail" },
       "minItems": 1
     },
-    "task": {
-      "description": "The task this grant serves, as the initiating application declared it.",
-      "type": "object",
-      "required": ["id", "type", "object", "initiator"],
-      "properties": {
-        "id": { "$ref": "common.schema.json#/$defs/id" },
-        "type": { "$ref": "common.schema.json#/$defs/name" },
-        "object": {
-          "type": "object",
-          "required": ["type", "id"],
-          "properties": {
-            "type": { "$ref": "common.schema.json#/$defs/name" },
-            "id": { "type": "string", "minLength": 1, "maxLength": 255 }
-          },
-          "additionalProperties": false
-        },
-        "initiator": {
-          "description": "The application that started the task.",
-          "$ref": "common.schema.json#/$defs/name"
-        }
-      },
-      "additionalProperties": false
-    },
-    "root": {
-      "description": "jti of the task's root grant. Revoking it revokes the whole tree.",
-      "$ref": "common.schema.json#/$defs/id"
-    },
-    "parent": {
-      "description": "jti of the grant this one was narrowed from. Present exactly when depth > 0.",
-      "$ref": "common.schema.json#/$defs/id"
-    },
-    "depth": {
-      "description": "Steps from the root grant: 0 for the root itself.",
-      "type": "integer",
-      "minimum": 0,
-      "maximum": 8
-    },
-    "flow": {
-      "description": "The delegation flow the grant belongs to. An offer and its redeem must carry the same flow, so two chains cannot be spliced together.",
-      "$ref": "common.schema.json#/$defs/id"
-    },
     "limits": {
-      "description": "Budgets this grant draws from, shared with the rest of the task's tree by name.",
+      "description": "Budgets this grant draws from. A per-day or per-month budget is shared by every grant of the same consent.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/limit" }
     },
@@ -127,29 +97,5 @@
       "additionalProperties": false
     }
   },
-  "additionalProperties": false,
-  "if": { "properties": { "depth": { "const": 0 } } },
-  "then": { "not": { "required": ["parent"] } },
-  "else": { "required": ["parent"] },
-  "$defs": {
-    "numericDate": {
-      "description": "Seconds since the Unix epoch (RFC 7519 §2).",
-      "type": "integer",
-      "minimum": 0
-    },
-    "actor": {
-      "type": "object",
-      "required": ["sub"],
-      "properties": {
-        "sub": { "$ref": "common.schema.json#/$defs/name" },
-        "iss": {
-          "description": "Trust domain of the actor, when it is not this box's own: an agent of a federated partner.",
-          "type": "string",
-          "format": "uri"
-        },
-        "act": { "$ref": "#/$defs/actor" }
-      },
-      "additionalProperties": false
-    }
-  }
+  "additionalProperties": false
 }

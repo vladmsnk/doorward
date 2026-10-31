@@ -48,27 +48,20 @@ type Action struct {
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
-// Principal is who acted and for whom, from the verified grant.
+// Principal is who acted and who answers for it, from the verified grant:
+// exactly one of User and Owner is set.
 type Principal struct {
-	User  string `json:"user"`
 	Agent string `json:"agent"`
-	// Actors are the agents earlier in the delegation chain, nearest first.
-	Actors []string `json:"actors,omitempty"`
+	User  string `json:"user,omitempty"`
+	Owner string `json:"owner,omitempty"`
 }
 
-// GrantRef points at the grant a decision was made against.
+// GrantRef points at the grant a decision was made against, copied at
+// decision time so the record reads on its own.
 type GrantRef struct {
-	ID     string  `json:"id"`
-	Root   string  `json:"root"`
-	Parent string  `json:"parent,omitempty"`
-	Depth  int     `json:"depth"`
-	Task   TaskRef `json:"task"`
-}
-
-// TaskRef names a task.
-type TaskRef struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID      string `json:"id"`
+	Mandate string `json:"mandate"`
+	Consent string `json:"consent,omitempty"`
 }
 
 // Outcome is one of the three answers of the decision core.
@@ -108,10 +101,8 @@ const (
 	ReasonFieldMissing          ReasonCode = "field_missing"
 	ReasonConstraintViolated    ReasonCode = "constraint_violated"
 	ReasonSensitivityExceeded   ReasonCode = "sensitivity_exceeded"
-	ReasonDelegationInvalid     ReasonCode = "delegation_invalid"
 	ReasonPolicyDenied          ReasonCode = "policy_denied"
 	ReasonLimitExceeded         ReasonCode = "limit_exceeded"
-	ReasonApprovalRequired      ReasonCode = "approval_required"
 	ReasonTimeUntrusted         ReasonCode = "time_untrusted"
 	ReasonInternalError         ReasonCode = "internal_error"
 )
@@ -133,7 +124,6 @@ const (
 	CheckPoP         CheckName = "pop"
 	CheckAudience    CheckName = "audience"
 	CheckTime        CheckName = "time"
-	CheckDelegation  CheckName = "delegation"
 	CheckSubset      CheckName = "subset"
 	CheckSensitivity CheckName = "sensitivity"
 	CheckPolicy      CheckName = "policy"

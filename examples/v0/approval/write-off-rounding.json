@@ -1,0 +1,43 @@
+{
+  "id": "apr_01JBXQ4C2E4G6J8L0N2Q4S6U8W",
+  "created": "2026-10-30T01:12:40.118Z",
+  "status": "approved",
+  "closed": "2026-10-30T07:41:12.004Z",
+  "mandate": "reconcile",
+  "grant": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
+  "agent": "reconciler",
+  "route": { "kind": "group", "issuer": "https://login.example.com", "groups": ["finance-oncall"] },
+  "action": {
+    "name": "write_off",
+    "location": "https://ledger.example.internal/mcp",
+    "arguments": { "amount": 12.4, "payment_id": "pmt_3F9Q", "reason": "rounding difference" }
+  },
+  "action_hash": "sha-256:example-hash-not-computed-action-0000000005",
+  "policy_version": "sha-256:example-hash-not-computed-policy-0000000001",
+  "required": 2,
+  "votes": [
+    {
+      "approver": {
+        "format": "iss_sub",
+        "iss": "https://login.example.com",
+        "sub": "00u5b0bR7tLm2Qa"
+      },
+      "verdict": "approve",
+      "time": "2026-10-30T07:02:51.000Z",
+      "auth_time": "2026-10-30T07:02:30.000Z",
+      "acr": "urn:example:acr:phishing-resistant"
+    },
+    {
+      "approver": {
+        "format": "iss_sub",
+        "iss": "https://login.example.com",
+        "sub": "00u3caro1Lk9Xp4"
+      },
+      "verdict": "approve",
+      "time": "2026-10-30T07:41:12.000Z",
+      "auth_time": "2026-10-30T07:40:58.000Z",
+      "acr": "urn:example:acr:phishing-resistant"
+    }
+  ],
+  "single_use_grant": "grt_01JBXQ9D3F5H7K9M1P3R5T7V9X"
+}
