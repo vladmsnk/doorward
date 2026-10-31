@@ -45,15 +45,21 @@ PostgreSQL 16: `make test-db` starts a throwaway one and prints the
 ## Admin API
 
 Configuration enters the box through the Admin API, and only there. Every
-write is validated against the contract, then against the other documents
-(a mandate's operations exist, a mandate lies within every agent that may
-hold it, no identity is claimed twice), and stored as a new version. Nothing
-is overwritten; `…/versions` shows who changed what and when.
+write is validated against the contract, then against the whole
+configuration as it would be after the write (a mandate's operations exist,
+a mandate lies within every agent that may hold it, no identity is claimed
+twice), under one lock so concurrent changes are checked one after the
+other, and stored as a new version. Nothing is overwritten; `…/versions`
+shows who changed what and when.
+
+The Admin API listens on `127.0.0.1:8081` by default, because one token
+authorizes every change. Expose it with `--admin-addr` only behind
+something that restricts who can reach it.
 
 ```sh
 export AGENTBOX_DB=postgres://… AGENTBOX_ADMIN_TOKEN=$(openssl rand -hex 16)
 export AGENTBOX_MASTER_KEY=$(agentbox master-key)   # keep it: it seals the signing keys and secrets
-agentbox serve                                      # public listener on :8080, Admin API on :8081
+agentbox serve                                      # public listener on :8080, Admin API on 127.0.0.1:8081
 
 H="Authorization: Bearer $AGENTBOX_ADMIN_TOKEN"
 curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \

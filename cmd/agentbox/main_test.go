@@ -75,3 +75,11 @@ func TestVersion(t *testing.T) {
 		t.Errorf("exit %d, output %q", code, out)
 	}
 }
+
+// P5: the Admin API listens on this machine only unless told otherwise.
+func TestAdminAPIDefaultsToLocalhost(t *testing.T) {
+	_, _, stderr := runCLI("serve", "--help")
+	if !strings.Contains(stderr, `(default "127.0.0.1:8081")`) {
+		t.Errorf("serve --help does not show the Admin API on localhost:\n%s", stderr)
+	}
+}

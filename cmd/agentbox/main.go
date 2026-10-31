@@ -25,7 +25,7 @@ func main() {
 
 const usage = `usage:
   agentbox validate [--kind KIND] FILE...   validate documents against the v0 schemas
-  agentbox serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on :8081
+  agentbox serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on 127.0.0.1:8081
   agentbox grant mint|verify ...            sign and record a grant; run a grant's checks
   agentbox master-key                       print a new master key for AGENTBOX_MASTER_KEY
   agentbox version                          print the version
