@@ -181,3 +181,20 @@ func TestSubsetUndeclaredAndNestedArguments(t *testing.T) {
 		})
 	}
 }
+
+// P1: a grant whose entries bound one argument in contradictory ways allows
+// no call. Before the fix, EUR in one entry and USD in another combined into
+// no bound at all, and any currency passed.
+func TestSubsetContradictoryEntries(t *testing.T) {
+	g := v0.Grant{AuthorizationDetails: []v0.AuthorizationDetail{
+		{Type: "tool_call", Locations: []string{payments}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"EUR"}}}},
+		{Type: "tool_call", Locations: []string{payments}, Actions: []string{"pay_invoice"}, Constraints: map[string]v0.Constraint{"/currency": {OneOf: []any{"USD"}}}},
+	}}
+	w := newWorld(t)
+	for _, cur := range []string{"EUR", "USD", "GBP"} {
+		check, reason := w.subset(g, core.Call{Resource: payments, Action: "pay_invoice", Arguments: map[string]any{"invoice_id": "i", "amount": 10.0, "currency": cur}})
+		if reason == nil || reason.Code != v0.ReasonConstraintViolated || reason.Field != "/currency" || check.Result != v0.CheckFail {
+			t.Errorf("%s: %+v %+v", cur, check, reason)
+		}
+	}
+}

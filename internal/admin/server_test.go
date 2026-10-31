@@ -192,6 +192,8 @@ func TestRefusals(t *testing.T) {
 			strings.ReplaceAll(invoices, "https://payments.example.internal", "https://nowhere.example.internal"), 400, "no manifest declares"},
 		{"constraint on an argument no operation has", "/admin/v0/mandates/invoices", strings.Replace(invoices, "/amount: { min: 0.01, max: 5000 }", "/total: { min: 0.01, max: 5000 }", 1), 400, "none of its operations"},
 		{"monthly limit above the agent's cap", "/admin/v0/mandates/invoices", strings.Replace(invoices, "max: 5000\n    - name: calls", "max: 25000\n    - name: calls", 1), 400, "caps it at 20000"},
+		{"contradictory bounds", "/admin/v0/mandates/invoices",
+			strings.Replace(invoices, "/amount: { min: 0.01, max: 5000 }", "/amount: { min: 6000, max: 5000 }", 1), 400, "min 6000 is above max 5000"},
 		{"second manifest on one audience", "/admin/v0/manifests/payments-copy",
 			strings.Replace(string(example(t, "manifest-payments-api.yaml")), "name: payments-api", "name: payments-copy", 1), 400, "already belongs to manifest payments-api"},
 		{"agent listing a missing mandate", "/admin/v0/agents/invoice-assistant",

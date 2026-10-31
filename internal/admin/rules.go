@@ -158,6 +158,7 @@ func sortedManifestNames(m map[string]v0.Manifest) []string {
 func (s *snapshot) checkMandate(m v0.Mandate) Problems {
 	var p Problems
 	p = append(p, s.operationsExist(m.Spec.Permissions, "mandate "+m.Metadata.Name)...)
+	p = append(p, policy.Coherent(m.Spec.Permissions, "mandate "+m.Metadata.Name)...)
 	for _, name := range sortedAgentNames(s.agents) {
 		a := s.agents[name]
 		if slices.Contains(a.Spec.Mandates, m.Metadata.Name) || (m.Spec.Open && a.Spec.Status == v0.AgentUnverified) {
@@ -187,6 +188,7 @@ func (s *snapshot) checkAgent(a v0.Agent) Problems {
 		}
 	}
 	p = append(p, s.operationsExist(a.Spec.Permissions, "agent "+a.Metadata.Name)...)
+	p = append(p, policy.Coherent(a.Spec.Permissions, "agent "+a.Metadata.Name)...)
 	for _, other := range s.agents {
 		if other.Metadata.Name == a.Metadata.Name {
 			continue
