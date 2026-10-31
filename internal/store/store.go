@@ -6,6 +6,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
@@ -19,7 +20,7 @@ var (
 	// ErrDisabled is returned when the current version of a document is
 	// disabled and the caller asked for a usable one.
 	ErrDisabled = errors.New("disabled")
-	// ErrExhausted is returned by Consume when the budget would be overdrawn.
+	// ErrExhausted is returned when a budget would be overdrawn.
 	ErrExhausted = errors.New("limit exhausted")
 	// ErrState is returned when a record cannot move to the requested state.
 	ErrState = errors.New("invalid state transition")
@@ -33,6 +34,11 @@ type Store interface {
 	Decisions() Decisions
 	Approvals() Approvals
 	Counters() Counters
+	// Allow spends an allowance all at once or not at all: every draw fits
+	// its budget and the single-use grant was unspent, or nothing changes
+	// and the error says why (an *ExhaustedError, or ErrState for a
+	// single-use grant already spent).
+	Allow(ctx context.Context, a Allowance) ([]Drawn, error)
 	Keys() Keys
 	// LockConfig runs fn in one transaction holding the configuration lock.
 	// No two LockConfig calls run at once, fn reads the configuration as
@@ -149,13 +155,49 @@ type Approvals interface {
 	Close(ctx context.Context, id string, status v0.ApprovalStatus, at time.Time, singleUseGrant string) (v0.Approval, error)
 }
 
-// Counters are budgets. A key names what a budget belongs to.
+// Counters are budgets. A key names what a budget belongs to. Amounts are
+// exact decimals written as strings ("1200", "0.1"), never floating point,
+// so a budget of 0.30 holds exactly three draws of 0.10.
 type Counters interface {
-	// Consume adds amount to the counter at key if the result stays within
-	// max, and returns what remains. ErrExhausted otherwise, consuming nothing.
-	Consume(ctx context.Context, key string, amount, max float64) (remaining float64, err error)
-	// Consumed returns the counter's value, 0 if it does not exist.
-	Consumed(ctx context.Context, key string) (float64, error)
+	// Consumed returns what the budget at key has drawn, "0" if nothing.
+	Consumed(ctx context.Context, key string) (string, error)
+}
+
+// Draw is one budget an allowed call draws on.
+type Draw struct {
+	Key    string
+	Amount string // exact decimal, not negative
+	Max    string // exact decimal
+}
+
+// Drawn is what one draw left.
+type Drawn struct {
+	Key       string
+	Amount    string
+	Remaining string
+}
+
+// ExhaustedError is a draw refused because the budget has no room for it.
+// It matches ErrExhausted.
+type ExhaustedError struct {
+	Key       string
+	Amount    string
+	Remaining string
+}
+
+func (e *ExhaustedError) Error() string {
+	return fmt.Sprintf("budget %s has %s left; the call needs %s", e.Key, e.Remaining, e.Amount)
+}
+
+func (e *ExhaustedError) Is(target error) bool { return target == ErrExhausted }
+
+// Allowance is everything allowing one call spends: its budgets and, for a
+// single-use grant, the grant itself.
+type Allowance struct {
+	Draws []Draw
+	// SingleUse is the jti of the single-use grant the call runs on.
+	SingleUse string
+	At        time.Time
 }
 
 // SigningKey is one of the box's keys. PrivateEnc is sealed; the store

@@ -339,9 +339,10 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 	aud := fs.String("aud", "", "the resource being called; without it the audience check is skipped")
 	action := fs.String("action", "", "an operation to check against the grant (needs --aud)")
 	argsJSON := fs.String("args", "{}", "the operation's arguments, a JSON object")
+	spend := fs.Bool("spend", false, "with --action: draw the call's budgets and spend its single-use grant, as allowing it would")
 	asJSON := fs.Bool("json", false, "print the result as JSON")
 	fs.Usage = func() {
-		fmt.Fprintln(stderr, "usage: doorward grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nWith --action, also checks that the call lies inside the grant and how risky it is.\nExit status: 0 accepted, 1 refused, 3 approval required.")
+		fmt.Fprintln(stderr, "usage: doorward grant verify [flags] TOKEN\n\nRuns the grant's checks in the order a decision record lists them. TOKEN - reads it from stdin.\nWith --action, also checks that the call lies inside the grant and how risky it is;\nwith --spend, also draws its budgets, which changes them.\nExit status: 0 accepted, 1 refused, 3 approval required.")
 		fs.PrintDefaults()
 	}
 	if code, ok := parseFlags(fs, args); !ok {
@@ -363,6 +364,10 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 			return 2
 		}
 		call = &core.Call{Resource: *aud, Action: *action, Arguments: args}
+	}
+	if *spend && call == nil {
+		fmt.Fprintln(stderr, "doorward grant verify: --spend needs --action, the call that spends")
+		return 2
 	}
 	tok := fs.Arg(0)
 	if tok == "-" {
@@ -409,15 +414,23 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 			return 1
 		}
 	}
+	var uses []v0.LimitUse
+	if *spend && r.OK() && !held {
+		uses, err = spendCall(ctx, st, &r, *call)
+		if err != nil {
+			fmt.Fprintf(stderr, "doorward grant verify: %v\n", err)
+		}
+	}
 	if *asJSON {
 		out, _ := json.MarshalIndent(struct {
 			grant.Result
-			ActionHash string `json:"action_hash,omitempty"`
-			Held       bool   `json:"approval_required,omitempty"`
-		}{r, actionHash(call), held}, "", "  ")
+			ActionHash string        `json:"action_hash,omitempty"`
+			Held       bool          `json:"approval_required,omitempty"`
+			Limits     []v0.LimitUse `json:"limits,omitempty"`
+		}{r, actionHash(call), held, uses}, "", "  ")
 		fmt.Fprintln(stdout, string(out))
 	} else {
-		printResult(stdout, r, call, held)
+		printResult(stdout, r, call, held, uses)
 	}
 	switch {
 	case !r.OK():
@@ -426,6 +439,35 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 		return 3
 	}
 	return 0
+}
+
+// spendCall draws an allowed call's budgets and spends its single-use grant,
+// all at once, and adds the limits check to the result.
+func spendCall(ctx context.Context, st store.Store, r *grant.Result, call core.Call) ([]v0.LimitUse, error) {
+	now := time.Now()
+	budgets, reason := core.Budgets(*r.Grant, call, now)
+	if reason != nil {
+		r.Checks = append(r.Checks, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: reason.Message})
+		r.Reason = reason
+		return nil, nil
+	}
+	a := store.Allowance{Draws: core.Draws(budgets), At: now}
+	if r.Standing.SingleUse {
+		a.SingleUse = r.Grant.ID
+	}
+	drawn, err := st.Allow(ctx, a)
+	if errors.Is(err, store.ErrState) {
+		// Spent by another call since the status check ran.
+		r.Checks = append(r.Checks, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: "single-use grant already spent"})
+		r.Reason = &v0.Reason{Code: v0.ReasonGrantRevoked, Message: fmt.Sprintf("single-use grant %s was spent by another call", r.Grant.ID)}
+		return nil, nil
+	}
+	check, reason, uses := core.LimitsCheck(budgets, drawn, err)
+	r.Checks, r.Reason = append(r.Checks, check), reason
+	if reason != nil && reason.Code == v0.ReasonInternalError {
+		return nil, err
+	}
+	return uses, nil
 }
 
 // checkCall runs the call's checks after the grant's own: subset, then
@@ -455,7 +497,7 @@ func actionHash(call *core.Call) string {
 	return h
 }
 
-func printResult(w io.Writer, r grant.Result, call *core.Call, held bool) {
+func printResult(w io.Writer, r grant.Result, call *core.Call, held bool, uses []v0.LimitUse) {
 	for _, c := range r.Checks {
 		line := fmt.Sprintf("%-5s %-11s %s", c.Result, c.Name, c.Detail)
 		fmt.Fprintln(w, strings.TrimRight(line, " "))
@@ -463,8 +505,15 @@ func printResult(w io.Writer, r grant.Result, call *core.Call, held bool) {
 	if call != nil {
 		fmt.Fprintf(w, "action hash %s\n", actionHash(call))
 	}
+	for _, u := range uses {
+		fmt.Fprintf(w, "budget %s: drew %v, %v left\n", u.Name, u.Consumed, u.Remaining)
+	}
 	if !r.OK() {
-		fmt.Fprintf(w, "refused: %s\n", r.Reason.Code)
+		if r.Reason.Message != "" {
+			fmt.Fprintf(w, "refused: %s: %s\n", r.Reason.Code, r.Reason.Message)
+		} else {
+			fmt.Fprintf(w, "refused: %s\n", r.Reason.Code)
+		}
 		return
 	}
 	if held {

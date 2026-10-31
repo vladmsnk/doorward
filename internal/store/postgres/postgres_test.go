@@ -374,26 +374,84 @@ func TestKeysAndSecrets(t *testing.T) {
 	}
 }
 
-func TestCountersNeverOverdraw(t *testing.T) {
+// B4: budgets are exact, a call draws all of its budgets or none, and a
+// single-use grant is spent with them, once.
+func TestAllowIsExactAndAtomic(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	key := store.GrantKey("grt_x", "calls")
+	now := time.Now()
+	draw := func(key, amount, max string) store.Draw { return store.Draw{Key: key, Amount: amount, Max: max} }
+	consumed := func(key string) string {
+		t.Helper()
+		v, err := s.Counters().Consumed(ctx, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
 
-	remaining, err := s.Counters().Consume(ctx, key, 1, 3)
-	if err != nil || remaining != 2 {
-		t.Fatalf("first: %v %v", remaining, err)
+	// Decimal amounts add up exactly: three draws of 0.10 fill 0.30.
+	cents := store.ConsentKey("c", "payout", "2026-10")
+	for i := 0; i < 3; i++ {
+		d, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
+		if err != nil {
+			t.Fatalf("draw %d: %v", i, err)
+		}
+		if want := []string{"0.2", "0.1", "0"}[i]; d[0].Remaining != want {
+			t.Errorf("draw %d left %s, want %s", i, d[0].Remaining, want)
+		}
 	}
-	if _, err := s.Counters().Consume(ctx, key, 5, 3); !errors.Is(err, store.ErrExhausted) {
-		t.Errorf("overdraw: %v", err)
+	_, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
+	var ex *store.ExhaustedError
+	if !errors.As(err, &ex) || !errors.Is(err, store.ErrExhausted) || ex.Remaining != "0" {
+		t.Fatalf("fourth draw: %v", err)
 	}
-	if v, _ := s.Counters().Consumed(ctx, key); v != 1 {
-		t.Errorf("failed draw changed the counter: %v", v)
+	if v := consumed(cents); v != "0.3" {
+		t.Errorf("consumed %s, want exactly 0.3", v)
 	}
-	if _, err := s.Counters().Consume(ctx, store.ConsentKey("c", "payout", "2026-10"), 7000, 5000); !errors.Is(err, store.ErrExhausted) {
+
+	// A first draw larger than the budget creates nothing.
+	big := store.ConsentKey("c", "payout", "2026-11")
+	if _, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(big, "7000", "5000")}, At: now}); !errors.Is(err, store.ErrExhausted) {
 		t.Errorf("first draw over max: %v", err)
 	}
-	if v, _ := s.Counters().Consumed(ctx, store.ConsentKey("c", "payout", "2026-10")); v != 0 {
-		t.Errorf("rejected first draw left %v", v)
+	if v := consumed(big); v != "0" {
+		t.Errorf("a refused first draw left %s", v)
+	}
+
+	// All or nothing: the calls budget has room, the payout budget does not,
+	// so neither is drawn.
+	calls := store.GrantKey("grt_a", "calls")
+	_, err = s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(calls, "1", "50"), draw(cents, "0.1", "0.3")}, At: now})
+	if !errors.As(err, &ex) || ex.Key != cents {
+		t.Fatalf("mixed draw: %v", err)
+	}
+	if v := consumed(calls); v != "0" {
+		t.Errorf("the budget with room was drawn anyway: %s", v)
+	}
+
+	// A single-use grant is spent with its budgets, once, and not at all
+	// when a budget refuses.
+	g := example[v0.Grant](t, "grant/reconcile.json")
+	g.ID = "grt_single_use_000000000001"
+	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
+	if !errors.Is(err, store.ErrExhausted) {
+		t.Fatalf("single-use with an exhausted budget: %v", err)
+	}
+	if rec, _ := s.Grants().Get(ctx, g.ID); rec.UsedAt != nil {
+		t.Error("the single-use grant was spent although its budget refused the call")
+	}
+	if _, err := s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(calls, "1", "50")}, At: now}); err != nil {
+		t.Fatalf("single-use: %v", err)
+	}
+	if _, err := s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(calls, "1", "50")}, At: now}); !errors.Is(err, store.ErrState) {
+		t.Errorf("single-use spent twice: %v", err)
+	}
+	if v := consumed(calls); v != "1" {
+		t.Errorf("the refused second use drew %s", v)
 	}
 
 	// 100 parallel draws of 1 against a budget of 50: exactly 50 succeed.
@@ -404,7 +462,7 @@ func TestCountersNeverOverdraw(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Counters().Consume(ctx, store.GrantKey("grt_y", "calls"), 1, 50); err == nil {
+			if _, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(store.GrantKey("grt_y", "calls"), "1", "50")}, At: now}); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -414,5 +472,26 @@ func TestCountersNeverOverdraw(t *testing.T) {
 	wg.Wait()
 	if ok != 50 {
 		t.Errorf("%d draws succeeded, want 50", ok)
+	}
+
+	// Calls drawing the same two budgets, listed in opposite orders, do
+	// not deadlock: budgets are always drawn in key order.
+	k1, k2 := store.GrantKey("grt_z", "a"), store.GrantKey("grt_z", "b")
+	for i := 0; i < 40; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ds := []store.Draw{draw(k1, "1", "1000"), draw(k2, "1", "1000")}
+			if i%2 == 1 {
+				ds[0], ds[1] = ds[1], ds[0]
+			}
+			if _, err := s.Allow(ctx, store.Allowance{Draws: ds, At: now}); err != nil {
+				t.Errorf("draw %d: %v", i, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+	if consumed(k1) != "40" || consumed(k2) != "40" {
+		t.Errorf("after 40 calls: %s and %s", consumed(k1), consumed(k2))
 	}
 }

@@ -250,6 +250,48 @@ func TestGrantMintAndVerify(t *testing.T) {
 		t.Errorf("pay_invoice is in %d entries: %+v", n, res.Grant.Details)
 	}
 
+	// B4: an allowed call draws its budgets. Alice may pay 5,000 EUR a
+	// month: 4,000 fits; 1,200 then does not, and the refused call spends
+	// nothing, not even its single-use grant. A held call draws nothing.
+	payOnce := func(amount string) (string, string) {
+		args := `{"invoice_id":"inv_2","amount":` + amount + `,"currency":"EUR"}`
+		code, tok, stderr := mint("--single-use", "--action", "pay_invoice", "--args", args, "--consent", consent, "../../examples/v0/grant/pay-invoice.json")
+		if code != 0 {
+			t.Fatalf("mint a single-use grant for %s: %d %s", amount, code, stderr)
+		}
+		return args, strings.TrimSpace(tok)
+	}
+	args4000, tok4000 := payOnce("4000")
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", args4000, "--spend", tok4000)
+	if code != 0 || !strings.Contains(out, "budget payout-month: drew 4000, 1000 left") || !strings.Contains(out, "budget calls: drew 1, 49 left") {
+		t.Fatalf("spend 4,000 EUR: %d\n%s", code, out)
+	}
+	if code, out, _ := verify("--aud", payments, "--action", "pay_invoice", "--args", args4000, "--spend", tok4000); code != 1 || !strings.Contains(out, "was used at") {
+		t.Errorf("spend the same single-use grant twice: %d\n%s", code, out)
+	}
+	args1200, tok1200 := payOnce("1200")
+	code, out, _ = verify("--aud", payments, "--action", "pay_invoice", "--args", args1200, "--spend", tok1200)
+	if code != 1 || !strings.Contains(out, "payout-month") || !strings.Contains(out, "refused: limit_exceeded") {
+		t.Fatalf("spend 1,200 EUR over the month's budget: %d\n%s", code, out)
+	}
+	if code, out, _ := verify("--aud", payments, "--action", "pay_invoice", "--args", args1200, tok1200); code != 0 {
+		t.Errorf("the refused call spent its single-use grant: %d\n%s", code, out)
+	}
+	code, standing, stderr := mint("--consent", consent, "../../examples/v0/grant/pay-invoice.json")
+	if code != 0 {
+		t.Fatalf("mint a standing grant: %d %s", code, stderr)
+	}
+	standing = strings.TrimSpace(standing)
+	if code, out, _ := verify("--aud", payments, "--action", "pay_invoice", "--args", payArgs, "--spend", standing); code != 3 || strings.Contains(out, "budget ") {
+		t.Errorf("a held call drew budgets: %d\n%s", code, out)
+	}
+	if code, out, _ := verify("--aud", payments, "--action", "get_invoice", "--args", `{"invoice_id":"inv_1"}`, "--spend", standing); code != 0 || !strings.Contains(out, "budget calls: drew 1, 49 left") {
+		t.Errorf("a read draws one call: %d\n%s", code, out)
+	}
+	if code, _, _ := verify("--spend", standing); code != 2 {
+		t.Errorf("--spend without --action: %d", code)
+	}
+
 	// P3: the consent is checked fully.
 	expired := writeConsent(t, "cns_expired_000000000001", 40*24*time.Hour, 30*24*time.Hour)
 	onExpired := writeClaims(t, "on-expired.json", func(g map[string]any) { g["consent"] = "cns_expired_000000000001" })

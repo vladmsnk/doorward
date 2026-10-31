@@ -49,6 +49,11 @@ func (g Grant) Check() error {
 	p.checkDetails(g.AuthorizationDetails)
 	p.onePerOperation(g.AuthorizationDetails)
 	p.checkLimits(g.Limits)
+	for _, l := range g.Limits {
+		if (l.Per == PerDay || l.Per == PerMonth) && g.Consent == "" {
+			p.add("limit %q runs per %s of a consent, but the grant rests on none; a service grant's limits run per grant", l.Name, l.Per)
+		}
+	}
 	return p.err()
 }
 

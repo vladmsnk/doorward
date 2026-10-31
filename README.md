@@ -217,6 +217,27 @@ approval required: a person approves this exact call, then a single-use grant bo
 belongs to the evaluation endpoint, together with budgets: it happens only
 for a call that is allowed.
 
+Then the budgets (`limits`). A count budget draws 1 per call, a sum budget
+the value of its argument, which must be present, a number and not
+negative. A per-grant budget belongs to the grant; a daily or monthly one
+to the consent and the calendar day or month in UTC, shared by every grant
+under that consent. Budgets are drawn last, only for a call that passed
+every other check, and all at once with the call's single-use grant: every
+budget has room and the grant is unspent, or nothing changes. Amounts are
+exact decimals, so ten draws of 0.10 fill a budget of 1.00 exactly.
+`--spend` draws them, as allowing the call would:
+
+```sh
+doorward grant verify --aud https://payments.example.internal --action pay_invoice \
+  --args '{"invoice_id":"inv_7Q2M9X4K","amount":1200,"currency":"EUR"}' --spend - < grant.jwt
+```
+
+```
+...
+fail  limits      payout-month
+refused: limit_exceeded: budget payout-month has 1000 left this month; the call needs 1200
+```
+
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the

@@ -63,10 +63,11 @@ vocabulary:
 | Contract v0 | schemas, Go types, examples, validator | done |
 | A1, A2, A4 | PostgreSQL storage; Admin API with whole-configuration rules; signing keys, sealed secrets, JWK Set | done |
 | B1, B2, B3 | grant verification; subset check; tiers, action hash, single-use grants | done |
+| B4 | budgets: exact, atomic, drawn last with the single-use grant | done |
 | P1–P7 | fail-open paths from the first review closed, each with a negative test | done |
 | | commits authored and signed off by a person, checked in CI | done |
 
-**Next: B4, budgets.**
+**Next: B5, the evaluation endpoint and the journal.**
 
 ## The build order at a glance
 

@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -329,32 +332,67 @@ func (s approvals) update(ctx context.Context, id string, change func(*v0.Approv
 
 type counters struct{ pool *pgxpool.Pool }
 
-func (s counters) Consume(ctx context.Context, key string, amount, max float64) (float64, error) {
-	var consumed float64
-	err := s.pool.QueryRow(ctx, `
-		INSERT INTO counters (key, consumed) VALUES ($1, $2)
-		ON CONFLICT (key) DO UPDATE SET consumed = counters.consumed + EXCLUDED.consumed
-		WHERE counters.consumed + EXCLUDED.consumed <= $3
-		RETURNING consumed`, key, amount, max).Scan(&consumed)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return 0, store.ErrExhausted
-	}
-	if err != nil {
-		return 0, err
-	}
-	if consumed > max { // a fresh counter whose first draw is already too big
-		if _, err := s.pool.Exec(ctx, "UPDATE counters SET consumed = consumed - $2 WHERE key = $1", key, amount); err != nil {
-			return 0, err
-		}
-		return 0, store.ErrExhausted
-	}
-	return max - consumed, nil
+func (s counters) Consumed(ctx context.Context, key string) (string, error) {
+	var v string
+	err := s.pool.QueryRow(ctx, "SELECT trim_scale(coalesce((SELECT consumed FROM counters WHERE key = $1), 0))::text", key).Scan(&v)
+	return v, err
 }
 
-func (s counters) Consumed(ctx context.Context, key string) (float64, error) {
-	var v float64
-	err := s.pool.QueryRow(ctx, "SELECT coalesce((SELECT consumed FROM counters WHERE key = $1), 0)", key).Scan(&v)
-	return v, err
+// drawSQL takes amount from the budget at key if the result stays within
+// max, in one statement: a new counter is created only if the amount fits
+// at all, and an existing one is updated only if the sum fits. Nothing is
+// written and no row comes back otherwise. Amounts are numeric, exact.
+const drawSQL = `
+	INSERT INTO counters AS c (key, consumed)
+	SELECT $1, $2::numeric WHERE $2::numeric <= $3::numeric
+	ON CONFLICT (key) DO UPDATE SET consumed = c.consumed + EXCLUDED.consumed
+	WHERE c.consumed + EXCLUDED.consumed <= $3::numeric
+	RETURNING trim_scale($3::numeric - c.consumed)::text`
+
+// Allow spends a call's single-use grant and draws its budgets in one
+// transaction. Budgets are drawn in key order, so two calls drawing the same
+// budgets lock them in the same order and cannot deadlock.
+func (s *Store) Allow(ctx context.Context, a store.Allowance) ([]store.Drawn, error) {
+	draws := slices.Clone(a.Draws)
+	slices.SortFunc(draws, func(x, y store.Draw) int { return strings.Compare(x.Key, y.Key) })
+	remaining := make(map[string]string, len(draws))
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if a.SingleUse != "" {
+			tag, err := tx.Exec(ctx,
+				"UPDATE grants SET used_at = $2 WHERE jti = $1 AND single_use AND used_at IS NULL", a.SingleUse, a.At)
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() == 0 {
+				return fmt.Errorf("single-use grant %s: already spent or not single-use: %w", a.SingleUse, store.ErrState)
+			}
+		}
+		for _, d := range draws {
+			var left string
+			err := tx.QueryRow(ctx, drawSQL, d.Key, d.Amount, d.Max).Scan(&left)
+			if errors.Is(err, pgx.ErrNoRows) {
+				if err := tx.QueryRow(ctx,
+					"SELECT trim_scale($2::numeric - coalesce((SELECT consumed FROM counters WHERE key = $1), 0))::text", d.Key, d.Max,
+				).Scan(&left); err != nil {
+					return err
+				}
+				return &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: left}
+			}
+			if err != nil {
+				return err
+			}
+			remaining[d.Key] = left
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]store.Drawn, len(a.Draws))
+	for i, d := range a.Draws {
+		out[i] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: remaining[d.Key]}
+	}
+	return out, nil
 }
 
 // ---------------------------------------------------------------- helpers

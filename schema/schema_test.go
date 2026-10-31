@@ -341,6 +341,7 @@ func TestRuleChecks(t *testing.T) {
 		edits []edit
 		want  string
 	}{
+		{"daily budget on a service grant", svcGrant, schema.Grant, []edit{{set: "/limits/0/per", value: "day"}}, "rests on none"},
 		{"operation in two entries", userGrant, schema.Grant, []edit{{set: "/authorization_details/0/actions", value: []any{"get_invoice", "list_payments", "pay_invoice"}}}, "each operation appears in exactly one entry"},
 		{"aud wider than the details", userGrant, schema.Grant, []edit{{set: "/aud", value: []any{"https://payments.example.internal", "https://other.example.internal"}}}, "aud must list exactly"},
 		{"expiring before issue", userGrant, schema.Grant, []edit{{set: "/exp", value: 1793352000}}, "exp must be after iat"},
