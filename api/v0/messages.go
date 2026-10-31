@@ -1,44 +1,46 @@
 package v0
 
-// URIs of the token exchange that starts a task.
-//
-//nolint:gosec // G101: registered OAuth URNs, not credentials.
+// ConsentStatus is whether a consent still stands.
+type ConsentStatus string
+
 const (
-	GrantTypeTokenExchange = "urn:ietf:params:oauth:grant-type:token-exchange"
-	TokenTypeIDToken       = "urn:ietf:params:oauth:token-type:id_token"
-	TokenTypeJWT           = "urn:ietf:params:oauth:token-type:jwt"
-	TokenTypeTaskTicket    = "urn:agentbox:params:oauth:token-type:task-ticket"
-	TokenTypeAccessToken   = "urn:ietf:params:oauth:token-type:access_token"
-	ClientAssertionJWT     = "urn:ietf:params:oauth:client-assertion-type:jwt-bearer"
-	AgentTaskType          = "agent_task"
+	ConsentActive  ConsentStatus = "active"
+	ConsentExpired ConsentStatus = "expired"
+	ConsentRevoked ConsentStatus = "revoked"
 )
 
-// TaskRequest starts a task: an OAuth 2.0 token exchange (RFC 8693). On the
-// wire it is form-encoded, with AuthorizationDetails as a JSON string
-// (RFC 9396). An application sends it for a user task and gets a ticket; an
-// agent's sidecar sends it for a service task and gets the grant.
-type TaskRequest struct {
-	GrantType          string `json:"grant_type"`
-	SubjectToken       string `json:"subject_token"`
-	SubjectTokenType   string `json:"subject_token_type"`
-	RequestedTokenType string `json:"requested_token_type"`
-	// AuthorizationDetails holds exactly one entry.
-	AuthorizationDetails []AgentTask `json:"authorization_details"`
-	// Confirmation proves the user confirmed this exact task; required when
-	// the task type says so.
-	Confirmation        string `json:"confirmation,omitempty"`
-	ClientAssertionType string `json:"client_assertion_type,omitempty"`
-	ClientAssertion     string `json:"client_assertion,omitempty"`
+// Revoker is who ended a consent.
+type Revoker string
+
+const (
+	RevokedByUser  Revoker = "user"
+	RevokedByAdmin Revoker = "admin"
+	RevokedByIdP   Revoker = "idp"
+)
+
+// Consent is the record of one person allowing one agent one mandate.
+type Consent struct {
+	ID      string    `json:"id"`
+	User    SubjectID `json:"user"`
+	Agent   string    `json:"agent"`
+	Mandate string    `json:"mandate"`
+	// MandateVersion is the digest of the mandate as the user saw it.
+	MandateVersion string        `json:"mandate_version"`
+	Status         ConsentStatus `json:"status"`
+	GrantedAt      Timestamp     `json:"granted_at"`
+	ExpiresAt      Timestamp     `json:"expires_at"`
+	RevokedAt      *Timestamp    `json:"revoked_at,omitempty"`
+	RevokedBy      Revoker       `json:"revoked_by,omitempty"`
+	// Auth is how the user signed in to consent.
+	Auth *ConsentAuth `json:"auth,omitempty"`
 }
 
-// AgentTask names the task to start. Its scope comes from the task type,
-// never from the request.
-type AgentTask struct {
-	Type     string  `json:"type"`
-	TaskType string  `json:"task_type"`
-	ObjectID string  `json:"object_id"`
-	Agent    string  `json:"agent"`
-	Trigger  Trigger `json:"trigger"`
+// ConsentAuth is how a user signed in to consent.
+type ConsentAuth struct {
+	AuthTime Timestamp `json:"auth_time"`
+	ACR      string    `json:"acr,omitempty"`
+	// SessionID is the user's session at the identity provider.
+	SessionID string `json:"sid,omitempty"`
 }
 
 // ApprovalStatus is where an approval request stands.
@@ -57,15 +59,17 @@ type Approval struct {
 	Created Timestamp      `json:"created"`
 	Status  ApprovalStatus `json:"status"`
 	// Closed is set once the request is no longer pending.
-	Closed *Timestamp `json:"closed,omitempty"`
-	Task   TaskRef    `json:"task"`
+	Closed  *Timestamp `json:"closed,omitempty"`
+	Mandate string     `json:"mandate"`
+	// Consent is the consent the grant rests on, for a user mandate.
+	Consent string `json:"consent,omitempty"`
 	// Grant is the grant the call was made under.
 	Grant string `json:"grant"`
 	Agent string `json:"agent"`
-	// User is the user of a user task: the only voter on a user route, never
-	// a voter on a group route.
+	// User is the user the agent acts for: the only voter on a user route,
+	// never a voter on a group route.
 	User *SubjectID `json:"user,omitempty"`
-	// Route is who was asked, from the task type.
+	// Route is who was asked, from the mandate.
 	Route Approvers `json:"route"`
 	// Action is the call in canonical form, as the approvers saw it.
 	Action        ApprovedAction `json:"action"`

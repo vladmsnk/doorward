@@ -8,12 +8,12 @@
   "jti": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
   "act": { "sub": "reconciler" },
   "cnf": { "jkt": "example-jkt-not-a-real-thumbprint-000000002" },
+  "mandate": "reconcile",
   "authorization_details": [
     {
       "type": "tool_call",
       "locations": ["https://ledger.example.internal/mcp"],
-      "actions": ["list_unmatched"],
-      "constraints": { "/day": { "equals": "2026-10-29" } }
+      "actions": ["list_unmatched"]
     },
     {
       "type": "tool_call",
@@ -27,12 +27,6 @@
       "actions": ["get_invoice", "list_payments"]
     }
   ],
-  "task": {
-    "id": "tsk_01JBXQ2M8K0M2P4R6T8V0X2Z4B",
-    "type": "reconcile-day",
-    "object": { "type": "day", "id": "2026-10-29" },
-    "started": { "trigger": "schedule" }
-  },
   "limits": [
     { "name": "entries", "kind": "count", "actions": ["post_entry"], "max": 500 },
     {

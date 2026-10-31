@@ -59,14 +59,9 @@ type Principal struct {
 // GrantRef points at the grant a decision was made against, copied at
 // decision time so the record reads on its own.
 type GrantRef struct {
-	ID   string  `json:"id"`
-	Task TaskRef `json:"task"`
-}
-
-// TaskRef names a task.
-type TaskRef struct {
-	ID   string `json:"id"`
-	Type string `json:"type"`
+	ID      string `json:"id"`
+	Mandate string `json:"mandate"`
+	Consent string `json:"consent,omitempty"`
 }
 
 // Outcome is one of the three answers of the decision core.

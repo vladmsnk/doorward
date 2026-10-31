@@ -31,7 +31,7 @@ type ObjectMeta struct {
 	Labels      map[string]string `json:"labels,omitempty"`
 }
 
-// Owner is who answers for an agent or an application.
+// Owner is who answers for an agent.
 type Owner struct {
 	Team    string `json:"team"`
 	Contact string `json:"contact,omitempty"`
@@ -60,20 +60,18 @@ const (
 )
 
 // Permission is what may be called, where, and with which argument values, as
-// written in an agent or a task type. Its constraints may still refer to the
-// task's object; the STS resolves them into an AuthorizationDetail.
+// written in an agent or a mandate.
 type Permission struct {
-	Locations   []string                      `json:"locations"`
-	Actions     []string                      `json:"actions"`
-	Constraints map[string]ConstraintTemplate `json:"constraints,omitempty"`
+	Locations   []string              `json:"locations"`
+	Actions     []string              `json:"actions"`
+	Constraints map[string]Constraint `json:"constraints,omitempty"`
 }
 
 // AuthorizationDetailType is the RFC 9396 type of every entry the box issues.
 const AuthorizationDetailType = "tool_call"
 
 // AuthorizationDetail is one authorization_details entry of a grant
-// (RFC 9396). Its constraints are fully resolved: a grant never carries a
-// reference to the task's object, only the object's ID.
+// (RFC 9396).
 type AuthorizationDetail struct {
 	Type        string                `json:"type"`
 	Locations   []string              `json:"locations"`
@@ -91,14 +89,6 @@ type Constraint struct {
 	Prefix *string  `json:"prefix,omitempty"`
 }
 
-// ConstraintTemplate is a Constraint as written in configuration, where the
-// argument may also be tied to the task's object.
-type ConstraintTemplate struct {
-	Constraint
-	// TaskObject requires the argument to equal the ID of the task's object.
-	TaskObject bool `json:"task_object,omitempty"`
-}
-
 // LimitKind says what a limit counts.
 type LimitKind string
 
@@ -109,11 +99,25 @@ const (
 	LimitSum LimitKind = "sum"
 )
 
-// Limit is a budget of one task.
+// LimitPeriod is what a budget runs over.
+type LimitPeriod string
+
+const (
+	// PerGrant: the budget belongs to one grant.
+	PerGrant LimitPeriod = "grant"
+	// PerDay and PerMonth: the budget is shared by every grant of one
+	// consent within the calendar period.
+	PerDay   LimitPeriod = "day"
+	PerMonth LimitPeriod = "month"
+)
+
+// Limit is a budget.
 type Limit struct {
 	Name string    `json:"name"`
 	Kind LimitKind `json:"kind"`
 	Max  float64   `json:"max"`
+	// Per is what the budget runs over; empty means PerGrant.
+	Per LimitPeriod `json:"per,omitempty"`
 	// Field is the argument a sum limit adds up.
 	Field string `json:"field,omitempty"`
 	// Actions, when set, restricts the operations the limit counts.

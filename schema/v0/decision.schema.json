@@ -32,7 +32,7 @@
       "additionalProperties": false
     },
     "principal": {
-      "description": "Who acted and who answers for it, as established from the verified grant: the user of a user task, or the owning team of a service task. Absent when no grant could be verified.",
+      "description": "Who acted and who answers for it, as established from the verified grant: the user who consented, or the owning team of a service agent. Absent when no grant could be verified.",
       "type": "object",
       "required": ["agent"],
       "properties": {
@@ -46,18 +46,11 @@
     "grant": {
       "description": "The grant the decision was made against, copied at decision time so the record reads on its own without the journal.",
       "type": "object",
-      "required": ["id", "task"],
+      "required": ["id", "mandate"],
       "properties": {
         "id": { "$ref": "common.schema.json#/$defs/id" },
-        "task": {
-          "type": "object",
-          "required": ["id", "type"],
-          "properties": {
-            "id": { "$ref": "common.schema.json#/$defs/id" },
-            "type": { "$ref": "common.schema.json#/$defs/name" }
-          },
-          "additionalProperties": false
-        }
+        "mandate": { "$ref": "common.schema.json#/$defs/name" },
+        "consent": { "$ref": "common.schema.json#/$defs/id" }
       },
       "additionalProperties": false
     },

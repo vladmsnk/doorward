@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/grant.schema.json",
   "title": "Grant",
-  "description": "Claims of an agent grant: a short-lived JWT access token (RFC 9068, header typ at+jwt) the STS issues for one task, bound to the sidecar's key. The agent's model never sees it. For a user task, sub is the user and act the agent; for a service task the agent is both, so sub equals client_id.",
+  "description": "Claims of an agent grant: a short-lived JWT access token (RFC 9068, header typ at+jwt) the STS issues under a mandate, bound to the agent's key. For a user mandate, sub is the user and the grant names the consent it rests on, so the resource sees the user as if they had called; for a service mandate the agent is its own sub, so sub equals client_id.",
   "type": "object",
-  "required": ["iss", "sub", "aud", "client_id", "iat", "exp", "jti", "act", "authorization_details", "task"],
+  "required": ["iss", "sub", "aud", "client_id", "iat", "exp", "jti", "act", "mandate", "authorization_details"],
   "properties": {
     "iss": {
       "description": "The STS that issued the grant.",
@@ -12,7 +12,7 @@
       "format": "uri"
     },
     "sub": {
-      "description": "Whom the agent acts for: the user, unique across every identity provider the box trusts, or, for a service task, the agent itself.",
+      "description": "Whom the agent acts for: the user, unique across every identity provider the box trusts, or, under a service mandate, the agent itself.",
       "type": "string",
       "minLength": 1,
       "maxLength": 255
@@ -60,49 +60,22 @@
       },
       "additionalProperties": false
     },
+    "mandate": {
+      "description": "The mandate the grant was issued under.",
+      "$ref": "common.schema.json#/$defs/name"
+    },
+    "consent": {
+      "description": "The consent the grant rests on. Present exactly when sub is a user.",
+      "$ref": "common.schema.json#/$defs/id"
+    },
     "authorization_details": {
+      "description": "What the grant allows: the mandate's permissions intersected with the agent's.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/authorizationDetail" },
       "minItems": 1
     },
-    "task": {
-      "description": "The task this grant serves, as it was started.",
-      "type": "object",
-      "required": ["id", "type", "object", "started"],
-      "properties": {
-        "id": { "$ref": "common.schema.json#/$defs/id" },
-        "type": { "$ref": "common.schema.json#/$defs/name" },
-        "object": {
-          "type": "object",
-          "required": ["type", "id"],
-          "properties": {
-            "type": { "$ref": "common.schema.json#/$defs/name" },
-            "id": { "type": "string", "minLength": 1, "maxLength": 255 }
-          },
-          "additionalProperties": false
-        },
-        "initiator": {
-          "description": "The application that started a user task. A service task has none: the agent started it.",
-          "$ref": "common.schema.json#/$defs/name"
-        },
-        "started": {
-          "description": "How the task began, for policy and for the record.",
-          "type": "object",
-          "required": ["trigger"],
-          "properties": {
-            "trigger": { "enum": ["ui", "chat", "schedule", "event"] },
-            "confirmed_at": {
-              "description": "When the user confirmed this exact task. Present when the task type required confirmation.",
-              "$ref": "common.schema.json#/$defs/numericDate"
-            }
-          },
-          "additionalProperties": false
-        }
-      },
-      "additionalProperties": false
-    },
     "limits": {
-      "description": "Budgets this grant draws from.",
+      "description": "Budgets this grant draws from. A per-day or per-month budget is shared by every grant of the same consent.",
       "type": "array",
       "items": { "$ref": "common.schema.json#/$defs/limit" }
     },

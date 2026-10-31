@@ -16,7 +16,8 @@
   "principal": { "agent": "invoice-assistant", "user": "alice@example.com" },
   "grant": {
     "id": "grt_01JBXR4T7Q2M9X4KZ8D3F6H1AA",
-    "task": { "id": "tsk_01JBXR4SZ6W0C8V2N5P7R9T3BB", "type": "pay-invoice" }
+    "mandate": "invoices",
+    "consent": "cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D"
   },
   "action_hash": "sha-256:example-hash-not-computed-action-0000000003",
   "sensitivity": "critical",

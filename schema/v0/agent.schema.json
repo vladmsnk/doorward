@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://agentbox.dev/schema/v0/agent.schema.json",
   "title": "Agent",
-  "description": "One agent: how it proves who it is, who owns it, and the most it may ever be granted. metadata.name is the agent's name. A task grant is the task type intersected with this document, never more.",
+  "description": "One agent the box knows: how it presented itself, how it proves who it is, who answers for it, and the most it may ever be granted. An agent an administrator registers is verified from the start. An agent that registers itself (OAuth dynamic client registration, or client metadata at a URL) starts unverified: it may request only open mandates, under the ceiling the box gives every unverified agent, until an administrator assigns an owner and verifies it.",
   "type": "object",
   "required": ["apiVersion", "kind", "metadata", "spec"],
   "properties": {
@@ -11,10 +11,24 @@
     "metadata": { "$ref": "common.schema.json#/$defs/metadata" },
     "spec": {
       "type": "object",
-      "required": ["owner", "identities", "task_types", "max_sensitivity", "max_ttl", "permissions"],
+      "required": ["status", "identities", "max_sensitivity", "max_ttl", "permissions"],
       "properties": {
+        "status": {
+          "description": "unverified: registered itself, not yet reviewed. verified: an administrator reviewed it and named its owner. suspended: every call is refused.",
+          "enum": ["unverified", "verified", "suspended"]
+        },
+        "publisher": {
+          "description": "Who the agent says made it, from its registration. Information, not trust.",
+          "type": "object",
+          "required": ["name"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1, "maxLength": 255 },
+            "uri": { "type": "string", "format": "uri", "pattern": "^https://" }
+          },
+          "additionalProperties": false
+        },
         "owner": {
-          "description": "Who answers for this agent. For a service task, the owner is the accountable party in every record.",
+          "description": "The team that answers for this agent. Required once the agent is verified; for a service agent, the accountable party in every record.",
           "$ref": "common.schema.json#/$defs/owner"
         },
         "identities": {
@@ -23,11 +37,10 @@
           "items": { "$ref": "#/$defs/identity" },
           "minItems": 1
         },
-        "task_types": {
-          "description": "Task types this agent may run.",
+        "mandates": {
+          "description": "Mandates this agent may request, beyond the open ones. An unverified agent lists none.",
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/name" },
-          "minItems": 1,
           "uniqueItems": true
         },
         "max_sensitivity": {
@@ -39,34 +52,74 @@
           "$ref": "common.schema.json#/$defs/duration"
         },
         "permissions": {
+          "description": "The most this agent may ever call. A grant is a mandate intersected with this, never more.",
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/permission" },
           "minItems": 1
         },
         "limits": {
-          "description": "Per-task ceilings: a task type's limit with the same name is capped at this max.",
+          "description": "Ceilings: a mandate's limit with the same name is capped at this max.",
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/limit" }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "if": { "properties": { "status": { "const": "unverified" } } },
+      "then": {
+        "required": ["publisher"],
+        "properties": { "mandates": { "maxItems": 0 } }
+      },
+      "else": { "required": ["owner"] }
     }
   },
   "additionalProperties": false,
   "$defs": {
     "identity": {
-      "description": "One way the agent may authenticate. registration: the box's own one-time token at deploy, with the key made in the sidecar. jwt: a token with an issuer and a subject, which covers an identity provider's client, a Kubernetes service account, a cloud workload identity or a SPIFFE JWT-SVID.",
+      "description": "One way the agent may authenticate. registration: the box's own one-time token at deploy, with the key made in the sidecar. jwt: a token with an issuer and a subject, which covers a Kubernetes service account, a cloud workload identity or a SPIFFE JWT-SVID. oauth_client: an OAuth client of the box itself, as any MCP client is; with jwks_uri or jwks it authenticates by private_key_jwt, without them it is a public client and its grants are bound to its DPoP key alone.",
       "type": "object",
       "required": ["type"],
       "properties": {
-        "type": { "enum": ["registration", "jwt"] },
+        "type": { "enum": ["registration", "jwt", "oauth_client"] },
         "issuer": { "type": "string", "format": "uri" },
-        "subject": { "type": "string", "minLength": 1, "maxLength": 255 }
+        "subject": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "client_id": { "$ref": "common.schema.json#/$defs/clientId" },
+        "jwks_uri": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "jwks": {
+          "description": "JSON Web Key Set (RFC 7517) with the agent's public keys.",
+          "type": "object",
+          "required": ["keys"],
+          "properties": {
+            "keys": { "type": "array", "items": { "type": "object", "required": ["kty"] }, "minItems": 1 }
+          },
+          "additionalProperties": false
+        },
+        "redirect_uris": {
+          "description": "Where the box sends the user back after consent, for an agent that acts for users.",
+          "type": "array",
+          "items": { "type": "string", "format": "uri" },
+          "minItems": 1,
+          "uniqueItems": true
+        }
       },
       "additionalProperties": false,
-      "if": { "properties": { "type": { "const": "jwt" } } },
-      "then": { "required": ["issuer", "subject"] },
-      "else": { "properties": { "issuer": false, "subject": false } }
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "registration" } } },
+          "then": { "properties": { "issuer": false, "subject": false, "client_id": false, "jwks_uri": false, "jwks": false, "redirect_uris": false } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "jwt" } } },
+          "then": { "required": ["issuer", "subject"], "properties": { "client_id": false, "jwks_uri": false, "jwks": false, "redirect_uris": false } }
+        },
+        {
+          "if": { "properties": { "type": { "const": "oauth_client" } } },
+          "then": {
+            "required": ["client_id"],
+            "properties": { "issuer": false, "subject": false },
+            "not": { "required": ["jwks_uri", "jwks"] }
+          }
+        }
+      ]
     }
   }
 }

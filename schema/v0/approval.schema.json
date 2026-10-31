@@ -4,7 +4,7 @@
   "title": "Approval",
   "description": "Record of one approval request for one exact call: what the approvers saw, who voted, and how each of them signed in. An approved request lets the STS issue a single-use grant bound to action_hash.",
   "type": "object",
-  "required": ["id", "created", "status", "task", "grant", "agent", "route", "action", "action_hash", "policy_version", "required", "votes"],
+  "required": ["id", "created", "status", "mandate", "grant", "agent", "route", "action", "action_hash", "policy_version", "required", "votes"],
   "properties": {
     "id": { "$ref": "common.schema.json#/$defs/id" },
     "created": { "$ref": "common.schema.json#/$defs/timestamp" },
@@ -13,14 +13,10 @@
       "description": "When the request stopped being pending.",
       "$ref": "common.schema.json#/$defs/timestamp"
     },
-    "task": {
-      "type": "object",
-      "required": ["id", "type"],
-      "properties": {
-        "id": { "$ref": "common.schema.json#/$defs/id" },
-        "type": { "$ref": "common.schema.json#/$defs/name" }
-      },
-      "additionalProperties": false
+    "mandate": { "$ref": "common.schema.json#/$defs/name" },
+    "consent": {
+      "description": "The consent the grant rests on, for a user mandate.",
+      "$ref": "common.schema.json#/$defs/id"
     },
     "grant": {
       "description": "jti of the grant the call was made under.",
@@ -28,11 +24,11 @@
     },
     "agent": { "$ref": "common.schema.json#/$defs/name" },
     "user": {
-      "description": "The user the agent acts for, on a user task. On a user route this is the only voter; on a group route they never vote.",
+      "description": "The user the agent acts for, under a user mandate. On a user route this is the only voter; on a group route they never vote.",
       "$ref": "common.schema.json#/$defs/subjectId"
     },
     "route": {
-      "description": "Who was asked, from the task type.",
+      "description": "Who was asked, from the mandate.",
       "$ref": "common.schema.json#/$defs/approvers"
     },
     "action": {
@@ -55,7 +51,7 @@
       "$ref": "common.schema.json#/$defs/digest"
     },
     "required": {
-      "description": "How many distinct approvals were needed, from the task type.",
+      "description": "How many distinct approvals were needed, from the mandate.",
       "type": "integer",
       "minimum": 1,
       "maximum": 5
@@ -87,7 +83,7 @@
     {
       "description": "A user route needs the user.",
       "if": { "properties": { "route": { "properties": { "kind": { "const": "user" } } } } },
-      "then": { "required": ["user"] }
+      "then": { "required": ["user", "consent"] }
     }
   ],
   "$defs": {
@@ -99,7 +95,7 @@
         "verdict": { "enum": ["approve", "reject"] },
         "time": { "$ref": "common.schema.json#/$defs/timestamp" },
         "auth_time": {
-          "description": "When the approver signed in for this vote; no earlier than the task type's max_auth_age allows.",
+          "description": "When the approver signed in for this vote; no earlier than the mandate's max_auth_age allows.",
           "$ref": "common.schema.json#/$defs/timestamp"
         },
         "acr": {

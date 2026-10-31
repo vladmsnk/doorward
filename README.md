@@ -1,8 +1,8 @@
 # agentbox
 
-A single distribution for authorizing AI agents: what an agent may do, for
-which user, within which task, and to whom it may pass that authority on. It
-is built for a company that has none of the usual infrastructure: no IdP with
+A single distribution for authorizing AI agents: who an agent is, what it
+may do, for whom, on whose consent, and which calls a person must approve.
+It is built for a company that has none of the usual infrastructure: no IdP with
 token exchange, no policy engine, no service mesh. Everything is built in,
 every built-in part can be replaced through a standard interface, and the box
 grows level by level, L1 to L5, collecting the evidence for each level as it
@@ -32,50 +32,60 @@ bin/agentbox validate --kind approval examples/v0/approval/*.json
 ```
 
 Configuration documents name their kind. Messages and records need `--kind`:
-`taskrequest`, `grant`, `decision` or `approval`.
+`consent`, `grant`, `decision` or `approval`.
 
 Go 1.24 and, for `make lint`, golangci-lint v2.
 
 ## The v0 schemas
 
-Eight documents, as JSON Schema (draft 2020-12) in [`schema/v0`](schema/v0)
-with matching Go types in [`api/v0`](api/v0). Four are configuration a
-company writes, in YAML or JSON; the other four are messages and records,
-in the order one task produces them.
+Seven documents, as JSON Schema (draft 2020-12) in [`schema/v0`](schema/v0)
+with matching Go types in [`api/v0`](api/v0). Three are configuration a
+company writes, in YAML or JSON; the other four are records the box produces
+as agents work.
 
 | Document | Written by | What it is |
 |---|---|---|
 | [Manifest](schema/v0/manifest.schema.json) | company | The operations one resource exposes (MCP tools or HTTP routes), the tier of each (`read`, `write`, `critical`), and where their constrainable arguments are |
-| [Agent](schema/v0/agent.schema.json) | company | One agent: how it proves who it is, who owns it, and the most it may ever be granted |
-| [TaskType](schema/v0/tasktype.schema.json) | company | A kind of task: the object it is about, whom it runs as, how it may start, its lifetime, permissions, limits and approvers |
-| [Application](schema/v0/application.schema.json) | company | An application that starts tasks for users: how it authenticates, and which identity providers vouch for its users |
-| [TaskRequest](schema/v0/taskrequest.schema.json) | the application, or the agent | The RFC 8693 token exchange that starts a task |
-| [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent's sidecar holds for one task |
+| [Agent](schema/v0/agent.schema.json) | company, or the agent itself | One agent: how it presented itself, how it proves who it is, who answers for it, and the most it may ever be granted |
+| [Mandate](schema/v0/mandate.schema.json) | company | What an agent may do for a principal and on what terms: permissions, limits, how long a user's consent stands, who approves critical calls |
+| [Consent](schema/v0/consent.schema.json) | the box | One person allowing one agent one mandate, given on the box's consent page |
+| [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent holds under a mandate |
 | [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision, with every element level L1 asks for |
 | [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
 
-### Two ways an agent runs
+### How an agent comes in
 
-| | Personal assistant (`runs_as: user`) | Deployed agent (`runs_as: service`) |
+An agent is an OAuth client of the box, as every MCP client already is.
+An administrator registers it, or it registers itself (dynamic client
+registration, or client metadata at a URL). A self-registered agent is
+**unverified**: it may request only mandates marked `open`, under the small
+ceiling every unverified agent gets, until an administrator reviews it,
+names its owner and marks it **verified**. A **suspended** agent is refused
+everywhere.
+
+### Two ways an agent acts
+
+| | For a person (`principal: user`) | For its owner (`principal: service`) |
 |---|---|---|
-| Accountable | the user; `sub` in the grant, `sub_id` says which identity provider | the agent's owner team; the agent is `sub` and `client_id` |
-| Task started by | an application the user is in, from a button (`ui`) or a conversation (`chat`) | the agent itself, on a `schedule` or an `event` |
-| Before it starts | the user confirms the exact task when the task type says so; a `chat` trigger always does | nothing: the owner approved the task type |
+| Authority | the person consents once, on the box's consent page at the end of a standard OAuth authorization, for at most `consent.max_duration` | the owner gave the agent the mandate; the agent presents its workload identity |
+| Grant | `sub` is the user, `sub_id` says which identity provider, `consent` names the record it rests on | `sub` is the agent, equal to `client_id` |
+| What the resource sees | the user, as if they had called | the agent |
 | Critical calls | approved by the user, or by a group | approved by a group: there is no user to ask |
 
-The STS checks whoever starts the task, intersects the task type with the
-agent's permissions, resolves references to the task's object, and issues a
-grant. At call time a point of enforcement sends the call to the decision
+A grant is the mandate intersected with the agent's own permissions, never
+more. At call time a point of enforcement sends the call to the decision
 core, which checks it against the grant, applies the operation's tier from
 the manifest, and writes a decision record. A critical call opens an
-approval.
+approval. Budgets can run per grant or, under a consent, per day or month.
 
-The examples in [`examples/v0`](examples/v0) tell both stories. Alice asks
-the assistant in `billing-app` to pay invoice `inv_7Q2M9X4K`, confirms it,
-and the core allows a read, denies an overlarge payment and holds a 1,200 EUR
-payment until Alice approves it. The `reconciler` runs `reconcile-day` at
-night on its own service-account token, posts entries, and two people from
-finance on-call approve a write-off.
+The examples in [`examples/v0`](examples/v0) tell both stories. Alice
+connects Acme's `invoice-assistant` to her invoices under the `invoices`
+mandate; the core allows a read, denies an overlarge payment and holds a
+1,200 EUR payment until Alice approves it. The `reconciler` runs nightly on
+its Kubernetes service-account token under the `reconcile` mandate, posts
+entries, and two people from finance on-call approve a write-off. A third
+agent, `desk-helper-7f3a`, registered itself and is still unverified: it can
+ask users only for the open, read-only mandate.
 
 ### Conventions
 
@@ -92,7 +102,6 @@ finance on-call approve a write-off.
   | `one_of` | the value is one of a list |
   | `equals` | the value is exactly this |
   | `prefix` | a string starts with this |
-  | `task_object` | equals the task's object ID; agents and task types only, resolved to `equals` in a grant |
 
   All bounds on a field must hold. A constrained field missing from the call
   fails the check.
@@ -124,30 +133,32 @@ grant, err := schema.Decode[v0.Grant](v, claimsJSON) // duplicate keys, schema, 
 
 JSON Schema checks each document's shape. Each Go type's `Check` adds the
 rules that span its own fields, and `Decode` and the CLI run them: `aud`
-equals the grant's locations, a user grant has `sub_id` and a service grant
-has none, times come in order, an allowed decision has no failed check, a
-manifest's path parameters match its routes, an approval's voters are
-distinct and match its route, and `min ≤ max` everywhere.
+equals the grant's locations, a grant for a user has `sub_id` and a
+`consent` and a grant for the agent itself has neither, times come in
+order, an allowed decision has no failed check, a manifest's path parameters
+match its routes, an approval's voters are distinct and match its route, and
+`min ≤ max` everywhere.
 
 Rules that need a second document belong to the features that load both: a
-task type lying within an agent's permissions (F12), operations existing in
-a manifest (F08), a request's trigger being one the task type allows (F11).
+mandate lying within an agent's permissions (F12), operations existing in a
+manifest (F08), an agent requesting only mandates it may (F11).
 The hashes, key thumbprints and tokens in the examples have the right format
 but are placeholders, not real values (F05, F10).
 
 ### Later
 
-v0 covers the two ways of running an agent and nothing else. Each of these
-is a known extension, and each adds fields or documents without changing
-what is here:
+v0 covers agents that act for a person who consented and agents that act
+for their owner, and nothing else. Each of these is a known extension, and
+each adds fields or documents without changing what is here:
 
 | Extension | What it adds |
 |---|---|
-| Delegation between agents | optional `parent` and `depth` on a grant (a grant without them is a root), a nested `act.act`, `delegation` blocks on agents and task types, and an `Offer` record |
-| A user's own envelope (mandate) | a `Mandate` document the user signs, intersected with the task type and the agent |
+| Delegation between agents | optional `parent` and `depth` on a grant (a grant without them is a root), a nested `act.act`, `delegation` blocks on agents and mandates, and an `Offer` record |
+| Tasks started by an application | an `Application` document and a `TaskRequest` message (RFC 8693), for an app that starts a scoped task for its user without a consent page |
+| A user narrowing a mandate | parameters on `Consent` the user chooses on the consent page, such as payees or a lower cap |
+| Per-call data scoping | constraints tied to an object the task is about (`task_object`) |
 | mTLS-bound grants | `cnf.x5t#S256` beside `jkt` |
 | X.509 SPIFFE identities | a `spiffe` identity type on agents |
-| Session-bound revocation | `sid` on the grant, so an identity provider ending the session revokes the task |
 | Allow-and-notify | `obligations` on an allowed decision |
 | Scopes for plain resource servers | `scope` on the grant, derived from the actions |
 

@@ -22,12 +22,12 @@
       "additionalProperties": false
     },
     "name": {
-      "description": "Name of an agent, application, task type, manifest or limit: lower case, digits, '.', '_' and '-', starting and ending with a letter or digit.",
+      "description": "Name of an agent, mandate, manifest, team or limit: lower case, digits, '.', '_' and '-', starting and ending with a letter or digit.",
       "type": "string",
       "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$"
     },
     "id": {
-      "description": "Opaque identifier issued by the box (grant, task, decision, approval). By convention it starts with a type prefix such as grt_ or tsk_.",
+      "description": "Opaque identifier issued by the box (grant, consent, decision, approval). By convention it starts with a type prefix such as grt_ or cns_.",
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$"
     },
@@ -37,7 +37,7 @@
       "pattern": "^[\\x21-\\x7E]{1,255}$"
     },
     "owner": {
-      "description": "Who answers for an agent or an application.",
+      "description": "Who answers for an agent.",
       "type": "object",
       "required": ["team"],
       "properties": {
@@ -58,7 +58,7 @@
       "additionalProperties": false
     },
     "approvers": {
-      "description": "Who may approve: the task's own user, or members of groups at an identity provider.",
+      "description": "Who may approve: the user the agent acts for, or members of groups at an identity provider.",
       "type": "object",
       "required": ["kind"],
       "properties": {
@@ -136,24 +136,14 @@
       }
     },
     "constraint": {
-      "description": "Constraint on one field, as it appears in a grant: fully resolved.",
+      "description": "Constraint on one field, keyed in its permission by the argument's JSON Pointer.",
       "type": "object",
       "$ref": "#/$defs/constraintBounds",
-      "minProperties": 1,
-      "unevaluatedProperties": false
-    },
-    "constraintTemplate": {
-      "description": "Constraint on one field, as written in an agent or a task type. task_object: true means the field must equal the ID of the task's object; the STS resolves it to equals when it issues the grant.",
-      "type": "object",
-      "$ref": "#/$defs/constraintBounds",
-      "properties": {
-        "task_object": { "const": true }
-      },
       "minProperties": 1,
       "unevaluatedProperties": false
     },
     "permission": {
-      "description": "What may be called, where, and with which argument values, as written in an agent or a task type.",
+      "description": "What may be called, where, and with which argument values, as written in an agent or a mandate.",
       "type": "object",
       "required": ["locations", "actions"],
       "properties": {
@@ -172,7 +162,7 @@
         "constraints": {
           "type": "object",
           "propertyNames": { "$ref": "#/$defs/pointer" },
-          "additionalProperties": { "$ref": "#/$defs/constraintTemplate" }
+          "additionalProperties": { "$ref": "#/$defs/constraint" }
         }
       },
       "additionalProperties": false
@@ -204,13 +194,14 @@
       "additionalProperties": false
     },
     "limit": {
-      "description": "Budget of one task. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts.",
+      "description": "A budget. count limits the number of calls; sum limits the total of a numeric field. actions, when present, restricts the operations the limit counts. per says over what the budget runs: one grant, or a calendar day or month of the consent.",
       "type": "object",
       "required": ["name", "kind", "max"],
       "properties": {
         "name": { "$ref": "#/$defs/name" },
         "kind": { "enum": ["count", "sum"] },
         "max": { "type": "number", "minimum": 0 },
+        "per": { "enum": ["grant", "day", "month"], "default": "grant" },
         "field": { "$ref": "#/$defs/pointer" },
         "actions": {
           "type": "array",

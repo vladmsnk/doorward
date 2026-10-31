@@ -18,10 +18,7 @@
     "context": { "grant": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H" }
   },
   "principal": { "agent": "reconciler", "owner": "finance-platform" },
-  "grant": {
-    "id": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
-    "task": { "id": "tsk_01JBXQ2M8K0M2P4R6T8V0X2Z4B", "type": "reconcile-day" }
-  },
+  "grant": { "id": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H", "mandate": "reconcile" },
   "action_hash": "sha-256:example-hash-not-computed-action-0000000004",
   "sensitivity": "write",
   "outcome": "allow",

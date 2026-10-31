@@ -28,7 +28,7 @@ type Source struct {
 //
 // kind, when not empty, is the kind every document must be. When it is empty
 // each document's kind comes from its kind field, which only configuration
-// documents carry; messages and records need kind set.
+// documents carry; records need kind set.
 func Read(name string, data []byte, kind Kind) ([]Source, error) {
 	var docs [][]byte
 	switch strings.ToLower(filepath.Ext(name)) {
@@ -69,7 +69,7 @@ func kindOfDocument(doc []byte, want Kind) (Kind, error) {
 
 	if head.Kind == nil {
 		if want == "" {
-			return "", errors.New("document has no kind field; give the kind explicitly for messages and records such as grants")
+			return "", errors.New("document has no kind field; give the kind explicitly for records such as grants")
 		}
 		return want, nil
 	}

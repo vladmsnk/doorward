@@ -1,9 +1,9 @@
 // Package schema embeds the v0 JSON Schemas and validates documents against
 // them (F02).
 //
-// Every document the box accepts — configuration a company writes, a message
-// between its parts, a grant presented at a point of enforcement, a record
-// read back as evidence — goes through the same four steps: duplicate member
+// Every document the box accepts — configuration a company writes, a grant
+// presented at a point of enforcement, a record read back as evidence — goes
+// through the same four steps: duplicate member
 // names are rejected, the document is validated against its schema, it is
 // decoded strictly into its Go type from package api/v0, and the type's own
 // Check enforces the rules that span fields.
@@ -36,19 +36,18 @@ const BaseURL = "https://agentbox.dev/schema/v0/"
 type Kind string
 
 const (
-	Agent       Kind = v0.KindAgent
-	TaskType    Kind = v0.KindTaskType
-	Manifest    Kind = v0.KindManifest
-	Application Kind = v0.KindApplication
-	TaskRequest Kind = "TaskRequest"
-	Grant       Kind = "Grant"
-	Decision    Kind = "Decision"
-	Approval    Kind = "Approval"
+	Manifest Kind = v0.KindManifest
+	Agent    Kind = v0.KindAgent
+	Mandate  Kind = v0.KindMandate
+	Consent  Kind = "Consent"
+	Grant    Kind = "Grant"
+	Decision Kind = "Decision"
+	Approval Kind = "Approval"
 )
 
-// Kinds lists every kind: configuration first, then messages and records in
-// the order a task produces them.
-var Kinds = []Kind{Manifest, Agent, TaskType, Application, TaskRequest, Grant, Decision, Approval}
+// Kinds lists every kind: configuration first, then records in the order an
+// agent's work produces them.
+var Kinds = []Kind{Manifest, Agent, Mandate, Consent, Grant, Decision, Approval}
 
 // ParseKind accepts a kind name in any letter case, so "grant" and
 // "tasktype" work on the command line.
@@ -66,11 +65,10 @@ func ParseKind(s string) (Kind, error) {
 }
 
 // Enveloped reports whether documents of the kind carry apiVersion, kind and
-// metadata. Only configuration does: the other kinds are messages and records
-// the box and its clients produce, and some, like the grant, follow a
-// standard's shape.
+// metadata. Only configuration does: the other kinds are records the box
+// produces, and the grant follows a standard's shape.
 func (k Kind) Enveloped() bool {
-	return k == Agent || k == TaskType || k == Manifest || k == Application
+	return k == Manifest || k == Agent || k == Mandate
 }
 
 // File is the name of the kind's schema file.
@@ -144,24 +142,21 @@ func (v *Validator) Validate(kind Kind, doc []byte) error {
 
 // Document is any of the v0 document types.
 type Document interface {
-	v0.Agent | v0.TaskType | v0.Manifest | v0.Application |
-		v0.TaskRequest | v0.Grant | v0.Decision | v0.Approval
+	v0.Manifest | v0.Agent | v0.Mandate | v0.Consent | v0.Grant | v0.Decision | v0.Approval
 }
 
 // KindOf returns the kind of a document type.
 func KindOf[T Document]() Kind {
 	var zero T
 	switch any(zero).(type) {
-	case v0.Agent:
-		return Agent
-	case v0.TaskType:
-		return TaskType
 	case v0.Manifest:
 		return Manifest
-	case v0.Application:
-		return Application
-	case v0.TaskRequest:
-		return TaskRequest
+	case v0.Agent:
+		return Agent
+	case v0.Mandate:
+		return Mandate
+	case v0.Consent:
+		return Consent
 	case v0.Grant:
 		return Grant
 	case v0.Decision:
@@ -187,16 +182,14 @@ func (e *RuleError) Unwrap() error { return e.Err }
 func (v *Validator) Check(kind Kind, doc []byte) error {
 	var err error
 	switch kind {
-	case Agent:
-		_, err = Decode[v0.Agent](v, doc)
-	case TaskType:
-		_, err = Decode[v0.TaskType](v, doc)
 	case Manifest:
 		_, err = Decode[v0.Manifest](v, doc)
-	case Application:
-		_, err = Decode[v0.Application](v, doc)
-	case TaskRequest:
-		_, err = Decode[v0.TaskRequest](v, doc)
+	case Agent:
+		_, err = Decode[v0.Agent](v, doc)
+	case Mandate:
+		_, err = Decode[v0.Mandate](v, doc)
+	case Consent:
+		_, err = Decode[v0.Consent](v, doc)
 	case Grant:
 		_, err = Decode[v0.Grant](v, doc)
 	case Decision:

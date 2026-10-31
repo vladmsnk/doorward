@@ -12,7 +12,7 @@ import (
 // JSON Schema cannot express: fields that must agree with each other, times
 // that must come in order, names that must be unique. They assume the
 // document has already passed its schema. Rules that need a second document,
-// such as a task type lying within an agent's permissions, belong to the
+// such as a mandate lying within an agent's permissions, belong to the
 // features that load both.
 
 type problems []error
@@ -27,35 +27,42 @@ func (g Grant) Check() error {
 	if g.Expiry <= g.IssuedAt {
 		p.add("exp must be after iat")
 	}
-	if c := g.Task.Started.ConfirmedAt; c != 0 && c > g.IssuedAt {
-		p.add("task.started.confirmed_at is after iat: the user cannot confirm a task after its grant was issued")
-	}
-	// A user task names the user and where that identity came from; a
-	// service task is issued to the agent itself.
-	if g.Subject == g.ClientID && g.SubjectID != nil {
-		p.add("sub equals client_id, so this is a service task and carries no sub_id")
-	}
-	if g.Subject != g.ClientID && g.SubjectID == nil {
+	// Under a user mandate the grant names the user, their identity provider
+	// and the consent it rests on; under a service mandate it is issued to
+	// the agent itself and rests on nothing.
+	user := g.Subject != g.ClientID
+	if user && g.SubjectID == nil {
 		p.add("sub is a user, so sub_id must say which identity provider named them")
 	}
-	switch g.Task.Started.Trigger {
-	case TriggerUI, TriggerChat:
-		if g.Task.Initiator == "" {
-			p.add("a task a user started names the application that started it")
-		}
-	default:
-		if g.Task.Initiator != "" {
-			p.add("a %s task has no initiator: the agent started it", g.Task.Started.Trigger)
-		}
-		if g.Task.Started.ConfirmedAt != 0 {
-			p.add("a %s task has nobody to confirm it", g.Task.Started.Trigger)
-		}
+	if user && g.Consent == "" {
+		p.add("sub is a user, so consent must name what the grant rests on")
+	}
+	if !user && g.SubjectID != nil {
+		p.add("sub equals client_id, so the agent acts for itself and carries no sub_id")
+	}
+	if !user && g.Consent != "" {
+		p.add("sub equals client_id, so the agent acts for itself and rests on no consent")
 	}
 	if !sameSet(g.Audience, detailLocations(g.AuthorizationDetails)) {
 		p.add("aud must list exactly the locations of authorization_details")
 	}
 	p.checkDetails(g.AuthorizationDetails)
 	p.checkLimits(g.Limits)
+	return p.err()
+}
+
+// Check enforces the rules of a consent record that span fields.
+func (c Consent) Check() error {
+	var p problems
+	if !c.ExpiresAt.After(c.GrantedAt.Time) {
+		p.add("expires_at must be after granted_at")
+	}
+	if c.RevokedAt != nil && (c.RevokedAt.Before(c.GrantedAt.Time) || c.RevokedAt.After(c.ExpiresAt.Time)) {
+		p.add("revoked_at must lie between granted_at and expires_at")
+	}
+	if c.Auth != nil && c.Auth.AuthTime.After(c.GrantedAt.Time) {
+		p.add("auth.auth_time is after granted_at: the user cannot sign in after consenting")
+	}
 	return p.err()
 }
 
@@ -85,6 +92,14 @@ func (d Decision) Check() error {
 	case OutcomeApprovalRequired:
 		if !slices.Equal(failed, []CheckName{CheckSensitivity}) {
 			p.add("a held call fails the sensitivity check and nothing else, not %v", failed)
+		}
+	}
+	if d.Principal != nil && d.Grant != nil {
+		if d.Principal.User != "" && d.Grant.Consent == "" {
+			p.add("a call for a user rests on a consent; grant.consent is missing")
+		}
+		if d.Principal.Owner != "" && d.Grant.Consent != "" {
+			p.add("a service agent's call rests on no consent")
 		}
 	}
 	return p.err()
@@ -125,47 +140,32 @@ func (m Manifest) Check() error {
 // Check enforces the rules of an agent that span fields.
 func (a Agent) Check() error {
 	var p problems
-	seen := make(map[AgentIdentity]bool)
-	for _, id := range a.Spec.Identities {
-		if seen[id] {
-			p.add("identity %+v is listed twice", id)
+	seen := make(map[string]bool)
+	for i, id := range a.Spec.Identities {
+		key := fmt.Sprintf("%s|%s|%s|%s", id.Type, id.Issuer, id.Subject, id.ClientID)
+		if seen[key] {
+			p.add("identity %d is listed twice", i)
 		}
-		seen[id] = true
+		seen[key] = true
 	}
 	p.checkPermissions(a.Spec.Permissions)
 	p.checkLimits(a.Spec.Limits)
 	return p.err()
 }
 
-// Check enforces the rules of a task type that span fields.
-func (t TaskType) Check() error {
+// Check enforces the rules of a mandate that span fields.
+func (m Mandate) Check() error {
 	var p problems
-	p.checkPermissions(t.Spec.Permissions)
-	p.checkLimits(t.Spec.Limits)
-	return p.err()
-}
-
-// Check enforces the rules of a task request that span fields.
-func (r TaskRequest) Check() error {
-	var p problems
-	for _, t := range r.AuthorizationDetails {
-		switch t.Trigger {
-		case TriggerUI, TriggerChat:
-			if r.RequestedTokenType != TokenTypeTaskTicket {
-				p.add("an application starting a user task asks for a ticket, not %s", r.RequestedTokenType)
-			}
-		default:
-			if r.RequestedTokenType != TokenTypeAccessToken {
-				p.add("an agent starting a %s task asks for the grant itself", t.Trigger)
-			}
-			if r.Confirmation != "" {
-				p.add("a %s task has nobody to confirm it", t.Trigger)
-			}
-			if r.SubjectTokenType != TokenTypeJWT {
-				p.add("a %s task is started with the agent's own token, type jwt", t.Trigger)
-			}
+	if m.Spec.Consent != nil && m.Spec.TTL.D() > m.Spec.Consent.MaxDuration.D() {
+		p.add("ttl %s is longer than the consent's max_duration %s", m.Spec.TTL, m.Spec.Consent.MaxDuration)
+	}
+	for _, l := range m.Spec.Limits {
+		if m.Spec.Principal == PrincipalService && l.Per != "" && l.Per != PerGrant {
+			p.add("limit %q runs per %s, but a service mandate has no consent to share it across", l.Name, l.Per)
 		}
 	}
+	p.checkPermissions(m.Spec.Permissions)
+	p.checkLimits(m.Spec.Limits)
 	return p.err()
 }
 
@@ -181,7 +181,7 @@ func (a Approval) Check() error {
 		switch a.Route.Kind {
 		case ApproverUser:
 			if a.User == nil || v.Approver != *a.User {
-				p.add("vote %d: on a user route only the task's user votes", i)
+				p.add("vote %d: on a user route only the user the agent acts for votes", i)
 			}
 		case ApproverGroup:
 			if a.User != nil && v.Approver == *a.User {
@@ -231,7 +231,7 @@ func (p *problems) checkDetails(details []AuthorizationDetail) {
 func (p *problems) checkPermissions(perms []Permission) {
 	for i, perm := range perms {
 		for _, ptr := range sortedKeys(perm.Constraints) {
-			p.checkBounds(fmt.Sprintf("permissions[%d] %s", i, ptr), perm.Constraints[ptr].Constraint)
+			p.checkBounds(fmt.Sprintf("permissions[%d] %s", i, ptr), perm.Constraints[ptr])
 		}
 	}
 }

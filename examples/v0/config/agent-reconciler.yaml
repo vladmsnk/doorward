@@ -4,6 +4,7 @@ metadata:
   name: reconciler
   description: Deployed in the finance namespace; reconciles the ledger every night.
 spec:
+  status: verified
   owner:
     team: finance-platform
     contact: finance-oncall@example.com
@@ -12,7 +13,7 @@ spec:
     - type: jwt
       issuer: https://kubernetes.example.internal
       subject: system:serviceaccount:finance:reconciler
-  task_types: [reconcile-day]
+  mandates: [reconcile]
   max_sensitivity: critical
   max_ttl: 2h
   permissions:

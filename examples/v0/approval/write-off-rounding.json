@@ -3,7 +3,7 @@
   "created": "2026-10-30T01:12:40.118Z",
   "status": "approved",
   "closed": "2026-10-30T07:41:12.004Z",
-  "task": { "id": "tsk_01JBXQ2M8K0M2P4R6T8V0X2Z4B", "type": "reconcile-day" },
+  "mandate": "reconcile",
   "grant": "grt_01JBXQ2N4R6T8V0X2Z4B6D8F0H",
   "agent": "reconciler",
   "route": { "kind": "group", "issuer": "https://login.example.com", "groups": ["finance-oncall"] },

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agentbox.dev/schema/v0/consent.schema.json",
+  "title": "Consent",
+  "description": "Record of one person allowing one agent one mandate, given on the box's consent page at the end of a standard OAuth authorization (code flow with PKCE). While it stands, the STS issues the agent grants under it; when it ends, by time or by revocation, it issues none.",
+  "type": "object",
+  "required": ["id", "user", "agent", "mandate", "mandate_version", "status", "granted_at", "expires_at"],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/id" },
+    "user": { "$ref": "common.schema.json#/$defs/subjectId" },
+    "agent": { "$ref": "common.schema.json#/$defs/name" },
+    "mandate": { "$ref": "common.schema.json#/$defs/name" },
+    "mandate_version": {
+      "description": "Digest of the mandate as the user saw it. A changed mandate asks for consent again.",
+      "$ref": "common.schema.json#/$defs/digest"
+    },
+    "status": { "enum": ["active", "expired", "revoked"] },
+    "granted_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "expires_at": {
+      "description": "No later than granted_at plus the mandate's consent.max_duration.",
+      "$ref": "common.schema.json#/$defs/timestamp"
+    },
+    "revoked_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "revoked_by": {
+      "description": "Who ended it: the user, an administrator, or the identity provider ending the user's session.",
+      "enum": ["user", "admin", "idp"]
+    },
+    "auth": {
+      "description": "How the user signed in to consent.",
+      "type": "object",
+      "required": ["auth_time"],
+      "properties": {
+        "auth_time": { "$ref": "common.schema.json#/$defs/timestamp" },
+        "acr": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "sid": {
+          "description": "The user's session at the identity provider.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "if": { "properties": { "status": { "const": "revoked" } } },
+  "then": { "required": ["revoked_at", "revoked_by"] },
+  "else": { "properties": { "revoked_at": false, "revoked_by": false } }
+}

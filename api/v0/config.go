@@ -2,36 +2,59 @@ package v0
 
 // Kinds of the configuration documents, as their kind field spells them.
 const (
-	KindAgent       = "Agent"
-	KindTaskType    = "TaskType"
-	KindManifest    = "Manifest"
-	KindApplication = "Application"
+	KindManifest = "Manifest"
+	KindAgent    = "Agent"
+	KindMandate  = "Mandate"
 )
 
-// Agent is one agent: how it proves who it is, who owns it, and the most it
-// may ever be granted. Metadata.Name is the agent's name.
+// Agent is one agent the box knows: how it presented itself, how it proves
+// who it is, who answers for it, and the most it may ever be granted.
+// Metadata.Name is the agent's name.
 type Agent struct {
 	TypeMeta
 	Metadata ObjectMeta `json:"metadata"`
 	Spec     AgentSpec  `json:"spec"`
 }
 
+// AgentStatus is where an agent stands with the box.
+type AgentStatus string
+
+const (
+	// AgentUnverified registered itself and has not been reviewed: it may
+	// request only open mandates, under the ceiling every unverified agent
+	// gets.
+	AgentUnverified AgentStatus = "unverified"
+	// AgentVerified was reviewed by an administrator, who named its owner.
+	AgentVerified AgentStatus = "verified"
+	// AgentSuspended has every call refused.
+	AgentSuspended AgentStatus = "suspended"
+)
+
 type AgentSpec struct {
-	// Owner answers for the agent, and is the accountable party of a service
-	// task.
-	Owner Owner `json:"owner"`
+	Status AgentStatus `json:"status"`
+	// Publisher is who the agent says made it, from its registration.
+	Publisher *Publisher `json:"publisher,omitempty"`
+	// Owner is the team that answers for the agent; set once it is verified.
+	Owner *Owner `json:"owner,omitempty"`
 	// Identities are the ways the agent may authenticate; the STS issues a
 	// grant only to a caller that presents one of them.
 	Identities []AgentIdentity `json:"identities"`
-	// TaskTypes the agent may run.
-	TaskTypes []string `json:"task_types"`
+	// Mandates the agent may request beyond the open ones.
+	Mandates []string `json:"mandates,omitempty"`
 	// MaxSensitivity is the highest tier of operation the agent may be granted.
 	MaxSensitivity Sensitivity `json:"max_sensitivity"`
 	// MaxTTL caps the lifetime of every grant to the agent.
-	MaxTTL      Duration     `json:"max_ttl"`
+	MaxTTL Duration `json:"max_ttl"`
+	// Permissions are the most the agent may ever call.
 	Permissions []Permission `json:"permissions"`
-	// Limits cap the task type's limits of the same name.
+	// Limits cap a mandate's limits of the same name.
 	Limits []Limit `json:"limits,omitempty"`
+}
+
+// Publisher is who an agent says made it.
+type Publisher struct {
+	Name string `json:"name"`
+	URI  string `json:"uri,omitempty"`
 }
 
 // IdentityType is how an agent authenticates.
@@ -41,79 +64,70 @@ const (
 	// IdentityRegistration is the box's own one-time token at deploy, with the
 	// key made in the sidecar.
 	IdentityRegistration IdentityType = "registration"
-	// IdentityJWT is a token with an issuer and a subject: an identity
-	// provider's client, a Kubernetes service account, a cloud workload
-	// identity, a JWT-SVID.
+	// IdentityJWT is a token with an issuer and a subject: a Kubernetes
+	// service account, a cloud workload identity, a JWT-SVID.
 	IdentityJWT IdentityType = "jwt"
+	// IdentityOAuthClient is an OAuth client of the box itself, as any MCP
+	// client is. With keys it authenticates by private_key_jwt; without, it
+	// is a public client bound to its DPoP key alone.
+	IdentityOAuthClient IdentityType = "oauth_client"
 )
 
-// AgentIdentity is one way an agent may authenticate. Issuer and Subject are
-// set for IdentityJWT only.
+// AgentIdentity is one way an agent may authenticate. Which fields are set
+// depends on Type.
 type AgentIdentity struct {
-	Type    IdentityType `json:"type"`
-	Issuer  string       `json:"issuer,omitempty"`
-	Subject string       `json:"subject,omitempty"`
+	Type         IdentityType `json:"type"`
+	Issuer       string       `json:"issuer,omitempty"`
+	Subject      string       `json:"subject,omitempty"`
+	ClientID     string       `json:"client_id,omitempty"`
+	JWKSURI      string       `json:"jwks_uri,omitempty"`
+	JWKS         *JWKSet      `json:"jwks,omitempty"`
+	RedirectURIs []string     `json:"redirect_uris,omitempty"`
 }
 
-// TaskType is a kind of task. The starter sends only the type and the
-// object's ID; the scope comes from here.
-type TaskType struct {
+// JWKSet is a JSON Web Key Set (RFC 7517). Keys are kept as parsed JSON;
+// the STS reads them with a JOSE library.
+type JWKSet struct {
+	Keys []map[string]any `json:"keys"`
+}
+
+// Mandate is what an agent may do for a principal, and on what terms.
+type Mandate struct {
 	TypeMeta
-	Metadata ObjectMeta   `json:"metadata"`
-	Spec     TaskTypeSpec `json:"spec"`
+	Metadata ObjectMeta  `json:"metadata"`
+	Spec     MandateSpec `json:"spec"`
 }
 
-// RunsAs says whom a task's agent acts for.
-type RunsAs string
+// Principal says whom an agent acts for under a mandate.
+type Principal_ string
 
 const (
-	// RunsAsUser is a personal assistant acting for a person.
-	RunsAsUser RunsAs = "user"
-	// RunsAsService is a deployed agent acting for its owner.
-	RunsAsService RunsAs = "service"
+	// PrincipalUser is a person who consented; they are the grant's sub.
+	PrincipalUser Principal_ = "user"
+	// PrincipalService is the agent's owner; the agent is its own sub.
+	PrincipalService Principal_ = "service"
 )
 
-type TaskTypeSpec struct {
-	Object TaskObjectSpec `json:"object"`
-	RunsAs RunsAs         `json:"runs_as"`
-	Start  StartPolicy    `json:"start"`
-	// Initiators are the applications allowed to start a user task. A service
-	// task is started by the agent itself and lists none.
-	Initiators []string `json:"initiators,omitempty"`
-	// TTL is the lifetime of the task's grant, capped by the agent's MaxTTL.
+type MandateSpec struct {
+	Principal Principal_ `json:"principal"`
+	// Open lets any registered agent request the mandate, unverified ones
+	// included.
+	Open bool `json:"open,omitempty"`
+	// Consent holds the terms a user agrees to; user mandates only.
+	Consent *ConsentTerms `json:"consent,omitempty"`
+	// TTL is the lifetime of one grant, capped by the agent's MaxTTL.
 	TTL         Duration     `json:"ttl"`
 	Permissions []Permission `json:"permissions"`
 	Limits      []Limit      `json:"limits,omitempty"`
-	// Approval says who approves the task's critical calls. Without it, a
-	// critical call is refused.
+	// Approval says who approves the mandate's critical calls. Without it,
+	// a critical call is refused.
 	Approval *ApprovalPolicy `json:"approval,omitempty"`
 }
 
-// Trigger is how a task came about.
-type Trigger string
-
-const (
-	// TriggerUI: the user acted in an application.
-	TriggerUI Trigger = "ui"
-	// TriggerChat: a model proposed the task from a conversation.
-	TriggerChat Trigger = "chat"
-	// TriggerSchedule and TriggerEvent: nobody was there.
-	TriggerSchedule Trigger = "schedule"
-	TriggerEvent    Trigger = "event"
-)
-
-// Confirmation says whether the user must confirm the exact task first.
-type Confirmation string
-
-const (
-	ConfirmationUser Confirmation = "user"
-	ConfirmationNone Confirmation = "none"
-)
-
-// StartPolicy says how a task may begin.
-type StartPolicy struct {
-	Triggers     []Trigger    `json:"triggers"`
-	Confirmation Confirmation `json:"confirmation"`
+// ConsentTerms is what the consent page shows and how long consent stands.
+type ConsentTerms struct {
+	Text        string   `json:"text"`
+	MaxDuration Duration `json:"max_duration"`
 }
 
 // ApprovalPolicy says who approves critical calls, how many of them, and how
@@ -132,7 +146,7 @@ type ApprovalPolicy struct {
 type ApproverKind string
 
 const (
-	// ApproverUser is the task's own user.
+	// ApproverUser is the user the agent acts for.
 	ApproverUser ApproverKind = "user"
 	// ApproverGroup is any member of Groups at Issuer.
 	ApproverGroup ApproverKind = "group"
@@ -144,13 +158,6 @@ type Approvers struct {
 	Kind   ApproverKind `json:"kind"`
 	Issuer string       `json:"issuer,omitempty"`
 	Groups []string     `json:"groups,omitempty"`
-}
-
-// TaskObjectSpec says what a task is about.
-type TaskObjectSpec struct {
-	Type string `json:"type"`
-	// IDPattern is an anchored regular expression the object's ID must match.
-	IDPattern string `json:"id_pattern"`
 }
 
 // Manifest lists the operations one resource exposes through the box's points
@@ -217,54 +224,4 @@ type Param struct {
 	Type ParamType `json:"type"`
 	// In is set for HTTP operations only.
 	In ParamIn `json:"in,omitempty"`
-}
-
-// Application is an application that may start tasks for its users.
-// Metadata.Name is the name task types list as initiators.
-type Application struct {
-	TypeMeta
-	Metadata ObjectMeta      `json:"metadata"`
-	Spec     ApplicationSpec `json:"spec"`
-}
-
-type ApplicationSpec struct {
-	Owner          Owner             `json:"owner"`
-	Authentication AppAuthentication `json:"authentication"`
-	Users          UserSources       `json:"users"`
-}
-
-// AuthMethod is how an application authenticates to the STS.
-type AuthMethod string
-
-const (
-	// AuthPrivateKeyJWT is a JWT the application signs with its own key
-	// (RFC 7523), checked against JWKSURI or JWKS.
-	AuthPrivateKeyJWT AuthMethod = "private_key_jwt"
-	// AuthOAuthClient is a client at an identity provider.
-	AuthOAuthClient AuthMethod = "oauth_client"
-)
-
-// AppAuthentication says how an application proves who it is. Which fields
-// are set depends on Method.
-type AppAuthentication struct {
-	Method   AuthMethod `json:"method"`
-	JWKSURI  string     `json:"jwks_uri,omitempty"`
-	JWKS     *JWKSet    `json:"jwks,omitempty"`
-	Issuer   string     `json:"issuer,omitempty"`
-	ClientID string     `json:"client_id,omitempty"`
-}
-
-// JWKSet is a JSON Web Key Set (RFC 7517). Keys are kept as parsed JSON;
-// the STS reads them with a JOSE library.
-type JWKSet struct {
-	Keys []map[string]any `json:"keys"`
-}
-
-// UserSources says whose word the STS takes for who the user is.
-type UserSources struct {
-	// IdPs are identity providers whose ID tokens the application may pass.
-	IdPs []string `json:"idps,omitempty"`
-	// SelfAsserted lets the application's own signed statement name the
-	// user, for companies whose identity provider issues no usable tokens.
-	SelfAsserted bool `json:"self_asserted,omitempty"`
 }

@@ -2,17 +2,22 @@ apiVersion: agentbox/v0
 kind: Agent
 metadata:
   name: invoice-assistant
-  description: The assistant in the billing app. Pays and inspects invoices for the signed-in user.
+  description: Acme's invoicing assistant. Users connect it to their own invoices.
 spec:
+  status: verified
+  publisher:
+    name: Acme Software
+    uri: https://acme.example
   owner:
     team: payments
     contact: payments-oncall@example.com
-  # Its client at the company's identity provider.
+  # An OAuth client of the box, authenticating with its own keys.
   identities:
-    - type: jwt
-      issuer: https://login.example.com
-      subject: 0oa8f2k1LmN3pQ4rS5t6
-  task_types: [pay-invoice]
+    - type: oauth_client
+      client_id: acme-invoice-assistant
+      jwks_uri: https://acme.example/.well-known/jwks.json
+      redirect_uris: [https://assistant.acme.example/oauth/callback]
+  mandates: [invoices]
   max_sensitivity: critical
   max_ttl: 30m
   permissions:
@@ -21,7 +26,8 @@ spec:
       constraints:
         /amount: { max: 10000 }
   limits:
-    - name: payout-total
+    - name: payout-month
       kind: sum
       field: /amount
-      max: 10000
+      per: month
+      max: 20000
