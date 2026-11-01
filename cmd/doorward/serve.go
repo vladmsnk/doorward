@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -46,6 +47,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
 	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
 	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
+	shutdownDelay := fs.Duration("shutdown-delay", 0, "on SIGTERM, keep serving for this long while /healthz reports 503, so a load balancer stops sending before the listeners close; 5s is usual behind one")
 	decisionTimeout := fs.Duration("decision-timeout", pdp.DefaultTimeout, "how long one decision may take, the wait for the journal included; a decision that runs out of time is refused and nothing is recorded")
 	journalPath := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
 	var peps []pdp.Client
@@ -103,7 +105,9 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		journalFile = f
 	}
 
-	log := slog.New(slog.NewJSONHandler(stdout, nil))
+	// Warnings and errors are sampled: one line per message per second, with
+	// a count of the rest, so an outage does not flood the log.
+	log := slog.New(telemetry.Sampled(slog.NewJSONHandler(stdout, nil), time.Second))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -127,7 +131,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	var stopping atomic.Bool
 	healthz := func(w http.ResponseWriter, r *http.Request) {
+		if stopping.Load() {
+			http.Error(w, "stopping", http.StatusServiceUnavailable)
+			return
+		}
 		if err := st.Pool().Ping(r.Context()); err != nil {
 			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
 			return
@@ -219,7 +228,13 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 
 	select {
 	case <-ctx.Done():
-		log.Info("shutting down")
+		stopping.Store(true)
+		log.Info("shutting down", "delay", shutdownDelay.String())
+		if *shutdownDelay > 0 {
+			// Health already says 503; keep answering while the load
+			// balancer notices.
+			time.Sleep(*shutdownDelay)
+		}
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(stderr, "doorward serve: %v\n", err)

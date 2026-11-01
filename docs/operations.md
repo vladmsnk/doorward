@@ -80,3 +80,16 @@ cosign verify-blob checksums.txt \
   --certificate-identity-regexp '^https://github.com/vladmsnk/doorward/\.github/workflows/release\.yml@refs/tags/v'
 sha256sum --check --ignore-missing checksums.txt
 ```
+
+## Stopping, and what the log says during an outage
+
+On SIGTERM doorward stops at once unless `--shutdown-delay` is set. Behind
+a load balancer set it to a few seconds (5 s is usual): from the signal on,
+`/healthz` answers 503 "stopping" while decisions are still served, so the
+balancer stops sending before the listeners close, and in-flight calls
+finish. The journal follower drains before the process exits.
+
+Warnings and errors in the log are sampled: one line per message per
+second, and the next line of that message carries `suppressed`, the number
+dropped in between. An outage therefore costs a few lines a second rather
+than two per failed call. Informational lines are never sampled.
