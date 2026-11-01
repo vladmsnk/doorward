@@ -10,11 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"net/url"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
@@ -45,9 +43,9 @@ type PDP struct {
 	// ID and Version name this decision point in every record.
 	ID      string
 	Version string
-	// Journal, when set, receives each record as one JSON line once it is
-	// committed.
-	Journal io.Writer
+	// Journal, when set, is told about every committed record; the journal
+	// follower copies records out in order.
+	Journal interface{ Notify() }
 	Log     *slog.Logger
 	// Tracer, when set, records one span per evaluation.
 	Tracer trace.Tracer
@@ -59,8 +57,6 @@ type PDP struct {
 	Timeout time.Duration
 	// Now defaults to time.Now.
 	Now func() time.Time
-
-	journalMu sync.Mutex
 }
 
 // DefaultTimeout is how long a decision may take.
@@ -260,7 +256,9 @@ func (p *PDP) record(ctx context.Context, d v0.Decision, a *store.Allowance, set
 	if err != nil {
 		return d, err
 	}
-	p.export(out)
+	if p.Journal != nil {
+		p.Journal.Notify()
+	}
 	return out, nil
 }
 
@@ -399,22 +397,6 @@ func (p *PDP) approval(ctx context.Context, g v0.Grant, m v0.Mandate, mandateDig
 		return v0.Approval{}, fmt.Errorf("approval request: %w", err)
 	}
 	return a, p.Store.Approvals().Create(ctx, a)
-}
-
-func (p *PDP) export(d v0.Decision) {
-	if p.Journal == nil {
-		return
-	}
-	line, err := json.Marshal(d)
-	if err != nil {
-		p.log().Error("exporting a decision", "decision", d.ID, "err", err)
-		return
-	}
-	p.journalMu.Lock()
-	defer p.journalMu.Unlock()
-	if _, err := p.Journal.Write(append(line, '\n')); err != nil {
-		p.log().Error("exporting a decision", "decision", d.ID, "err", err)
-	}
 }
 
 func (p *PDP) timeout() time.Duration {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,6 +21,7 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/sealer"
@@ -40,12 +42,23 @@ const (
 var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 
 type box struct {
-	t       testing.TB
-	st      *postgres.Store
-	v       *schema.Validator
-	signer  *keys.Signer
-	srv     *httptest.Server
-	journal *syncBuffer
+	t        testing.TB
+	st       *postgres.Store
+	v        *schema.Validator
+	signer   *keys.Signer
+	srv      *httptest.Server
+	journal  *syncBuffer
+	follower *journal.Follower
+	pdp      *pdp.PDP
+}
+
+// exported drains the journal follower and returns the file so far.
+func (b *box) exported() string {
+	b.t.Helper()
+	if err := b.follower.Drain(context.Background()); err != nil {
+		b.t.Fatal(err)
+	}
+	return b.journal.String()
 }
 
 type syncBuffer struct {
@@ -115,15 +128,20 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	}
 	clock := func() time.Time { return now }
 	b := &box{t: t, st: st, v: v, signer: signer, journal: &syncBuffer{}}
+	b.follower = journal.New(st.Decisions(), b.journal, 0, 10*time.Millisecond, nil)
+	fctx, fcancel := context.WithCancel(ctx)
+	go b.follower.Run(fctx)
+	t.Cleanup(fcancel)
 	p := &pdp.PDP{
 		Store:    st,
 		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Now: clock}, Validator: v, Now: clock},
 		ID:       "doorward-test", Version: "test",
-		Journal: b.journal, Now: clock,
+		Journal: b.follower, Now: clock,
 	}
 	for _, o := range opts {
 		o(p)
 	}
+	b.pdp = p
 	b.srv = httptest.NewServer(p.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-1", Kind: v0.PEPGateway}}}))
 	t.Cleanup(b.srv.Close)
 	return b
@@ -356,7 +374,7 @@ func TestEvaluate(t *testing.T) {
 		t.Errorf("stored chain broken at %d: %v", broken, err)
 	}
 	var exported []v0.Decision
-	for _, line := range strings.Split(strings.TrimSpace(b.journal.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(b.exported()), "\n") {
 		var d v0.Decision
 		if err := json.Unmarshal([]byte(line), &d); err != nil {
 			t.Fatal(err)
@@ -379,15 +397,16 @@ func TestEvaluate(t *testing.T) {
 		return
 	}
 	journal := filepath.Join(t.TempDir(), "journal.jsonl")
-	if err := os.WriteFile(journal, []byte(b.journal.String()), 0o600); err != nil {
+	file := b.exported()
+	if err := os.WriteFile(journal, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(python, "../../scripts/verify-journal.py", journal).CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "chain intact") {
 		t.Fatalf("independent verifier: %v\n%s", err, out)
 	}
-	tampered := strings.Replace(b.journal.String(), `"remaining":3800`, `"remaining":9800`, 1)
-	if tampered == b.journal.String() {
+	tampered := strings.Replace(file, `"remaining":3800`, `"remaining":9800`, 1)
+	if tampered == file {
 		t.Fatal("nothing to tamper with")
 	}
 	if err := os.WriteFile(journal, []byte(tampered), 0o600); err != nil {
@@ -646,5 +665,86 @@ func TestDecisionDeadline(t *testing.T) {
 	}
 	if a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil); !a.resp.Decision {
 		t.Errorf("after release: %s", a.raw)
+	}
+}
+
+// Q2: the journal file is a complete, ordered copy of the chain. It
+// contains records another instance committed, and a follower started on
+// an existing file continues where it ended.
+func TestJournalFollowsEveryInstance(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_follow_000000001", nil)
+	read := map[string]any{"invoice_id": "i"}
+	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
+
+	// A second instance on the same store, with no follower of its own.
+	other := &pdp.PDP{Store: b.st, Verifier: b.pdp.Verifier, ID: "doorward-other", Version: "test", Now: b.pdp.Now}
+	srv := httptest.NewServer(other.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-2", Kind: v0.PEPGateway}}}))
+	defer srv.Close()
+	for i := 0; i < 3; i++ {
+		body, _ := json.Marshal(map[string]any{
+			"subject": map[string]any{"type": "agent", "id": "invoice-assistant"}, "action": map[string]any{"name": "get_invoice"},
+			"resource": map[string]any{"type": "tool_call", "id": payments, "properties": map[string]any{"arguments": read}},
+			"context":  map[string]any{"token": alice}})
+		r, _ := http.NewRequest(http.MethodPost, srv.URL+pdp.EvaluationPath, bytes.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+pepToken)
+		res, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+	}
+	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
+
+	lines := strings.Split(strings.TrimSpace(b.exported()), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("the file has %d records, the chain 5", len(lines))
+	}
+	var seqs []uint64
+	peps := map[string]int{}
+	for _, l := range lines {
+		var d v0.Decision
+		if err := json.Unmarshal([]byte(l), &d); err != nil {
+			t.Fatal(err)
+		}
+		seqs = append(seqs, d.Chain.Seq)
+		peps[d.PEP.ID]++
+	}
+	if fmt.Sprint(seqs) != "[0 1 2 3 4]" || peps["gateway-2"] != 3 {
+		t.Errorf("seqs %v, by gateway %v", seqs, peps)
+	}
+
+	// Resume: a new follower over the same file writes only what follows.
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines[:3], "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	from, err := journal.Resume(f)
+	if err != nil || from != 3 {
+		t.Fatalf("Resume: %d %v", from, err)
+	}
+	resumed := journal.New(b.st.Decisions(), f, from, time.Hour, nil)
+	if err := resumed.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if got := strings.Split(strings.TrimSpace(string(data)), "\n"); len(got) != 5 || got[4] != lines[4] {
+		t.Errorf("resumed file has %d lines; last matches: %v", len(got), len(got) == 5 && got[4] == lines[4])
+	}
+	// An empty file starts from 0; a file with junk is refused.
+	empty, _ := os.CreateTemp(t.TempDir(), "e")
+	if from, err := journal.Resume(empty); err != nil || from != 0 {
+		t.Errorf("empty: %d %v", from, err)
+	}
+	junk, _ := os.CreateTemp(t.TempDir(), "j")
+	_, _ = junk.WriteString("not json\n")
+	if _, err := journal.Resume(junk); err == nil {
+		t.Error("junk accepted")
 	}
 }

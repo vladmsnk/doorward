@@ -19,9 +19,11 @@ import (
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
 	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
 	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/internal/telemetry"
 	"github.com/vladmsnk/doorward/schema"
@@ -45,7 +47,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
 	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
 	decisionTimeout := fs.Duration("decision-timeout", pdp.DefaultTimeout, "how long one decision may take, the wait for the journal included; a decision that runs out of time is refused and nothing is recorded")
-	journal := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
+	journalPath := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
 	var peps []pdp.Client
 	pepFlag := func(v string) error {
 		c, err := parsePEP(v)
@@ -87,19 +89,18 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var journalOut io.Writer
-	switch *journal {
-	case "":
-	case "-":
-		journalOut = stdout
+	// The journal file is opened before the store, so a bad path fails fast.
+	var journalFile *os.File
+	switch *journalPath {
+	case "", "-":
 	default:
-		f, err := os.OpenFile(*journal, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- the operator names the journal file
+		f, err := os.OpenFile(*journalPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600) // #nosec G304 -- the operator names the journal file
 		if err != nil {
 			fmt.Fprintf(stderr, "doorward serve: --journal: %v\n", err)
 			return 2
 		}
 		defer func() { _ = f.Close() }()
-		journalOut = f
+		journalFile = f
 	}
 
 	log := slog.New(slog.NewJSONHandler(stdout, nil))
@@ -154,6 +155,30 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = stopTracing(context.Background()) }()
 
+	// The journal follower copies every committed record, from any
+	// instance, to the file in order: a file resumes where it ended, and
+	// standard output starts at the current head.
+	var follower *journal.Follower
+	if *journalPath != "" {
+		var from uint64
+		out := stdout
+		if journalFile != nil {
+			if from, err = journal.Resume(journalFile); err != nil {
+				fmt.Fprintf(stderr, "doorward serve: --journal: %v\n", err)
+				return 2
+			}
+			out = journalFile
+		} else if head, err := st.Decisions().Head(ctx); err == nil {
+			from = head.Chain.Seq + 1
+		} else if !errors.Is(err, store.ErrNotFound) {
+			fmt.Fprintf(stderr, "doorward serve: %v\n", err)
+			return 1
+		}
+		follower = journal.New(st.Decisions(), out, from, 0, log)
+		go follower.Run(ctx)
+		log.Info("journal follower started", "from_seq", from, "to", *journalPath)
+	}
+
 	decisions := &pdp.PDP{
 		Store: st,
 		Verifier: &grant.Verifier{
@@ -164,10 +189,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		},
 		ID:      *pdpID,
 		Version: versionString(),
-		Journal: journalOut,
 		Log:     log,
 		Tracer:  tp.Tracer("doorward"),
 		Timeout: *decisionTimeout,
+	}
+	if follower != nil {
+		decisions.Journal = follower
 	}
 	public.Handle("POST "+pdp.EvaluationPath, decisions.Handler(peps))
 
@@ -204,6 +231,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			fmt.Fprintf(stderr, "doorward serve: shutdown: %v\n", err)
+			return 1
+		}
+	}
+	if follower != nil {
+		if err := follower.Close(shutdownCtx); err != nil {
+			fmt.Fprintf(stderr, "doorward serve: journal: %v\n", err)
 			return 1
 		}
 	}

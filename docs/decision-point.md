@@ -201,14 +201,20 @@ force, the W3C trace ID, and every check. Records are chained: each one's
 `chain.hash` is the SHA-256 of the record in RFC 8785 canonical JSON
 without `chain.hash`, and covers the previous record's hash.
 
-- `--journal FILE` (or `-` for standard output) writes every record as one
-  JSON line once it is committed; `GET /admin/v0/decisions?from=SEQ`
-  exports them from the Admin API, and `doorward journal export` from the
-  command line.
+- `--journal FILE` keeps a complete copy of the chain as JSON lines: a
+  follower copies every committed record out of the database in sequence
+  order, including records other instances committed, so each instance's
+  file is the whole journal. On start it continues after the file's last
+  record, so nothing is lost to a crash; a new empty file receives the
+  whole history. `--journal -` streams to standard output from the current
+  head. `GET /admin/v0/decisions?from=SEQ` exports records from the Admin
+  API, and `doorward journal export` from the command line.
 - `doorward journal verify FILE` checks every record against the contract
-  and the chain. [`scripts/verify-journal.py`](../scripts/verify-journal.py)
-  checks the chain with Python's standard library alone, sharing no code
-  with doorward.
+  and the chain, in sequence order whatever order the lines are in, and
+  reports a sequence number seen twice.
+  [`scripts/verify-journal.py`](../scripts/verify-journal.py) checks the
+  chain with Python's standard library alone, sharing no code with
+  doorward.
 - With `OTEL_EXPORTER_OTLP_ENDPOINT` set, each evaluation is a span in the
   caller's trace, carrying the decision's ID, outcome, agent, mandate and
   reason.
