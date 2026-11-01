@@ -163,6 +163,27 @@ action or resource is refused with 400 and leaves no record; anything else
 is decided and recorded, and an internal failure answers 500 with
 `decision` false.
 
+### Observe mode
+
+A mandate or an agent can be set to `enforcement: observe` to try its rules
+before enforcing them. Doorward then decides every call as usual and
+records the answer, but the mandate's own rules do not stop a call:
+
+| Observed, not enforced | Always enforced |
+|---|---|
+| an operation or argument outside the grant (`subset`) | the grant: signature, status, audience, time |
+| a budget without room, or a call it cannot count (`limits`) | the agent's ceiling (`max_sensitivity`) |
+| | approval of critical operations |
+| | an operation the manifest does not declare |
+| | a single-use grant already spent |
+
+The record of an observed call has `"enforcement": "observe"` and, when
+enforcement would have refused it, `observed` with that refusal and its
+reasons; the answer to the gateway carries both. A budget without room
+stays at its maximum, and the call's other budgets are drawn, since the
+call ran. Records whose `observed` is set are the calls a mandate would
+have stopped: the list to read before switching it to `enforce`.
+
 Every record names the user or the owning team, the agent, the grant (its
 ID; never the token), the versions of the mandate and the manifest in
 force, the W3C trace ID, and every check. Records are chained: each one's

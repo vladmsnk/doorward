@@ -65,10 +65,11 @@ vocabulary:
 | B1, B2, B3 | grant verification; subset check; tiers, action hash, single-use grants | done |
 | B4 | budgets: exact, atomic, drawn last with the single-use grant | done |
 | B5 | AuthZEN evaluation endpoint; journal in RFC 8785, exported and verifiable outside the box; tracing | done |
+| B6 | observe mode | done |
 | P1–P7 | fail-open paths from the first review closed, each with a negative test | done |
 | | commits authored and signed off by a person, checked in CI | done |
 
-**Next: B6, observe mode.**
+**Phase B is complete. Next: C1, the thin MCP gateway.**
 
 ## The build order at a glance
 
@@ -98,7 +99,7 @@ and records in the pull request what it checked.
 |---|---|---|---|---|
 | B4 | **Budgets** | Counters per grant and, under a consent, per day and month, kept in exact decimal minor units and drawn in one atomic statement with no compensating second write. Drawn last, only for a call that is otherwise allowed. | D | 100 parallel calls against a budget of 50: exactly 50 pass. A refused or held call leaves every counter unchanged. 0.1 + 0.2 EUR is exactly 0.30 EUR. |
 | B5 | **Evaluation endpoint and journal** | `POST /access/v1/evaluation` in the AuthZEN 1.0 shape, running B1 to B4 in order. Allowing a call spends its single-use grant and its budget together. Every answer appends a record hashed as RFC 8785 canonical JSON, with the user and the agent, the manifest and mandate version digests and the W3C trace ID. Records are exported as JSON lines and OpenTelemetry. | T, D | `curl` the example requests: the three outcomes, with the example records' checks and reasons. A script outside the box verifies the chain from the exported lines. A benchmark reports the time per decision. |
-| B6 | **Observe mode** | A flag on an agent or a mandate: the core decides and records what it would have done, and the call goes through. Records say they were observed, not enforced. An agent cannot be observed and enforced at once, and a tool marked "always ask" (E6) is never observed. | — | An over-limit call in observe mode passes, and its record says it would have been denied with `constraint_violated`. |
+| B6 | **Observe mode** | `enforcement: observe` on an agent or a mandate: the mandate's own rules (the grant's operations and bounds, its budgets) are recorded but do not stop a call; the grant's validity, the agent's ceiling, approval of critical operations and undeclared operations stay enforced. Records and answers carry what enforcement would have refused. | — | An over-limit call in observe mode passes, and its record says it would have been denied with `constraint_violated`; a critical call is still held. |
 
 ## Phase C: the first slice, with the small give-aways
 

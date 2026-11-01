@@ -73,8 +73,28 @@ func Draws(budgets []Budget) []store.Draw {
 
 // LimitsCheck turns the outcome of store.Allow into the limits check and
 // what the decision record lists as drawn. err is Allow's error.
+//
+// After a best-effort draw (observe mode), budgets without room are marked
+// exhausted in drawn: the check fails for the first of them, and the uses
+// list what the others drew.
 func LimitsCheck(budgets []Budget, drawn []store.Drawn, err error) (v0.Check, *v0.Reason, []v0.LimitUse) {
 	var ex *store.ExhaustedError
+	var kept []store.Drawn
+	var keptBudgets []Budget
+	for i, d := range drawn {
+		if d.Exhausted {
+			if ex == nil {
+				ex = &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: d.Remaining}
+			}
+			continue
+		}
+		kept, keptBudgets = append(kept, d), append(keptBudgets, budgets[i])
+	}
+	if ex != nil {
+		check, reason, _ := LimitsCheck(budgets, nil, ex)
+		_, _, uses := LimitsCheck(keptBudgets, kept, nil)
+		return check, reason, uses
+	}
 	if errors.As(err, &ex) {
 		for _, b := range budgets {
 			if b.Draw.Key != ex.Key {

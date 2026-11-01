@@ -83,7 +83,7 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 	if m.Disabled {
 		return refuse("mandate %s is disabled", g.Mandate)
 	}
-	st := Standing{Ceiling: a.Spec.MaxSensitivity, SingleUse: rec.SingleUse, ActionHash: rec.ActionHash}
+	st := Standing{Ceiling: a.Spec.MaxSensitivity, SingleUse: rec.SingleUse, ActionHash: rec.ActionHash, Enforcement: a.Spec.Enforcement}
 	if a.Spec.Owner != nil {
 		st.Owner = a.Spec.Owner.Team
 	}

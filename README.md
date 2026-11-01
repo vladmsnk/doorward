@@ -44,8 +44,9 @@ tools. Doorward is that control point:
 | Grants as RFC 9068 JWT access tokens with RFC 9396 `authorization_details`; ES256 keys, JWK Set, rotation | ✅ available |
 | Upstream credentials sealed with AES-256-GCM; the agent never sees them | ✅ storage · 🚧 injection at the gateway |
 | Versioned configuration through an Admin API; every change checked against the whole configuration | ✅ available |
+| Observe mode: try a mandate or an agent without enforcing its rules; each record says what enforcement would have refused | ✅ available |
 | MCP gateway; OAuth authorization server (RFC 9728, RFC 8414, Client ID Metadata Documents); consent page | 🚧 next |
-| Kill switch, observe mode, approval thresholds, notifications, admin sign-in | 📋 planned |
+| Kill switch, approval thresholds, notifications, admin sign-in | 📋 planned |
 | Enterprise identity (ID-JAG), per-user upstream OAuth tokens, workload identities, DPoP | 📋 planned |
 
 ## How it works

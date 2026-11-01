@@ -181,11 +181,13 @@ type Draw struct {
 	Max    string // exact decimal
 }
 
-// Drawn is what one draw left.
+// Drawn is what one draw left. Exhausted marks a best-effort draw that
+// did not fit and took nothing.
 type Drawn struct {
 	Key       string
 	Amount    string
 	Remaining string
+	Exhausted bool
 }
 
 // ExhaustedError is a draw refused because the budget has no room for it.
@@ -208,7 +210,11 @@ type Allowance struct {
 	Draws []Draw
 	// SingleUse is the jti of the single-use grant the call runs on.
 	SingleUse string
-	At        time.Time
+	// BestEffort draws every budget that has room and reports the others as
+	// exhausted, instead of drawing nothing: an observed call runs, so what
+	// it used counts where it fits. A spent single-use grant still refuses.
+	BestEffort bool
+	At         time.Time
 }
 
 // SigningKey is one of the box's keys. PrivateEnc is sealed; the store

@@ -94,3 +94,19 @@ func TestLimitsCheck(t *testing.T) {
 		t.Errorf("exhausted: %+v %+v %v", check, reason, uses)
 	}
 }
+
+// After a best-effort draw (observe mode), the first exhausted budget
+// fails the check and the others are listed as drawn.
+func TestLimitsCheckBestEffort(t *testing.T) {
+	alice := load[v0.Grant](t, "grant/pay-invoice.json")
+	budgets, _ := core.Budgets(alice, core.Call{Resource: payments, Action: "pay_invoice",
+		Arguments: map[string]any{"invoice_id": "i", "amount": 1200.0, "currency": "EUR"}}, time.Now())
+	check, reason, uses := core.LimitsCheck(budgets, []store.Drawn{
+		{Key: budgets[0].Draw.Key, Amount: "1200", Remaining: "1000", Exhausted: true},
+		{Key: budgets[1].Draw.Key, Amount: "1", Remaining: "49"},
+	}, nil)
+	if check.Result != v0.CheckFail || check.Detail != "payout-month" || reason.Code != v0.ReasonLimitExceeded ||
+		fmt.Sprint(uses) != "[{calls 1 49}]" {
+		t.Errorf("%+v %+v %v", check, reason, uses)
+	}
+}

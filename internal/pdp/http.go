@@ -46,13 +46,15 @@ type Response struct {
 // decision: the record's ID, the outcome, the reasons for a refusal, the
 // approval request for a held call, and what an allowed call drew.
 type ResponseContext struct {
-	ID         string          `json:"id,omitempty"`
-	Outcome    v0.Outcome      `json:"outcome,omitempty"`
-	Reasons    []v0.Reason     `json:"reasons,omitempty"`
-	Approval   *v0.ApprovalRef `json:"approval,omitempty"`
-	ActionHash string          `json:"action_hash,omitempty"`
-	Limits     []v0.LimitUse   `json:"limits,omitempty"`
-	Error      string          `json:"error,omitempty"`
+	ID          string          `json:"id,omitempty"`
+	Outcome     v0.Outcome      `json:"outcome,omitempty"`
+	Enforcement v0.Enforcement  `json:"enforcement,omitempty"`
+	Observed    *v0.Observed    `json:"observed,omitempty"`
+	Reasons     []v0.Reason     `json:"reasons,omitempty"`
+	Approval    *v0.ApprovalRef `json:"approval,omitempty"`
+	ActionHash  string          `json:"action_hash,omitempty"`
+	Limits      []v0.LimitUse   `json:"limits,omitempty"`
+	Error       string          `json:"error,omitempty"`
 }
 
 // Handler serves the evaluation endpoint to the given clients. With no
@@ -96,7 +98,7 @@ func (p *PDP) Handler(clients []Client) http.Handler {
 		writeJSON(w, http.StatusOK, Response{
 			Decision: d.Outcome == v0.OutcomeAllow,
 			Context: ResponseContext{
-				ID: d.ID, Outcome: d.Outcome, Reasons: d.Reasons, Approval: d.Approval,
+				ID: d.ID, Outcome: d.Outcome, Enforcement: d.Enforcement, Observed: d.Observed, Reasons: d.Reasons, Approval: d.Approval,
 				ActionHash: d.ActionHash, Limits: d.Limits,
 			},
 		})
@@ -175,6 +177,12 @@ func spanAttributes(d v0.Decision) []attribute.KeyValue {
 	}
 	if d.Approval != nil {
 		kv = append(kv, attribute.String("doorward.approval", d.Approval.Request))
+	}
+	if d.Enforcement != "" {
+		kv = append(kv, attribute.String("doorward.enforcement", string(d.Enforcement)))
+	}
+	if d.Observed != nil {
+		kv = append(kv, attribute.String("doorward.observed.reason", string(d.Observed.Reasons[0].Code)))
 	}
 	return kv
 }

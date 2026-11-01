@@ -125,9 +125,22 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 	d.Versions = &v0.Versions{Mandate: mandateDigest, Manifest: manDigest}
 	op := core.Operation(man, call.Action)
 
-	// subset: the call lies inside the grant.
+	// Observe mode: the mandate's own rules (subset, limits) are recorded
+	// but do not stop the call. Everything else is still enforced.
+	observe := mandate.Spec.Enforcement == v0.EnforcementObserve || st.Enforcement == v0.EnforcementObserve
+	var observed []v0.Reason
+	if observe {
+		d.Enforcement = v0.EnforcementObserve
+	}
+
+	// subset: the call lies inside the grant. An operation the manifest
+	// does not declare is refused even when observed: its tier is unknown.
 	check, reason := core.Subset(g, op, call)
-	if reason != nil {
+	switch {
+	case reason == nil:
+	case observe && op != nil:
+		observed = append(observed, *reason)
+	default:
 		deny(&d, check, *reason)
 		return p.record(ctx, d, nil, nil)
 	}
@@ -152,6 +165,7 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 		}
 		d.Checks = append(d.Checks, check)
 		d.Outcome, d.Approval = v0.OutcomeApprovalRequired, &v0.ApprovalRef{Request: a.ID}
+		d.Observed = observedOf(observed)
 		return p.record(ctx, d, nil, nil)
 	}
 	d.Checks = append(d.Checks, check)
@@ -161,31 +175,53 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 
 	// limits: last, and spent together with the record.
 	budgets, reason := core.Budgets(g, call, now)
-	if reason != nil {
-		deny(&d, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: reason.Message}, *reason)
-		return p.record(ctx, d, nil, nil)
-	}
-	allowance := &store.Allowance{Draws: core.Draws(budgets), At: now}
+	allowance := &store.Allowance{At: now, BestEffort: observe}
 	if st.SingleUse {
 		allowance.SingleUse = g.ID
 	}
+	if reason != nil {
+		if !observe {
+			deny(&d, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: reason.Message}, *reason)
+			return p.record(ctx, d, nil, nil)
+		}
+		// The call cannot be counted; observed, it runs uncounted.
+		d.Checks = append(d.Checks, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: reason.Message})
+		observed = append(observed, *reason)
+		budgets = nil
+	}
+	allowance.Draws = core.Draws(budgets)
 	return p.record(ctx, d, allowance, func(d v0.Decision, drawn []store.Drawn, err error) v0.Decision {
 		if errors.Is(err, store.ErrState) {
 			// Another call spent the single-use grant after this one's
-			// status check.
+			// status check. Enforced in every mode.
 			msg := fmt.Sprintf("single-use grant %s was spent by another call", g.ID)
 			deny(&d, v0.Check{Name: v0.CheckLimits, Result: v0.CheckFail, Detail: msg}, v0.Reason{Code: v0.ReasonGrantRevoked, Message: msg})
 			return d
 		}
-		check, reason, uses := core.LimitsCheck(budgets, drawn, err)
-		if reason != nil {
-			deny(&d, check, *reason)
-			return d
+		if budgets != nil {
+			check, reason, uses := core.LimitsCheck(budgets, drawn, err)
+			switch {
+			case reason == nil:
+			case observe && reason.Code == v0.ReasonLimitExceeded:
+				observed = append(observed, *reason)
+			default:
+				deny(&d, check, *reason)
+				return d
+			}
+			d.Checks, d.Limits = append(d.Checks, check), uses
 		}
-		d.Checks = append(d.Checks, check)
-		d.Outcome, d.Limits = v0.OutcomeAllow, uses
+		d.Outcome, d.Observed = v0.OutcomeAllow, observedOf(observed)
 		return d
 	})
+}
+
+// observedOf is what enforcement would have answered, if it would have
+// refused.
+func observedOf(reasons []v0.Reason) *v0.Observed {
+	if len(reasons) == 0 {
+		return nil
+	}
+	return &v0.Observed{Outcome: v0.OutcomeDeny, Reasons: reasons}
 }
 
 // record settles the allowance, if any, appends the decision with every

@@ -420,7 +420,7 @@ func allowTx(ctx context.Context, tx pgx.Tx, a store.Allowance) ([]store.Drawn, 
 	}
 	draws := slices.Clone(a.Draws)
 	slices.SortFunc(draws, func(x, y store.Draw) int { return strings.Compare(x.Key, y.Key) })
-	remaining := make(map[string]string, len(draws))
+	result := make(map[string]store.Drawn, len(draws))
 	for _, d := range draws {
 		var left string
 		err := tx.QueryRow(ctx, drawSQL, d.Key, d.Amount, d.Max).Scan(&left)
@@ -430,16 +430,20 @@ func allowTx(ctx context.Context, tx pgx.Tx, a store.Allowance) ([]store.Drawn, 
 			).Scan(&left); err != nil {
 				return nil, err
 			}
-			return nil, &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: left}
+			if !a.BestEffort {
+				return nil, &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: left}
+			}
+			result[d.Key] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: left, Exhausted: true}
+			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		remaining[d.Key] = left
+		result[d.Key] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: left}
 	}
 	out := make([]store.Drawn, len(a.Draws))
 	for i, d := range a.Draws {
-		out[i] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: remaining[d.Key]}
+		out[i] = result[d.Key]
 	}
 	return out, nil
 }
