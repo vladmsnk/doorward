@@ -24,6 +24,10 @@ var (
 	ErrExhausted = errors.New("limit exhausted")
 	// ErrState is returned when a record cannot move to the requested state.
 	ErrState = errors.New("invalid state transition")
+	// ErrTimeout is returned when the store could not answer within the
+	// caller's deadline: a lock was not free in time, or a statement ran
+	// out of time. Nothing was written.
+	ErrTimeout = errors.New("the store did not answer in time")
 )
 
 // Store is everything the box keeps.

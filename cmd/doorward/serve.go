@@ -44,6 +44,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
 	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
 	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
+	decisionTimeout := fs.Duration("decision-timeout", pdp.DefaultTimeout, "how long one decision may take, the wait for the journal included; a decision that runs out of time is refused and nothing is recorded")
 	journal := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
 	var peps []pdp.Client
 	pepFlag := func(v string) error {
@@ -70,6 +71,10 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 	if *dsn == "" {
 		fmt.Fprintln(stderr, "doorward serve: --db or DOORWARD_DB is required")
+		return 2
+	}
+	if *decisionTimeout <= 0 || *decisionTimeout > 20*time.Second {
+		fmt.Fprintln(stderr, "doorward serve: --decision-timeout must be between 1ms and 20s, under the 30s HTTP write timeout")
 		return 2
 	}
 	if len(*adminToken) < 16 {
@@ -162,6 +167,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		Journal: journalOut,
 		Log:     log,
 		Tracer:  tp.Tracer("doorward"),
+		Timeout: *decisionTimeout,
 	}
 	public.Handle("POST "+pdp.EvaluationPath, decisions.Handler(peps))
 

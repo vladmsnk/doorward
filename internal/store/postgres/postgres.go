@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -89,9 +90,34 @@ func mapErr(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
-		return store.ErrConflict
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", store.ErrTimeout, err)
 	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation
+			return store.ErrConflict
+		case "55P03", "57014": // lock_not_available, query_canceled (statement_timeout)
+			return fmt.Errorf("%w: %s", store.ErrTimeout, pgErr.Message)
+		}
+	}
+	return err
+}
+
+// deadlineSQL bounds how long a transaction waits for a lock, so a caller's
+// deadline holds inside the database as well as around it. Without a
+// deadline it sets nothing.
+func deadlineSQL(ctx context.Context, tx pgx.Tx) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return fmt.Errorf("%w: no time left", store.ErrTimeout)
+	}
+	// SET LOCAL takes no bind parameters; the value is an integer we made.
+	_, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", max(left.Milliseconds(), 1)))
 	return err
 }

@@ -90,6 +90,14 @@ func (p *PDP) Handler(clients []Client) http.Handler {
 		if err != nil {
 			span.RecordError(err)
 			span.SetStatus(codes.Error, "the decision could not be made")
+			if errors.Is(err, ErrTimeout) {
+				// Nothing was drawn or recorded; the point of enforcement
+				// refuses the call and may retry.
+				p.log().Warn("decision timed out", "pep", pep.ID, "action", req.Action.Name, "err", err)
+				w.Header().Set("Retry-After", "1")
+				writeJSON(w, http.StatusServiceUnavailable, Response{Context: ResponseContext{Error: "the decision ran out of time; refuse the call"}})
+				return
+			}
 			p.log().Error("evaluation failed", "pep", pep.ID, "err", err)
 			writeJSON(w, http.StatusInternalServerError, Response{Context: ResponseContext{Error: "the decision could not be made; refuse the call"}})
 			return

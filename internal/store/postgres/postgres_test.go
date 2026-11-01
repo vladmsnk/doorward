@@ -599,3 +599,59 @@ func TestPendingFor(t *testing.T) {
 		t.Errorf("a closed request still matches: %v", err)
 	}
 }
+
+// holdChainLock takes the journal lock on a connection of its own and
+// returns a function that releases it.
+func holdChainLock(t testing.TB, s *postgres.Store) func() {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := s.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+			conn.Release()
+		})
+	}
+}
+
+// Q1: a settlement that cannot get the journal in time is rolled back
+// within the caller's deadline, drawing and recording nothing.
+func TestSettleHonoursTheDeadline(t *testing.T) {
+	s := open(t)
+	release := holdChainLock(t, s)
+	defer release()
+	key := store.GrantKey("grt_deadline", "calls")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base.Chain = nil
+	start := time.Now()
+	_, err := s.Settle(ctx, &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]store.Drawn, error) (v0.Decision, error) { return base, nil })
+	took := time.Since(start)
+	if !errors.Is(err, store.ErrTimeout) {
+		t.Fatalf("got %v after %s, want ErrTimeout", err, took)
+	}
+	if took > 2*time.Second {
+		t.Errorf("took %s to give up on a 300ms deadline", took)
+	}
+	release()
+	if v, _ := s.Counters().Consumed(context.Background(), key); v != "0" {
+		t.Errorf("the timed-out settlement drew %s", v)
+	}
+	if _, err := s.Decisions().Head(context.Background()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the timed-out settlement was recorded: %v", err)
+	}
+	// With the lock free, the same settlement goes through.
+	if _, err := s.Settle(context.Background(), &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]store.Drawn, error) (v0.Decision, error) { return base, nil }); err != nil {
+		t.Fatal(err)
+	}
+}

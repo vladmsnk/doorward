@@ -179,8 +179,10 @@ func (s grants) Spend(ctx context.Context, jti string, at time.Time) error {
 
 type decisions struct{ pool *pgxpool.Pool }
 
-// chainLock serializes appends, so each record sees the true head.
-const chainLock = 0x444543495349 // "DECISI"
+// ChainLock is the advisory lock key that serializes appends to the
+// journal, so each record sees the true head. It is exported so an operator
+// can find waits on it in pg_locks, and tests can hold it.
+const ChainLock = 0x444543495349 // "DECISI"
 
 func (s decisions) Append(ctx context.Context, d v0.Decision) (v0.Decision, error) {
 	var out v0.Decision
@@ -193,7 +195,7 @@ func (s decisions) Append(ctx context.Context, d v0.Decision) (v0.Decision, erro
 
 // appendTx appends d as the next link, under the chain lock, inside tx.
 func appendTx(ctx context.Context, tx pgx.Tx, d v0.Decision) (v0.Decision, error) {
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", chainLock); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ChainLock); err != nil {
 		return d, err
 	}
 	var prev *v0.Decision
@@ -378,7 +380,18 @@ func (s *Store) Allow(ctx context.Context, a store.Allowance) ([]store.Drawn, er
 // undone while its refusal is still recorded.
 func (s *Store) Settle(ctx context.Context, a *store.Allowance, decide func([]store.Drawn, error) (v0.Decision, error)) (v0.Decision, error) {
 	var out v0.Decision
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return out, mapErr(err)
+	}
+	// Once the work is done, the commit is seen through even if the
+	// caller's deadline passes meanwhile: an answer that is committed is
+	// an answer that is reported, never one left ambiguous.
+	after := context.WithoutCancel(ctx)
+	work := func() error {
+		if err := deadlineSQL(ctx, tx); err != nil {
+			return err
+		}
 		var drawn []store.Drawn
 		var refused error
 		if a != nil {
@@ -400,8 +413,19 @@ func (s *Store) Settle(ctx context.Context, a *store.Allowance, decide func([]st
 		}
 		out, err = appendTx(ctx, tx, d)
 		return err
-	})
-	return out, mapErr(err)
+	}
+	if err := work(); err != nil {
+		rbCtx, cancel := context.WithTimeout(after, 5*time.Second)
+		defer cancel()
+		_ = tx.Rollback(rbCtx)
+		return out, mapErr(err)
+	}
+	commitCtx, cancel := context.WithTimeout(after, 5*time.Second)
+	defer cancel()
+	if err := tx.Commit(commitCtx); err != nil {
+		return out, mapErr(err)
+	}
+	return out, nil
 }
 
 // allowTx draws an allowance inside tx. Budgets are drawn in key order, so

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -610,5 +611,40 @@ func TestObserveMode(t *testing.T) {
 	}
 	if broken, err := v0.Verify(all); broken != -1 || err != nil {
 		t.Errorf("chain broken at %d: %v", broken, err)
+	}
+}
+
+// Q1: while the journal is held, decisions are refused within the deadline
+// with 503, and nothing is drawn or recorded. Once it is free, they flow.
+func TestDecisionDeadline(t *testing.T) {
+	b := newBox(t, func(p *pdp.PDP) { p.Timeout = 300 * time.Millisecond })
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_deadline_000001", nil)
+	conn, err := b.st.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil)
+	took := time.Since(start)
+	if a.status != 503 || a.resp.Decision || !strings.Contains(a.resp.Context.Error, "ran out of time") {
+		t.Fatalf("held journal: %d %s", a.status, a.raw)
+	}
+	if took > 2*time.Second {
+		t.Errorf("answer took %s on a 300ms deadline", took)
+	}
+	_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+	conn.Release()
+	if v, _ := b.st.Counters().Consumed(ctx, "grant:grt_alice_deadline_000001:calls"); v != "0" {
+		t.Errorf("the refused call drew %s", v)
+	}
+	if _, err := b.st.Decisions().Head(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the refused call was recorded: %v", err)
+	}
+	if a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil); !a.resp.Decision {
+		t.Errorf("after release: %s", a.raw)
 	}
 }

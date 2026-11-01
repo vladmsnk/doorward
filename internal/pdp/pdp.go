@@ -51,11 +51,24 @@ type PDP struct {
 	Log     *slog.Logger
 	// Tracer, when set, records one span per evaluation.
 	Tracer trace.Tracer
+	// Timeout bounds one decision, the wait for the journal lock included;
+	// it defaults to DefaultTimeout. A decision that runs out of time is
+	// rolled back: nothing drawn, nothing recorded, and the caller refuses
+	// the call. It must stay under the HTTP write timeout, so that every
+	// answer reaches the point of enforcement.
+	Timeout time.Duration
 	// Now defaults to time.Now.
 	Now func() time.Time
 
 	journalMu sync.Mutex
 }
+
+// DefaultTimeout is how long a decision may take.
+const DefaultTimeout = 5 * time.Second
+
+// ErrTimeout is returned when a decision ran out of time before it was
+// recorded. Nothing was drawn or written.
+var ErrTimeout = errors.New("the decision ran out of time")
 
 // order is the record's order of checks.
 var order = []v0.CheckName{
@@ -68,6 +81,16 @@ var order = []v0.CheckName{
 // error means the decision could not be made or recorded; the caller then
 // refuses the call.
 func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP, traceID string) (v0.Decision, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout())
+	defer cancel()
+	d, err := p.evaluate(ctx, req, pep, traceID)
+	if errors.Is(err, store.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return d, fmt.Errorf("%w: %w", ErrTimeout, err)
+	}
+	return d, err
+}
+
+func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP, traceID string) (v0.Decision, error) {
 	now := p.now()
 	token, _ := req.Context[TokenKey].(string)
 	d := v0.Decision{
@@ -392,6 +415,13 @@ func (p *PDP) export(d v0.Decision) {
 	if _, err := p.Journal.Write(append(line, '\n')); err != nil {
 		p.log().Error("exporting a decision", "decision", d.ID, "err", err)
 	}
+}
+
+func (p *PDP) timeout() time.Duration {
+	if p.Timeout > 0 {
+		return p.Timeout
+	}
+	return DefaultTimeout
 }
 
 func (p *PDP) now() time.Time {

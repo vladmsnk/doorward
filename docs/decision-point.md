@@ -184,6 +184,17 @@ stays at its maximum, and the call's other budgets are drawn, since the
 call ran. Records whose `observed` is set are the calls a mandate would
 have stopped: the list to read before switching it to `enforce`.
 
+### Deadlines
+
+Every decision has a deadline, `--decision-timeout` (default 5 s, at most
+20 s so that it stays under the 30-second HTTP write timeout). It covers
+the whole decision, the wait for the journal lock included: the lock is
+taken with a matching `lock_timeout`, so a held lock produces fast refusals
+instead of a stall. A decision that runs out of time is rolled back: nothing
+drawn, nothing recorded, and the gateway gets 503 with `Retry-After`. Set
+the gateway's own timeout above the decision timeout; a gateway that gives
+up first cannot learn an answer that was committed a moment later.
+
 Every record names the user or the owning team, the agent, the grant (its
 ID; never the token), the versions of the mandate and the manifest in
 force, the W3C trace ID, and every check. Records are chained: each one's
