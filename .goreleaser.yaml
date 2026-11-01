@@ -29,7 +29,7 @@ checksum:
 
 # The checksum file is signed with cosign's keyless flow: the certificate
 # binds the signature to this repository's release workflow and the tag.
-# Verification is described in README.md.
+# Verification is described in docs/operations.md.
 signs:
   - cmd: cosign
     artifacts: checksum

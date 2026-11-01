@@ -9,3 +9,8 @@ coverage.html
 *.pem
 *.jwk
 .env
+
+# Files the README quick start writes.
+journal.jsonl
+grant.jwt
+doorward.log

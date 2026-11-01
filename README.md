@@ -1,514 +1,257 @@
-# doorward
+# Doorward
 
-A single distribution for authorizing AI agents: who an agent is, what it
-may do, for whom, on whose consent, and which calls a person must approve.
-It sits on the resource side, in front of a company's own tools, because
-that is the control point a company keeps when the agents themselves are
-hosted by someone else. Doorward is the decision, approval and evidence
-core; its gateway and authorization server are thin built-in parts for a
-company that has neither, and each can be replaced through a standard
-interface (AuthZEN, RFC 9068 tokens with a JWK Set, OIDC).
+[![CI](https://github.com/vladmsnk/doorward/actions/workflows/ci.yml/badge.svg)](https://github.com/vladmsnk/doorward/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/vladmsnk/doorward.svg)](https://pkg.go.dev/github.com/vladmsnk/doorward)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-> Development is AI-assisted: much of the code is written with Claude Code.
-> Every commit is authored and signed off by a human maintainer, who answers
-> for it (see [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
+**Doorward is an open-source authorization server and decision point for AI
+agents.** It sits in front of a company's own tools (MCP servers and HTTP
+APIs) and decides every agent call: which agent is calling, on whose behalf,
+under which consent, within which limits, and which calls a person must
+approve first. Every decision goes into a hash-chained journal that anyone
+can verify offline.
 
-## Status
+Apache-2.0 · Go · PostgreSQL · **Status: early.** The decision core works;
+the MCP gateway, the OAuth authorization server and the consent page are
+being built ([roadmap](docs/ROADMAP.md)).
 
-On main: the contract, PostgreSQL storage, the Admin API, signing keys and
-sealed secrets, and the decision core behind an AuthZEN evaluation
-endpoint: grant verification, the subset, sensitivity and budget checks,
-approval requests for critical calls, and a hash-chained journal that can
-be verified outside the box. Nothing yet sits in front of a real tool. Next
-comes observe mode, then one end-to-end slice in which an off-the-shelf MCP
-client connects, a user consents, and a call is refused or approved. The
-order and the reasons are in [docs/ROADMAP.md](docs/ROADMAP.md).
+## Why Doorward
 
-## What doorward cannot see
+Most AI agents that touch a company's systems run somewhere else: Claude,
+ChatGPT, Copilot, coding agents. The company owns the tools and the data,
+not the agent. The control point it can always keep is in front of its own
+tools. Doorward is that control point:
+
+- **Least privilege per call**, not per API key: an agent gets a short-lived
+  grant for one mandate, and every argument it sends is checked against it.
+- **Human approval of the exact call** before anything critical runs, such as
+  a payment or a write-off.
+- **Budgets on what agents spend**, counted per grant, per day or per month.
+- **Proof** of who did what, for whom, and who approved it.
+- **No meters.** Nothing counts agents, calls, consents or approvals
+  against a limit.
+
+## Features
+
+| Feature | Status |
+|---|---|
+| Per-call decisions over the [AuthZEN 1.0](https://openid.net/specs/authorization-api-1_0.html) evaluation API (`POST /access/v1/evaluation`) | ✅ available |
+| Argument limits on tool calls (`max`, `min`, `one_of`, `equals`, `prefix` on JSON Pointer paths), refused with a readable reason | ✅ available |
+| Budgets: count and sum per grant, day or month; exact decimals, atomic, never overdrawn | ✅ available |
+| Risk tiers (`read`, `write`, `critical`); a critical call needs approval of its exact arguments, then runs once on a single-use grant | ✅ decision · 🚧 approval page |
+| Verifiable journal: RFC 8785 canonical JSON, SHA-256 hash chain, JSON Lines export, OpenTelemetry spans, a verifier that shares no code with Doorward | ✅ available |
+| Agent registry: unverified, verified, suspended; owners; suspending an agent revokes its grants | ✅ available |
+| Grants as RFC 9068 JWT access tokens with RFC 9396 `authorization_details`; ES256 keys, JWK Set, rotation | ✅ available |
+| Upstream credentials sealed with AES-256-GCM; the agent never sees them | ✅ storage · 🚧 injection at the gateway |
+| Versioned configuration through an Admin API; every change checked against the whole configuration | ✅ available |
+| MCP gateway; OAuth authorization server (RFC 9728, RFC 8414, Client ID Metadata Documents); consent page | 🚧 next |
+| Kill switch, observe mode, approval thresholds, notifications, admin sign-in | 📋 planned |
+| Enterprise identity (ID-JAG), per-user upstream OAuth tokens, workload identities, DPoP | 📋 planned |
+
+## How it works
+
+```
+ AI agent / MCP client ── OAuth ──▶ Doorward ──▶ Person consents to a mandate
+   │  short-lived grant (JWT)
+   ▼
+ Gateway ── "may this call run?" ──▶ Doorward decision core ──▶ journal
+   │      ◀── allow · deny + reason · approval required
+   │  allowed call + upstream credential
+   ▼
+ Your MCP server or HTTP API
+```
+
+1. A company describes each tool in a **manifest** (operations, risk tiers,
+   arguments) and what agents may do in a **mandate** (permissions, limits,
+   budgets, approvers). A mandate's name is an OAuth scope.
+2. A person **consents** once to a mandate for one agent. An agent acting for
+   its owner presents its workload identity instead.
+3. Doorward issues a **grant**: the mandate intersected with what the agent
+   may ever hold, never more.
+4. The gateway sends every call to the decision core. Each check (grant,
+   subset, tier, budgets) passes or fails with a reason, and the decision is
+   appended to the journal.
+5. Allowed calls go upstream with a credential the agent never holds. A
+   critical call is answered "approval required"; once a person approves
+   that exact call, the agent's retry runs once.
+
+The seven documents (Manifest, Agent, Mandate, Consent, Grant, Decision,
+Approval) are described in [docs/concepts.md](docs/concepts.md).
+
+## Quick start
+
+Needs Go 1.25 and PostgreSQL 16. All of it runs on one machine with the
+[examples](examples/v0): Alice lets Acme's `invoice-assistant` read and pay
+her invoices, up to 5,000 EUR per payment.
+
+```sh
+git clone https://github.com/vladmsnk/doorward && cd doorward
+make build
+docker run -d --name doorward-db -p 5432:5432 -e POSTGRES_HOST_AUTH_METHOD=trust postgres:16
+
+export DOORWARD_DB='postgres://postgres@localhost:5432/postgres?sslmode=disable'
+export DOORWARD_ADMIN_TOKEN=$(openssl rand -hex 16)
+export DOORWARD_MASTER_KEY=$(bin/doorward master-key)   # seals keys and secrets: keep it
+export PEP_TOKEN=$(openssl rand -hex 16)                 # the gateway's own token
+bin/doorward serve --pep gateway-1=$PEP_TOKEN --journal journal.jsonl > doorward.log 2>&1 &
+```
+
+Load the example configuration through the Admin API (it listens on
+`127.0.0.1:8081` only):
+
+```sh
+H="Authorization: Bearer $DOORWARD_ADMIN_TOKEN"; A=localhost:8081/admin/v0
+put() { curl -sS -o /dev/null -w "%{http_code} $2\n" -X PUT -H "$H" \
+  -H "Content-Type: application/yaml" --data-binary @examples/v0/config/$1.yaml "$A/$2"; }
+curl -sS -X PUT -H "$H" -d '{"value":"demo-key"}' "$A/secrets/ledger-mcp-api-key"
+put manifest-payments-api     manifests/payments-api
+put manifest-ledger-mcp       manifests/ledger-mcp
+put mandate-invoices          mandates/invoices
+put mandate-invoices-readonly mandates/invoices-readonly
+put mandate-reconcile         mandates/reconcile
+put agent-invoice-assistant   agents/invoice-assistant
+put agent-reconciler          agents/reconciler
+put agent-desk-helper         agents/desk-helper-7f3a
+```
+
+Mint Alice's grant (the token service will do this after the OAuth flow),
+then ask about three calls as a gateway would:
+
+```sh
+bin/doorward grant mint --consent examples/v0/consent/alice-invoice-assistant.json \
+  examples/v0/grant/pay-invoice.json > grant.jwt
+
+call() { curl -sS localhost:8080/access/v1/evaluation -H "Authorization: Bearer $PEP_TOKEN" -d '{
+  "subject":  {"type": "agent", "id": "invoice-assistant"},
+  "action":   {"name": "'"$1"'"},
+  "resource": {"type": "tool_call", "id": "https://payments.example.internal",
+               "properties": {"arguments": '"$2"'}},
+  "context":  {"token": "'"$(cat grant.jwt)"'"}}'; echo; }
+
+call get_invoice '{"invoice_id": "inv_7Q2M9X4K"}'
+call pay_invoice '{"invoice_id": "inv_7Q2M9X4K", "amount": 7500, "currency": "EUR"}'
+call pay_invoice '{"invoice_id": "inv_7Q2M9X4K", "amount": 1200, "currency": "EUR"}'
+bin/doorward journal verify journal.jsonl
+```
+
+```
+{"decision":true,"context":{"outcome":"allow","limits":[{"name":"calls","consumed":1,"remaining":49}],…}}
+{"decision":false,"context":{"outcome":"deny","reasons":[{"code":"constraint_violated","message":"7500 is above the grant's max of 5000","field":"/amount"}],…}}
+{"decision":false,"context":{"outcome":"approval_required","approval":{"request":"apr_…"},…}}
+3 records valid, chain intact from seq 0 to 2, head hash sha-256:…
+```
+
+The read is allowed and counted against the budget, the 7,500 EUR payment
+is refused with its reason, and the 1,200 EUR payment opens an approval
+request for that exact call.
+[`scripts/verify-journal.py`](scripts/verify-journal.py) checks the same
+journal with Python's standard library alone.
+
+## What Doorward does not do
 
 Doorward decides only on calls that pass through it, to tools a company has
 described to it. It cannot see or stop:
 
-- **Calls that never reach it**: an agent acting on the machine it runs on
-  (a shell, local files, credentials stored there), or calling an API
-  directly with a credential it already holds.
-- **What the model decides**: prompt injection, a poisoned tool
-  description, a goal hijacked mid-task. Doorward does not prevent an agent
-  from being manipulated; it bounds what a manipulated agent can do: which
-  operations, with which arguments, within which budgets, and which calls a
-  person approves first.
-- **What a tool does with an allowed call**: a compromised server behind
-  the gateway can misuse what it is allowed to receive. A constraint that
-  pins an argument, such as an email's recipient, narrows that; nothing
-  removes it.
+- **Calls that never reach it**: an agent acting on its own machine (a
+  shell, local files, stored credentials), or calling an API directly with a
+  credential it already holds.
+- **What the model decides**: prompt injection, a poisoned tool description,
+  a hijacked goal. Doorward does not stop an agent from being manipulated; it
+  bounds what a manipulated agent can do.
+- **What a tool does with an allowed call**: a compromised server can misuse
+  what it receives. A constraint that pins an argument, such as an email's
+  recipient, narrows that; nothing removes it.
 
-## Quick start
+It is also not a full MCP gateway (no federation, API-to-MCP conversion or
+tool search), not an identity provider (people sign in through your existing
+OIDC provider), and not a general policy language.
 
-```sh
-make ci                                  # what CI runs: tidy, fmt, vet, lint, tests, examples
-make build
-bin/doorward validate examples/v0/config/*.yaml
-bin/doorward validate --kind grant examples/v0/grant/*.json
-bin/doorward validate --kind approval examples/v0/approval/*.json
-```
+## Standards
 
-Configuration documents name their kind. Messages and records need `--kind`:
-`consent`, `grant`, `decision` or `approval`.
-
-Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
-PostgreSQL 16: `make test-db` starts a throwaway one and prints the
-`DOORWARD_TEST_POSTGRES_DSN` to export; without that variable they skip.
-
-## Admin API
-
-Configuration enters the box through the Admin API, and only there. Every
-write is validated against the contract, then against the whole
-configuration as it would be after the write (a mandate's operations exist,
-a mandate lies within every agent that may hold it, no identity is claimed
-twice), under one lock so concurrent changes are checked one after the
-other, and stored as a new version. Nothing is overwritten; `…/versions`
-shows who changed what and when.
-
-The Admin API listens on `127.0.0.1:8081` by default, because one token
-authorizes every change. Expose it with `--admin-addr` only behind
-something that restricts who can reach it.
-
-```sh
-export DOORWARD_DB=postgres://… DOORWARD_ADMIN_TOKEN=$(openssl rand -hex 16)
-export DOORWARD_MASTER_KEY=$(doorward master-key)   # keep it: it seals the signing keys and secrets
-doorward serve                                      # public listener on :8080, Admin API on 127.0.0.1:8081
-
-H="Authorization: Bearer $DOORWARD_ADMIN_TOKEN"
-curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" \
-  --data-binary @examples/v0/config/manifest-payments-api.yaml \
-  localhost:8081/admin/v0/manifests/payments-api
-curl -sS -H "$H" localhost:8081/admin/v0/mandates/invoices/versions
-curl -sS -X POST -H "$H" -d '{"owner":{"team":"support-tools"}}' \
-  localhost:8081/admin/v0/agents/desk-helper-7f3a/verify
-```
-
-| Route | Does |
-|---|---|
-| `PUT /admin/v0/{manifests\|agents\|mandates}/{name}` | validate and store the next version (YAML or JSON body) |
-| `GET …/{name}`, `GET …` | the current version; all current documents of a kind |
-| `GET …/{name}/versions`, `…/versions/{n}` | the history; one version |
-| `POST …/{name}/disable`, `/enable` | manifests and mandates; a manifest that enabled mandates name cannot be disabled |
-| `POST /admin/v0/agents/{name}/verify`, `/suspend` | an agent's status; suspending revokes its live grants |
-| `PUT /admin/v0/secrets/{name}` `{"value": …}`, `GET …`, `DELETE …/{name}` | upstream credentials a manifest's `secret_ref` names; values are never returned, and a secret an enabled manifest uses cannot be deleted |
-| `GET /admin/v0/keys`, `POST …/rotate`, `POST …/{kid}/retire` | the box's signing keys; a rotated-out key stays published until retired |
-
-Authentication is a bootstrap bearer token for now (`DOORWARD_ADMIN_TOKEN`);
-administrators from the identity provider come with the consent work.
-
-## Keys and secrets
-
-On first start the box creates an ES256 signing key, and publishes the
-public half at `/.well-known/jwks.json` on the public listener; the `kid`
-is the key's RFC 7638 thumbprint. Rotation makes a new key active and keeps
-the old one published, so grants it signed still verify, until an
-administrator retires it. Private keys and upstream secrets are sealed with
-AES-256-GCM under the operator's master key (`DOORWARD_MASTER_KEY`) before
-they reach the database, each bound to its own slot, so the database never
-holds them in clear and a value cannot be moved from one slot to another.
-
-## Grants
-
-A grant is a JWT access token (RFC 9068): header `{"alg":"ES256","typ":"at+jwt","kid":…}`,
-the claims of [`grant.schema.json`](schema/v0/grant.schema.json), signed
-with the box's active key. Verification ([`internal/grant`](internal/grant))
-accepts exactly that header, finds the key by `kid` in the box's own key
-table (retired keys included, so a grant outlives a rotation), checks the
-signature before reading a single claim, then runs the claims through the
-schema and the grant's rules. It produces the grant's part of a decision
-record, in the record's order, and stops at the first failure:
-
-| Check | Refused with |
-|---|---|
-| `signature` | `grant_missing`, `grant_malformed`, `grant_signature_invalid` |
-| `status` | `grant_revoked`: the box has no record of the grant, revoked it, or it is a used single-use grant; its agent is suspended; its consent is revoked or expired; its mandate is disabled |
-| `pop` | recorded as `skip`: the box issues Bearer grants and does not check proofs of possession yet. A grant that carries `cnf` anyway fails with `pop_missing` |
-| `audience` | `audience_mismatch` |
-| `time` | `grant_expired`, `grant_not_yet_valid` (30 s of clock skew allowed) |
-
-Until the token service exists, grants are minted from the command line.
-`mint` replaces `iat`, `exp` and `jti` and merges the grant to one entry
-per operation. It checks that the agent is registered and not suspended,
-the mandate exists and is enabled, and the grant lies within it. For a
-user it also checks that the consent is recorded, active, unexpired and
-given to this agent for this mandate, and that the grant lies within the
-mandate as the user saw it, named by the consent's `mandate_version`; the
-grant expires no later than the consent. Then it signs and records the
-grant. It needs the database and the master
-key, so it gives its user nothing they could not already do.
-
-```sh
-doorward grant mint --consent examples/v0/consent/alice-invoice-assistant.json \
-  examples/v0/grant/pay-invoice.json > grant.jwt
-doorward grant verify --aud https://payments.example.internal - < grant.jwt
-```
-
-```
-pass  signature  key TDgsZWz9aL3UpCrlz8oKiwWOoLf11IcazmKRe9QPGpI
-pass  status
-skip  pop        proof of possession is not checked yet
-pass  audience
-pass  time
-accepted: grant grt_01M68ZAY9YDFW1ZFC20G1RM7AM, agent invoice-assistant acting for user alice@example.com, mandate invoices, expires in 15m0s
-```
-
-`verify` exits 1 on a refusal; `--json` prints the checks and the reason.
-
-Given a call, `verify` also runs the subset check
-([`internal/core`](internal/core)): the grant must allow the operation at
-the resource, and every bound the grant sets on its arguments must hold.
-Bounds from every entry that names the operation apply together. A bound
-on an argument the call carries is always checked; a missing argument is
-refused only if the manifest declares it, since one entry may bound
-`/amount` for operations that take no amount.
-
-```sh
-doorward grant verify --aud https://payments.example.internal \
-  --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}' - < grant.jwt
-```
-
-```
-...
-fail  subset      /amount
-refused: constraint_violated
-```
-
-| Refused with | When |
-|---|---|
-| `action_not_granted` | no entry names the operation at that resource, or the manifest no longer has it |
-| `field_missing` | a bounded argument the operation declares is absent or null |
-| `constraint_violated` | a value breaks a bound, or is not the type the manifest declares |
-
-Then the sensitivity check: the manifest gives the operation's tier, and
-the grant's record says whether it is standing or single-use.
-
-| Case | Answer |
-|---|---|
-| the tier is above the agent's `max_sensitivity`, as it stands now | deny, `sensitivity_exceeded` |
-| a single-use grant, but not the call it was issued for | deny, `action_not_granted` |
-| `critical` on a standing grant | approval required: the call is held |
-| `read` or `write`, or the single-use grant's own call | pass |
-
-A call is named by its action hash: the digest of
-`{"name", "location", "arguments"}` in canonical JSON (RFC 8785), so the
-same call written with other key order, spacing or number spelling hashes
-the same, and a cent more does not. An approval is bound to that hash, and
-so is the single-use grant issued once it is approved. `grant mint
---single-use` issues one by hand; the grant record keeps the hash, and a
-used single-use grant fails the status check.
-
-```sh
-doorward grant verify --aud https://payments.example.internal \
-  --action pay_invoice --args '{"invoice_id":"inv_7Q2M9X4K","amount":1200,"currency":"EUR"}' - < grant.jwt
-```
-
-```
-...
-pass  subset
-fail  sensitivity critical tier needs a single-use grant
-action hash sha-256:gUi92kB2Ra9Uh-iK8Fg62NSU7pmAFgPjYOOHZ1mlHtg
-approval required: a person approves this exact call, then a single-use grant bound to its hash runs it
-```
-
-`verify` exits 3 when a call needs approval. Spending a single-use grant
-belongs to the evaluation endpoint, together with budgets: it happens only
-for a call that is allowed.
-
-Then the budgets (`limits`). A count budget draws 1 per call, a sum budget
-the value of its argument, which must be present, a number and not
-negative. A per-grant budget belongs to the grant; a daily or monthly one
-to the consent and the calendar day or month in UTC, shared by every grant
-under that consent. Budgets are drawn last, only for a call that passed
-every other check, and all at once with the call's single-use grant: every
-budget has room and the grant is unspent, or nothing changes. Amounts are
-exact decimals, so ten draws of 0.10 fill a budget of 1.00 exactly.
-`--spend` draws them, as allowing the call would:
-
-```sh
-doorward grant verify --aud https://payments.example.internal --action pay_invoice \
-  --args '{"invoice_id":"inv_7Q2M9X4K","amount":1200,"currency":"EUR"}' --spend - < grant.jwt
-```
-
-```
-...
-fail  limits      payout-month
-refused: limit_exceeded: budget payout-month has 1000 left this month; the call needs 1200
-```
-
-## Decision point
-
-`POST /access/v1/evaluation` on the public listener answers one call in the
-AuthZEN 1.0 shape. The point of enforcement (a gateway) authenticates with
-its own token, configured with `--pep ID=TOKEN` (or `DOORWARD_PEPS`), and
-sends the agent's grant in `context.token`:
-
-```sh
-curl -sS -X POST localhost:8080/access/v1/evaluation \
-  -H "Authorization: Bearer $PEP_TOKEN" -H "traceparent: 00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01" \
-  -d '{"subject":{"type":"agent","id":"invoice-assistant"},
-       "action":{"name":"pay_invoice"},
-       "resource":{"type":"tool_call","id":"https://payments.example.internal",
-                   "properties":{"arguments":{"invoice_id":"inv_7Q2M9X4K","amount":7500,"currency":"EUR"}}},
-       "context":{"token":"'"$GRANT"'"}}'
-```
-
-```json
-{"decision":false,"context":{"id":"dec_01M69…","outcome":"deny",
- "reasons":[{"code":"constraint_violated","message":"7500 is above the grant's max of 5000","field":"/amount"}],
- "action_hash":"sha-256:zSm3ob6uLbcAwT_CafGYJI2ndRqedlo64DDnvnGROGQ"}}
-```
-
-`decision` is true only for an allowed call. The ten checks run in the
-record's order and stop at the first failure; the rest are recorded as
-skipped. A held critical call opens an approval request with the mandate's
-route, or reuses the one already open for the same call, and the answer
-names it. An allowed call's budgets and single-use grant are spent in the
-same transaction that appends its record. A request missing its subject,
-action or resource is refused with 400 and leaves no record; anything else
-is decided and recorded, and an internal failure answers 500 with
-`decision` false.
-
-Every record names the user or the owning team, the agent, the grant (its
-ID; never the token), the versions of the mandate and the manifest in
-force, the W3C trace ID, and every check. Records are chained: each one's
-`chain.hash` is the SHA-256 of the record in RFC 8785 canonical JSON
-without `chain.hash`, and covers the previous record's hash.
-
-- `--journal FILE` (or `-` for standard output) writes every record as one
-  JSON line once it is committed; `GET /admin/v0/decisions?from=SEQ`
-  exports them from the Admin API, and `doorward journal export` from the
-  command line.
-- `doorward journal verify FILE` checks every record against the contract
-  and the chain. [`scripts/verify-journal.py`](scripts/verify-journal.py)
-  checks the chain with Python's standard library alone, sharing no code
-  with doorward.
-- With `OTEL_EXPORTER_OTLP_ENDPOINT` set, each evaluation is a span in the
-  caller's trace, carrying the decision's ID, outcome, agent, mandate and
-  reason.
-
-One allowed decision (HTTP, both sets of checks, a budget drawn, the record
-appended) takes about 5.5 ms against a local PostgreSQL, and sixteen
-concurrent callers get about 470 decisions a second; appends to the chain
-are serialized.
-
-## Storage
-
-Everything the box keeps lives in one PostgreSQL database, behind the
-`store.Store` interface in [`internal/store`](internal/store): configuration
-(manifests, agents, mandates), versioned so nothing is ever overwritten and
-a consent can name the exact mandate the user saw; and the records
-(consents, grants, decisions, approvals) plus the budget counters. Decision
-records form a hash chain; `v0.Verify` checks it. Migrations are embedded
-and applied on start.
-
-## The v0 schemas
-
-Seven documents, as JSON Schema (draft 2020-12) in [`schema/v0`](schema/v0)
-with matching Go types in [`api/v0`](api/v0). Three are configuration a
-company writes, in YAML or JSON; the other four are records the box produces
-as agents work.
-
-| Document | Written by | What it is |
+| Standard | Use in Doorward | Status |
 |---|---|---|
-| [Manifest](schema/v0/manifest.schema.json) | company | One resource behind the gateway: where the gateway forwards to and with which credential, the operations it exposes (MCP tools or HTTP routes), the tier of each (`read`, `write`, `critical`), and where their constrainable arguments are |
-| [Agent](schema/v0/agent.schema.json) | company, or the agent itself | One agent: how it presented itself, how it proves who it is, who answers for it, and the most it may ever be granted |
-| [Mandate](schema/v0/mandate.schema.json) | company | What an agent may do for a principal and on what terms: permissions, limits, how long a user's consent stands, who approves critical calls |
-| [Consent](schema/v0/consent.schema.json) | the box | One person allowing one agent one mandate, given on the box's consent page |
-| [Grant](schema/v0/grant.schema.json) | the STS | Claims of the short-lived, key-bound JWT access token (RFC 9068) an agent holds under a mandate |
-| [Decision](schema/v0/decision.schema.json) | the decision core | The record of one decision: who acted, for whom, under which grant and consent, what was asked, every check and its result, and where it was decided and enforced |
-| [Approval](schema/v0/approval.schema.json) | the approval service | The record of one approval request: the exact call, who voted, how each of them signed in |
+| [AuthZEN Authorization API 1.0](https://openid.net/specs/authorization-api-1_0.html) | Evaluation endpoint between gateway and decision core | ✅ evaluation · 📋 batch, discovery, conformance |
+| [RFC 9068](https://www.rfc-editor.org/rfc/rfc9068) JWT access tokens | Grant format (`typ: at+jwt`, ES256) | ✅ |
+| [RFC 9396](https://www.rfc-editor.org/rfc/rfc9396) Rich Authorization Requests | Permissions and constraints in grants (`authorization_details`) | ✅ |
+| [RFC 9493](https://www.rfc-editor.org/rfc/rfc9493) Subject identifiers | Users named with their identity provider (`sub_id`) | ✅ |
+| [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON canonicalization | Action hashes and journal hash chain | ✅ |
+| [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638) JWK thumbprint | Signing key IDs in the JWK Set | ✅ |
+| [W3C Trace Context](https://www.w3.org/TR/trace-context/), OpenTelemetry | Trace ID in every record; a span per decision | ✅ |
+| [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (2026-07-28) | Gateway and authorization server for MCP clients | 🚧 |
+| [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707), [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207), OAuth 2.1, Client ID Metadata Documents | Discovery, audience binding, client registration | 🚧 |
+| [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) token exchange, RFC 7523, ID-JAG | Workload agents and enterprise identity | 📋 |
+| [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) DPoP | Proof of possession, per agent or mandate | 📋 |
 
-### How an agent asks for authority
+## FAQ
 
-A mandate's name is an OAuth scope. The gateway publishes, for each resource,
-the standard protected-resource metadata (RFC 9728) listing the box as its
-authorization server and the mandates it accepts as `scopes_supported`. A
-standard MCP client therefore finds the consent flow on its own: it reads the
-metadata, registers itself if it is new, and sends the user to the box with
-`scope=invoices`. A deployed agent exchanges its workload token for a grant
-with the same scope.
+### How do I add authorization to an MCP server?
 
-### How an agent comes in
+Put Doorward in front of it. Its gateway will publish the protected resource
+metadata MCP clients look for, send users through OAuth and a consent page,
+and check every `tools/call` against the agent's grant. The decision core
+behind it works today; the gateway and authorization server are the next
+step on the [roadmap](docs/ROADMAP.md).
 
-An agent is an OAuth client of the box, as every MCP client already is.
-An administrator registers it, or it introduces itself: by a client
-metadata document at a URL, as MCP clients do, or by dynamic client
-registration, kept for older clients. A self-registered agent is
-**unverified**: it may request only mandates marked `open`, under the small
-ceiling every unverified agent gets, until an administrator reviews it,
-names its owner and marks it **verified**. A **suspended** agent is refused
-everywhere.
+### How is Doorward different from an MCP gateway?
 
-### Two ways an agent acts
+A gateway routes and filters traffic. Doorward decides and records: consent,
+argument limits, budgets, exact-call approval and a verifiable journal. Its
+built-in gateway is deliberately thin, and other gateways can call its
+AuthZEN endpoint instead.
 
-| | For a person (`principal: user`) | For its owner (`principal: service`) |
-|---|---|---|
-| Authority | the person consents once, on the box's consent page at the end of a standard OAuth authorization, for at most `consent.max_duration` | the owner gave the agent the mandate; the agent presents its workload identity |
-| Grant | `sub` is the user, `sub_id` says which identity provider, `consent` names the record it rests on | `sub` is the agent, equal to `client_id` |
-| What the resource sees | the user, as if they had called | the agent |
-| Critical calls | approved by the user, or by a group | approved by a group: there is no user to ask |
+### How is Doorward different from an identity provider such as Keycloak or Auth0?
 
-A grant is the mandate intersected with the agent's own permissions, never
-more. At call time a point of enforcement sends the call to the decision
-core, which checks it against the grant, applies the operation's tier from
-the manifest, and writes a decision record. A critical call opens an
-approval. Budgets can run per grant or, under a consent, per day or month.
+An identity provider authenticates people and issues tokens. Doorward
+federates sign-in to the one you already run and adds what happens per call:
+mandates, argument limits, budgets, approvals and the record of every
+decision.
 
-The examples in [`examples/v0`](examples/v0) tell both stories. Alice
-connects Acme's `invoice-assistant` to her invoices under the `invoices`
-mandate; the core allows a read, denies an overlarge payment and holds a
-1,200 EUR payment until Alice approves it. The `reconciler` runs nightly on
-its Kubernetes service-account token under the `reconcile` mandate, posts
-entries, and two people from finance on-call approve a write-off. A third
-agent, `desk-helper-7f3a`, registered itself and is still unverified: it can
-ask users only for the open, read-only mandate.
+### How is Doorward different from OPA, Cerbos or OpenFGA?
 
-### Conventions
+Those are general policy engines. Doorward is specific to agents acting for
+people: consent to a mandate, grants derived from it, budgets on argument
+values, and approval bound to one exact call. A general engine can be added
+later as a second policy stage over AuthZEN.
 
-- **Permissions** are RFC 9396 `authorization_details`: `locations`
-  (audiences), `actions` (operation names, never wildcards) and
-  `constraints`.
-- **Constraints** are keyed by the argument's JSON Pointer and use a closed
-  set of types, each of which can be compared with a narrower one. That is
-  what keeps "request ⊆ grant" decidable:
+### Does Doorward stop prompt injection?
 
-  | Type | Meaning |
-  |---|---|
-  | `max`, `min` | numeric bounds, inclusive |
-  | `one_of` | the value is one of a list |
-  | `equals` | the value is exactly this |
-  | `prefix` | a string starts with this |
+No. It limits what a manipulated agent can do: which operations, with which
+arguments, within which budgets, and which calls a person approves first.
 
-  All bounds on a field must hold. A constrained field missing from the call
-  fails the check.
-- **Strict parsing.** Unknown fields are rejected. So are duplicate keys, in
-  JSON and in YAML: two parsers reading one document differently is how a
-  forged field gets past a check.
-- **OAuth and OIDC shapes.** The grant is an RFC 9068 JWT access token
-  (`typ: at+jwt`, with `client_id`), so ordinary resource servers can check
-  it. Users are named with their identity provider (`sub_id`, RFC 9493),
-  since an OIDC `sub` is unique only per issuer. A grant is a Bearer token
-by default, as MCP clients send it; proof of possession (DPoP) will be
-required per agent or mandate, and a grant carries `cnf` only where the box
-checks the proof.
-  Agents authenticate with the box's own registration or with any JWT that
-  has an issuer and a subject: an IdP client, a Kubernetes service account,
-  a workload identity.
-- **Records have one serialization.** Times in records are UTC with exactly
-  millisecond precision, since records are hash-chained.
-- **The schemas are the contract.** The Go types mirror them, and
-  [`schema/drift_test.go`](schema/drift_test.go) fails the build when the two
-  disagree on a field, on whether it is required, or on an enum's members.
+### Which AI clients will it work with?
 
-### Using the schemas from Go
+Any MCP client that follows the MCP authorization specification (Claude,
+ChatGPT, VS Code, Cursor, Claude Code), once the gateway and authorization
+server land. Agents you deploy yourself will authenticate with workload
+tokens, such as Kubernetes service-account tokens.
 
-```go
-v, err := schema.NewValidator()
-if err != nil { ... }
-grant, err := schema.Decode[v0.Grant](v, claimsJSON) // duplicate keys, schema, strict decode, rules
-```
+### Is Doorward production-ready?
 
-### Rules beyond the schemas
+No. There is no tagged release yet, and the v0 contract may still change.
 
-JSON Schema checks each document's shape. Each Go type's `Check` adds the
-rules that span its own fields, and `Decode` and the CLI run them: `aud`
-equals the grant's locations, a grant for a user has `sub_id` and a
-`consent` and a grant for the agent itself has neither, times come in
-order, an allowed decision has no failed check, a manifest's path parameters
-match its routes, an approval's voters are distinct and match its route, and
-`min ≤ max` everywhere.
+### How fast is a decision?
 
-Rules that need a second document run in the Admin API, over the whole
-configuration: a mandate lying within every agent that may hold it,
-operations existing in a manifest, an agent requesting only mandates it
-may, an identity claimed once.
+About 5.5 ms for one allowed decision (HTTP, all checks, a budget drawn, the
+record appended) against a local PostgreSQL, and about 470 decisions a
+second from sixteen concurrent callers. Appends to the journal are
+serialized.
 
-In the examples, action hashes and the consent's `mandate_version` are real
-digests, kept so by tests. Other IDs, chain hashes and policy versions have
-the right format but are placeholders.
+## Documentation
 
-### Decisions for the first implementation
-
-- **Approve, then retry.** A critical call is answered at once: pending,
-  with a link to the approval. Once a person approves that exact call, the
-  client's retry of it, matched by its action hash, runs exactly once under
-  a single-use grant the box keeps. The gateway never holds a call open for
-  the length of an approval and never runs a stored call on its own.
-- **Bearer grants by default**, short-lived and checked for audience and
-  status on every call; proof of possession is a per-agent or per-mandate
-  requirement, enforced end to end where it is required.
-- **One entry per operation** in a grant, so a reader that checks each
-  `authorization_details` entry on its own reaches the same answer as the
-  box.
-- **Checks the first version does not run are recorded as `skip`**: `pop`
-  and `policy` (the mandate is the policy). `status` reads the box's own
-  records; a published status list comes later.
-- **Upstream credentials** come from the box's sealed secret store, named
-  by `secret_ref`, and the client's token is never passed on.
-
-### Later
-
-v0 covers agents that act for a person who consented and agents that act
-for their owner, and nothing else. Each of these is a known extension, and
-each adds fields or documents without changing what is here:
-
-| Extension | What it adds |
-|---|---|
-| Delegation between agents | optional `parent` and `depth` on a grant (a grant without them is a root), a nested `act.act`, `delegation` blocks on agents and mandates, and an `Offer` record |
-| Tasks started by an application | an `Application` document and a `TaskRequest` message (RFC 8693), for an app that starts a scoped task for its user without a consent page |
-| A user narrowing a mandate | parameters on `Consent` the user chooses on the consent page, such as payees or a lower cap |
-| Per-call data scoping | constraints tied to an object the task is about (`task_object`) |
-| mTLS-bound grants | `cnf.x5t#S256` beside `jkt` |
-| X.509 SPIFFE identities | a `spiffe` identity type on agents |
-| Allow-and-notify | `obligations` on an allowed decision |
-| Scopes for plain resource servers | `scope` on the grant, derived from the actions |
-
-## Layout
-
-```
-cmd/doorward/      the CLI: validate, serve, grant mint|verify, master-key, version
-api/v0/            Go types of the v0 documents
-internal/store/    the Store interface; postgres/ implements it, with migrations
-internal/admin/    the Admin API and the rules across documents
-internal/policy/   comparing permissions: tiers, constraints, "within"
-internal/keys/     signing keys: create, rotate, retire, JWK Set
-internal/sealer/   AES-256-GCM sealing under the master key
-internal/grant/    signing grants and verifying them (B1)
-internal/core/     the decision core: subset, sensitivity and budget checks
-internal/pdp/      the AuthZEN evaluation endpoint and the journal
-internal/telemetry/ OpenTelemetry tracing, when an endpoint is configured
-internal/ids/      record IDs: prefix_ULID
-schema/            the embedded schemas, the validator, strict YAML/JSON reading
-schema/v0/         the JSON Schemas
-examples/v0/       valid examples of every document
-scripts/           check-dco.sh
-```
-
-## Releases
-
-Pushing a `v*` tag builds Linux and macOS binaries with GoReleaser and signs
-the checksum file with cosign's keyless flow. The signing certificate binds
-the signature to this repository's release workflow. A tag with a suffix,
-such as `v0.0.1-test.1`, makes a prerelease.
-
-To verify a download:
-
-```sh
-cosign verify-blob checksums.txt \
-  --bundle checksums.txt.sigstore.json \
-  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity-regexp '^https://github.com/vladmsnk/doorward/\.github/workflows/release\.yml@refs/tags/v'
-sha256sum --check --ignore-missing checksums.txt
-```
+- [Concepts](docs/concepts.md): the seven documents, how an agent gets authority, conventions
+- [Grants and the decision point](docs/decision-point.md): checks, refusal codes, the evaluation API, the journal
+- [Operating Doorward](docs/operations.md): Admin API, keys and secrets, storage, verifying a release
+- [Roadmap](docs/ROADMAP.md): what is built next, in order, and why
+- [Examples](examples/v0): every document, telling both stories (a user's assistant and a nightly service agent)
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Every commit is signed off under the
 [Developer Certificate of Origin](DCO).
+
+Development is AI-assisted: much of the code is written with Claude Code.
+Every commit is authored and signed off by a human maintainer, who answers
+for it (see [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-development)).
 
 ## License
 

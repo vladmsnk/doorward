@@ -31,6 +31,17 @@ assistance is disclosed, not hidden:
   contributor. This section and the README are where the assistance is
   stated.
 
+## Development setup
+
+Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
+PostgreSQL 16: `make test-db` starts a throwaway one and prints the
+`DOORWARD_TEST_POSTGRES_DSN` to export; without that variable they skip.
+
+```sh
+make ci      # tidy, fmt, vet, lint, tests, examples
+make build   # bin/doorward
+```
+
 ## Before you push
 
 ```sh
@@ -59,3 +70,24 @@ document the previous release accepted: it may add an optional field or an
 enum member. Removing a field, making one required, or narrowing a pattern
 or an enum is a new version. Until that release, v0 is a draft and may still
 change in any way.
+
+## Repository layout
+
+```
+cmd/doorward/      the CLI: validate, serve, grant mint|verify, journal export|verify, master-key, version
+api/v0/            Go types of the v0 documents
+internal/store/    the Store interface; postgres/ implements it, with migrations
+internal/admin/    the Admin API and the rules across documents
+internal/policy/   comparing permissions: tiers, constraints, "within"
+internal/keys/     signing keys: create, rotate, retire, JWK Set
+internal/sealer/   AES-256-GCM sealing under the master key
+internal/grant/    signing grants and verifying them (B1)
+internal/core/     the decision core: subset, sensitivity and budget checks
+internal/pdp/      the AuthZEN evaluation endpoint and the journal
+internal/telemetry/ OpenTelemetry tracing, when an endpoint is configured
+internal/ids/      record IDs: prefix_ULID
+schema/            the embedded schemas, the validator, strict YAML/JSON reading
+schema/v0/         the JSON Schemas
+examples/v0/       valid examples of every document
+scripts/           check-dco.sh, verify-journal.py (an independent journal verifier), hooks/
+```
