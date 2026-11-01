@@ -7,20 +7,18 @@ package pdp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"maps"
 	"net/url"
-	"sync"
 	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/core"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/ids"
@@ -38,24 +36,38 @@ const (
 // ResourceType is the AuthZEN resource type of a tool call.
 const ResourceType = "tool_call"
 
-// PDP decides calls. Store and Verifier are required.
+// PDP decides calls. Store, Verifier and Config are required.
 type PDP struct {
 	Store    store.Store
 	Verifier *grant.Verifier
+	// Config is the decision point's copy of the configuration, reloaded
+	// when it changes.
+	Config *config.Cache
 	// ID and Version name this decision point in every record.
 	ID      string
 	Version string
-	// Journal, when set, receives each record as one JSON line once it is
-	// committed.
-	Journal io.Writer
+	// Journal, when set, is told about every committed record; the journal
+	// follower copies records out in order.
+	Journal interface{ Notify() }
 	Log     *slog.Logger
 	// Tracer, when set, records one span per evaluation.
 	Tracer trace.Tracer
+	// Timeout bounds one decision, the wait for the journal lock included;
+	// it defaults to DefaultTimeout. A decision that runs out of time is
+	// rolled back: nothing drawn, nothing recorded, and the caller refuses
+	// the call. It must stay under the HTTP write timeout, so that every
+	// answer reaches the point of enforcement.
+	Timeout time.Duration
 	// Now defaults to time.Now.
 	Now func() time.Time
-
-	journalMu sync.Mutex
 }
+
+// DefaultTimeout is how long a decision may take.
+const DefaultTimeout = 5 * time.Second
+
+// ErrTimeout is returned when a decision ran out of time before it was
+// recorded. Nothing was drawn or written.
+var ErrTimeout = errors.New("the decision ran out of time")
 
 // order is the record's order of checks.
 var order = []v0.CheckName{
@@ -68,6 +80,16 @@ var order = []v0.CheckName{
 // error means the decision could not be made or recorded; the caller then
 // refuses the call.
 func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP, traceID string) (v0.Decision, error) {
+	ctx, cancel := context.WithTimeout(ctx, p.timeout())
+	defer cancel()
+	d, err := p.evaluate(ctx, req, pep, traceID)
+	if errors.Is(err, store.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+		return d, fmt.Errorf("%w: %w", ErrTimeout, err)
+	}
+	return d, err
+}
+
+func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP, traceID string) (v0.Decision, error) {
 	now := p.now()
 	token, _ := req.Context[TokenKey].(string)
 	d := v0.Decision{
@@ -113,17 +135,23 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 	}
 	d.ActionHash = hash
 
-	// The configuration in force: the resource's manifest, the mandate.
-	man, manDigest, err := p.manifest(ctx, call.Resource)
+	// The configuration in force: the resource's manifest, the mandate. A
+	// location no manifest declares gives the zero manifest, which declares
+	// no operation, so the subset check refuses the call.
+	snap, err := p.Config.Current(ctx)
 	if err != nil {
 		return d, err
 	}
-	mandate, mandateDigest, err := p.mandate(ctx, g.Mandate)
+	man, _, err := snap.ManifestFor(call.Resource)
 	if err != nil {
 		return d, err
 	}
-	d.Versions = &v0.Versions{Mandate: mandateDigest, Manifest: manDigest}
-	op := core.Operation(man, call.Action)
+	mandate, err := snap.Mandate(g.Mandate)
+	if err != nil {
+		return d, fmt.Errorf("mandate %s: %w", g.Mandate, err)
+	}
+	d.Versions = &v0.Versions{Mandate: mandate.Digest, Manifest: man.Digest}
+	op := core.Operation(man.Manifest, call.Action)
 
 	// Observe mode: the mandate's own rules (subset, limits) are recorded
 	// but do not stop the call. Everything else is still enforced.
@@ -159,7 +187,7 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 			deny(&d, v0.Check{Name: v0.CheckSensitivity, Result: v0.CheckFail, Detail: msg}, v0.Reason{Code: v0.ReasonSensitivityExceeded, Message: msg})
 			return p.record(ctx, d, nil, nil)
 		}
-		a, err := p.approval(ctx, g, mandate, mandateDigest, call, hash, now)
+		a, err := p.approval(ctx, g, mandate.Mandate, mandate.Digest, call, hash, now)
 		if err != nil {
 			return d, err
 		}
@@ -237,7 +265,9 @@ func (p *PDP) record(ctx context.Context, d v0.Decision, a *store.Allowance, set
 	if err != nil {
 		return d, err
 	}
-	p.export(out)
+	if p.Journal != nil {
+		p.Journal.Notify()
+	}
 	return out, nil
 }
 
@@ -298,41 +328,6 @@ func withoutToken(req v0.EvaluationRequest) v0.EvaluationRequest {
 	return out
 }
 
-// manifest returns the enabled manifest whose audience is location, and its
-// version digest. A location no manifest declares gives the zero manifest,
-// which declares no operation, so the subset check refuses the call.
-func (p *PDP) manifest(ctx context.Context, location string) (v0.Manifest, string, error) {
-	docs, err := p.Store.Documents().List(ctx, v0.KindManifest)
-	if err != nil {
-		return v0.Manifest{}, "", err
-	}
-	for _, doc := range docs {
-		if doc.Disabled {
-			continue
-		}
-		var m v0.Manifest
-		if err := json.Unmarshal(doc.Doc, &m); err != nil {
-			return v0.Manifest{}, "", fmt.Errorf("manifest %s: %w", doc.Name, err)
-		}
-		if m.Spec.Audience == location {
-			return m, doc.Digest, nil
-		}
-	}
-	return v0.Manifest{}, "", nil
-}
-
-func (p *PDP) mandate(ctx context.Context, name string) (v0.Mandate, string, error) {
-	doc, err := p.Store.Documents().Current(ctx, v0.KindMandate, name)
-	if err != nil {
-		return v0.Mandate{}, "", fmt.Errorf("mandate %s: %w", name, err)
-	}
-	var m v0.Mandate
-	if err := json.Unmarshal(doc.Doc, &m); err != nil {
-		return v0.Mandate{}, "", fmt.Errorf("mandate %s: %w", name, err)
-	}
-	return m, doc.Digest, nil
-}
-
 // approval returns the open approval request for this exact call, opening
 // one if there is none. A request opened under another version of the
 // mandate, or older than the mandate lets requests live, is closed as
@@ -375,23 +370,20 @@ func (p *PDP) approval(ctx context.Context, g v0.Grant, m v0.Mandate, mandateDig
 	if err := a.Check(); err != nil {
 		return v0.Approval{}, fmt.Errorf("approval request: %w", err)
 	}
-	return a, p.Store.Approvals().Create(ctx, a)
+	err = p.Store.Approvals().Create(ctx, a)
+	if errors.Is(err, store.ErrConflict) {
+		// Another decision opened the request for this call first; the
+		// store allows one open request per call. Use theirs.
+		return p.Store.Approvals().PendingFor(ctx, g.Actor.Subject, g.Mandate, g.Consent, hash)
+	}
+	return a, err
 }
 
-func (p *PDP) export(d v0.Decision) {
-	if p.Journal == nil {
-		return
+func (p *PDP) timeout() time.Duration {
+	if p.Timeout > 0 {
+		return p.Timeout
 	}
-	line, err := json.Marshal(d)
-	if err != nil {
-		p.log().Error("exporting a decision", "decision", d.ID, "err", err)
-		return
-	}
-	p.journalMu.Lock()
-	defer p.journalMu.Unlock()
-	if _, err := p.Journal.Write(append(line, '\n')); err != nil {
-		p.log().Error("exporting a decision", "decision", d.ID, "err", err)
-	}
+	return DefaultTimeout
 }
 
 func (p *PDP) now() time.Time {

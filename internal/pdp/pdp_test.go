@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,7 +20,9 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/sealer"
@@ -39,12 +43,23 @@ const (
 var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 
 type box struct {
-	t       testing.TB
-	st      *postgres.Store
-	v       *schema.Validator
-	signer  *keys.Signer
-	srv     *httptest.Server
-	journal *syncBuffer
+	t        testing.TB
+	st       *postgres.Store
+	v        *schema.Validator
+	signer   *keys.Signer
+	srv      *httptest.Server
+	journal  *syncBuffer
+	follower *journal.Follower
+	pdp      *pdp.PDP
+}
+
+// exported drains the journal follower and returns the file so far.
+func (b *box) exported() string {
+	b.t.Helper()
+	if err := b.follower.Drain(context.Background()); err != nil {
+		b.t.Fatal(err)
+	}
+	return b.journal.String()
 }
 
 type syncBuffer struct {
@@ -114,15 +129,22 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	}
 	clock := func() time.Time { return now }
 	b := &box{t: t, st: st, v: v, signer: signer, journal: &syncBuffer{}}
+	b.follower = journal.New(st.Decisions(), b.journal, 0, 10*time.Millisecond, nil)
+	fctx, fcancel := context.WithCancel(ctx)
+	go b.follower.Run(fctx)
+	t.Cleanup(fcancel)
+	cfg := &config.Cache{Store: st, Validator: v}
 	p := &pdp.PDP{
 		Store:    st,
-		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Now: clock}, Validator: v, Now: clock},
+		Config:   cfg,
+		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg), Now: clock}, Validator: v, Now: clock},
 		ID:       "doorward-test", Version: "test",
-		Journal: b.journal, Now: clock,
+		Journal: b.follower, Now: clock,
 	}
 	for _, o := range opts {
 		o(p)
 	}
+	b.pdp = p
 	b.srv = httptest.NewServer(p.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-1", Kind: v0.PEPGateway}}}))
 	t.Cleanup(b.srv.Close)
 	return b
@@ -355,7 +377,7 @@ func TestEvaluate(t *testing.T) {
 		t.Errorf("stored chain broken at %d: %v", broken, err)
 	}
 	var exported []v0.Decision
-	for _, line := range strings.Split(strings.TrimSpace(b.journal.String()), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(b.exported()), "\n") {
 		var d v0.Decision
 		if err := json.Unmarshal([]byte(line), &d); err != nil {
 			t.Fatal(err)
@@ -378,15 +400,16 @@ func TestEvaluate(t *testing.T) {
 		return
 	}
 	journal := filepath.Join(t.TempDir(), "journal.jsonl")
-	if err := os.WriteFile(journal, []byte(b.journal.String()), 0o600); err != nil {
+	file := b.exported()
+	if err := os.WriteFile(journal, []byte(file), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	out, err := exec.Command(python, "../../scripts/verify-journal.py", journal).CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "chain intact") {
 		t.Fatalf("independent verifier: %v\n%s", err, out)
 	}
-	tampered := strings.Replace(b.journal.String(), `"remaining":3800`, `"remaining":9800`, 1)
-	if tampered == b.journal.String() {
+	tampered := strings.Replace(file, `"remaining":3800`, `"remaining":9800`, 1)
+	if tampered == file {
 		t.Fatal("nothing to tamper with")
 	}
 	if err := os.WriteFile(journal, []byte(tampered), 0o600); err != nil {
@@ -610,5 +633,211 @@ func TestObserveMode(t *testing.T) {
 	}
 	if broken, err := v0.Verify(all); broken != -1 || err != nil {
 		t.Errorf("chain broken at %d: %v", broken, err)
+	}
+}
+
+// Q1: while the journal is held, decisions are refused within the deadline
+// with 503, and nothing is drawn or recorded. Once it is free, they flow.
+func TestDecisionDeadline(t *testing.T) {
+	b := newBox(t, func(p *pdp.PDP) { p.Timeout = 300 * time.Millisecond })
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_deadline_000001", nil)
+	conn, err := b.st.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil)
+	took := time.Since(start)
+	if a.status != 503 || a.resp.Decision || !strings.Contains(a.resp.Context.Error, "ran out of time") {
+		t.Fatalf("held journal: %d %s", a.status, a.raw)
+	}
+	if took > 2*time.Second {
+		t.Errorf("answer took %s on a 300ms deadline", took)
+	}
+	_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+	conn.Release()
+	if v, _ := b.st.Counters().Consumed(ctx, "grant:grt_alice_deadline_000001:calls"); v != "0" {
+		t.Errorf("the refused call drew %s", v)
+	}
+	if _, err := b.st.Decisions().Head(ctx); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the refused call was recorded: %v", err)
+	}
+	if a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil); !a.resp.Decision {
+		t.Errorf("after release: %s", a.raw)
+	}
+}
+
+// Q2: the journal file is a complete, ordered copy of the chain. It
+// contains records another instance committed, and a follower started on
+// an existing file continues where it ended.
+func TestJournalFollowsEveryInstance(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_follow_000000001", nil)
+	read := map[string]any{"invoice_id": "i"}
+	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
+
+	// A second instance on the same store, with no follower of its own.
+	other := &pdp.PDP{Store: b.st, Config: b.pdp.Config, Verifier: b.pdp.Verifier, ID: "doorward-other", Version: "test", Now: b.pdp.Now}
+	srv := httptest.NewServer(other.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-2", Kind: v0.PEPGateway}}}))
+	defer srv.Close()
+	for i := 0; i < 3; i++ {
+		body, _ := json.Marshal(map[string]any{
+			"subject": map[string]any{"type": "agent", "id": "invoice-assistant"}, "action": map[string]any{"name": "get_invoice"},
+			"resource": map[string]any{"type": "tool_call", "id": payments, "properties": map[string]any{"arguments": read}},
+			"context":  map[string]any{"token": alice}})
+		r, _ := http.NewRequest(http.MethodPost, srv.URL+pdp.EvaluationPath, bytes.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+pepToken)
+		res, err := http.DefaultClient.Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = res.Body.Close()
+	}
+	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
+
+	lines := strings.Split(strings.TrimSpace(b.exported()), "\n")
+	if len(lines) != 5 {
+		t.Fatalf("the file has %d records, the chain 5", len(lines))
+	}
+	var seqs []uint64
+	peps := map[string]int{}
+	for _, l := range lines {
+		var d v0.Decision
+		if err := json.Unmarshal([]byte(l), &d); err != nil {
+			t.Fatal(err)
+		}
+		seqs = append(seqs, d.Chain.Seq)
+		peps[d.PEP.ID]++
+	}
+	if fmt.Sprint(seqs) != "[0 1 2 3 4]" || peps["gateway-2"] != 3 {
+		t.Errorf("seqs %v, by gateway %v", seqs, peps)
+	}
+
+	// Resume: a new follower over the same file writes only what follows.
+	path := filepath.Join(t.TempDir(), "journal.jsonl")
+	if err := os.WriteFile(path, []byte(strings.Join(lines[:3], "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_APPEND, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	from, err := journal.Resume(f)
+	if err != nil || from != 3 {
+		t.Fatalf("Resume: %d %v", from, err)
+	}
+	resumed := journal.New(b.st.Decisions(), f, from, time.Hour, nil)
+	if err := resumed.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if got := strings.Split(strings.TrimSpace(string(data)), "\n"); len(got) != 5 || got[4] != lines[4] {
+		t.Errorf("resumed file has %d lines; last matches: %v", len(got), len(got) == 5 && got[4] == lines[4])
+	}
+	// An empty file starts from 0; a file with junk is refused.
+	empty, _ := os.CreateTemp(t.TempDir(), "e")
+	if from, err := journal.Resume(empty); err != nil || from != 0 {
+		t.Errorf("empty: %d %v", from, err)
+	}
+	junk, _ := os.CreateTemp(t.TempDir(), "j")
+	_, _ = junk.WriteString("not json\n")
+	if _, err := journal.Resume(junk); err == nil {
+		t.Error("junk accepted")
+	}
+}
+
+// Q3: fifty first attempts of one held call, at once, open one approval
+// request, and every answer names it.
+func TestOneApprovalPerCallUnderContention(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_contend_00000001", nil)
+	args := map[string]any{"invoice_id": "inv_contended", "amount": 1500.0, "currency": "EUR"}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	requests := map[string]int{}
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a := b.ask(alice, pepToken, payments, "pay_invoice", args, nil)
+			mu.Lock()
+			defer mu.Unlock()
+			if a.resp.Context.Outcome != v0.OutcomeApprovalRequired || a.resp.Context.Approval == nil {
+				requests["not held: "+a.raw]++
+				return
+			}
+			requests[a.resp.Context.Approval.Request]++
+		}()
+	}
+	wg.Wait()
+	if len(requests) != 1 {
+		t.Errorf("answers name %d different requests: %v", len(requests), requests)
+	}
+	pending, err := b.st.Approvals().Pending(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Errorf("%d pending requests, want 1 (%v)", len(pending), err)
+	}
+}
+
+// Q5: configuration is read once per change. A document this version
+// cannot read fails closed for the calls that depend on it, and no other.
+func TestConfigurationSnapshot(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_snapshot_000001", nil)
+	rec := b.mint("grant/reconcile.json", "grt_reconciler_snapshot_01", nil)
+	read := map[string]any{"invoice_id": "i"}
+
+	v1, _ := b.st.ConfigVersion(ctx)
+	snap, err := b.pdp.Config.Current(ctx)
+	if err != nil || snap.Version != v1 {
+		t.Fatalf("snapshot %v %v, version %d", snap, err, v1)
+	}
+	if again, _ := b.pdp.Config.Current(ctx); again != snap {
+		t.Error("the snapshot was reloaded although nothing changed")
+	}
+	// A change bumps the version and takes effect on the next call.
+	b.putDoc(v0.KindMandate, "invoices", func(spec map[string]any) { spec["enforcement"] = "observe" })
+	if v2, _ := b.st.ConfigVersion(ctx); v2 != v1+1 {
+		t.Errorf("version %d after one write, want %d", v2, v1+1)
+	}
+	if a := b.ask(alice, pepToken, payments, "refund_payment", map[string]any{"payment_id": "p", "amount": 1.0}, nil); !a.resp.Decision {
+		t.Errorf("the change did not take effect: %s", a.raw)
+	}
+	if again, _ := b.pdp.Config.Current(ctx); again == snap {
+		t.Error("the snapshot was not reloaded after a change")
+	}
+
+	// A mandate from a newer doorward, with a field this version does not
+	// know, written straight to the store: calls under it are refused, the
+	// reconciler's are not.
+	cur, _ := b.st.Documents().Current(ctx, v0.KindMandate, "invoices")
+	newer := strings.Replace(string(cur.Doc), `"principal":"user"`, `"principal":"user","future_field":true`, 1)
+	if newer == string(cur.Doc) {
+		t.Fatal("the mandate changed shape")
+	}
+	if _, err := b.st.Documents().Put(ctx, v0.KindMandate, "invoices", []byte(newer), "a newer doorward"); err != nil {
+		t.Fatal(err)
+	}
+	// The refusal is recorded, with internal_error as its reason.
+	if a := b.ask(alice, pepToken, payments, "get_invoice", read, nil); a.resp.Decision || a.resp.Context.Outcome != v0.OutcomeDeny || a.resp.Context.Reasons[0].Code != v0.ReasonInternalError {
+		t.Errorf("a call under an unreadable mandate: %d %s", a.status, a.raw)
+	}
+	if a := b.ask(rec, pepToken, ledger, "list_unmatched", map[string]any{"day": "2026-11-01"}, nil); !a.resp.Decision {
+		t.Errorf("the reconciler, under another mandate: %s", a.raw)
+	}
+	// Repairing the document restores service.
+	if _, err := b.st.Documents().Put(ctx, v0.KindMandate, "invoices", cur.Doc, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if a := b.ask(alice, pepToken, payments, "get_invoice", read, nil); !a.resp.Decision {
+		t.Errorf("after the repair: %s", a.raw)
 	}
 }

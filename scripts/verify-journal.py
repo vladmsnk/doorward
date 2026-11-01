@@ -106,15 +106,24 @@ def main():
     except OSError as e:
         print(f"verify-journal: {e}", file=sys.stderr)
         return 2
-    prev = None
+    records = []
     for i, line in enumerate(lines):
         try:
             record = json.loads(line)
-            chain = record["chain"]
-            claimed = chain.pop("hash")
+            records.append((record["chain"]["seq"], record))
         except (ValueError, KeyError, TypeError) as e:
-            print(f"record {i}: unreadable: {e}", file=sys.stderr)
+            print(f"line {i + 1}: unreadable: {e}", file=sys.stderr)
             return 2
+    # Lines may arrive in any order (several files concatenated): the chain
+    # is checked in sequence order.
+    records.sort(key=lambda r: r[0])
+    prev = None
+    for i, (_, record) in enumerate(records):
+        chain = record["chain"]
+        claimed = chain.pop("hash")
+        if prev is not None and chain.get("seq") == prev[0]:
+            print(f"seq {chain.get('seq')} appears twice", file=sys.stderr)
+            return 1
         if digest(canonical(record).encode("utf-8")) != claimed:
             print(f"record {i} (seq {chain.get('seq')}, {record.get('id')}): hash does not match its contents", file=sys.stderr)
             return 1

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/store"
 	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // The tests need a real PostgreSQL: the chain lock, the version lock and the
@@ -589,6 +591,18 @@ func TestPendingFor(t *testing.T) {
 	if err != nil || got.ID != a.ID {
 		t.Fatalf("same call: %+v %v", got.ID, err)
 	}
+	// Q3: a second open request for the same call is refused by the store.
+	dup := a
+	dup.ID = "apr_duplicate_000000000001"
+	if err := s.Approvals().Create(ctx, dup); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("a second pending request for one call: %v", err)
+	}
+	// A different call, or a closed request, does not collide.
+	other := a
+	other.ID, other.ActionHash = "apr_other_call_00000000001", "sha-256:"+strings.Repeat("b", 43)
+	if err := s.Approvals().Create(ctx, other); err != nil {
+		t.Errorf("another call: %v", err)
+	}
 	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, "sha-256:other"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("another call: %v", err)
 	}
@@ -598,4 +612,198 @@ func TestPendingFor(t *testing.T) {
 	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("a closed request still matches: %v", err)
 	}
+}
+
+// holdChainLock takes the journal lock on a connection of its own and
+// returns a function that releases it.
+func holdChainLock(t testing.TB, s *postgres.Store) func() {
+	t.Helper()
+	ctx := context.Background()
+	conn, err := s.Pool().Acquire(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+		t.Fatal(err)
+	}
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+			conn.Release()
+		})
+	}
+}
+
+// Q1: a settlement that cannot get the journal in time is rolled back
+// within the caller's deadline, drawing and recording nothing.
+func TestSettleHonoursTheDeadline(t *testing.T) {
+	s := open(t)
+	release := holdChainLock(t, s)
+	defer release()
+	key := store.GrantKey("grt_deadline", "calls")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base.Chain = nil
+	start := time.Now()
+	_, err := s.Settle(ctx, &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]store.Drawn, error) (v0.Decision, error) { return base, nil })
+	took := time.Since(start)
+	if !errors.Is(err, store.ErrTimeout) {
+		t.Fatalf("got %v after %s, want ErrTimeout", err, took)
+	}
+	if took > 2*time.Second {
+		t.Errorf("took %s to give up on a 300ms deadline", took)
+	}
+	release()
+	if v, _ := s.Counters().Consumed(context.Background(), key); v != "0" {
+		t.Errorf("the timed-out settlement drew %s", v)
+	}
+	if _, err := s.Decisions().Head(context.Background()); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the timed-out settlement was recorded: %v", err)
+	}
+	// With the lock free, the same settlement goes through.
+	if _, err := s.Settle(context.Background(), &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]store.Drawn, error) (v0.Decision, error) { return base, nil }); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Q5: every configuration write bumps the version a decision point watches.
+func TestConfigVersionBumps(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	v0ver, err := s.ConfigVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("../../../examples/v0/config/mandate-invoices.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := schema.Read("mandate-invoices.yaml", data, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := src[0].JSON
+	steps := []struct {
+		name string
+		do   func() error
+	}{
+		{"put a document", func() error { _, err := s.Documents().Put(ctx, v0.KindMandate, "invoices", doc, "t"); return err }},
+		{"disable it", func() error {
+			_, err := s.Documents().SetDisabled(ctx, v0.KindMandate, "invoices", true, "t")
+			return err
+		}},
+		{"put a secret", func() error { return s.Secrets().Put(ctx, "k", []byte("sealed"), "t") }},
+		{"delete the secret", func() error { return s.Secrets().Delete(ctx, "k") }},
+		{"a change under the configuration lock", func() error {
+			return s.LockConfig(ctx, func(c store.Config) error {
+				_, err := c.Documents().Put(ctx, v0.KindMandate, "invoices", doc, "t")
+				return err
+			})
+		}},
+	}
+	want := v0ver
+	for _, st := range steps {
+		if err := st.do(); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		want++
+		if v, _ := s.ConfigVersion(ctx); v != want {
+			t.Errorf("after %s: version %d, want %d", st.name, v, want)
+		}
+	}
+	if _, err := s.Grants().Get(ctx, "grt_none"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if v, _ := s.ConfigVersion(ctx); v != want {
+		t.Error("a read bumped the version")
+	}
+}
+
+// Q6: settlements arriving together share one transaction, each in its own
+// savepoint: every outcome is right, a failing one does not fail the
+// others, and the chain is one unbroken sequence.
+func TestSettleBatches(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base.Chain = nil
+	now := time.Now()
+	const n = 200
+	type result struct {
+		i   int
+		d   v0.Decision
+		err error
+	}
+	results := make(chan result, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var a *store.Allowance
+			switch i % 4 {
+			case 0: // a budget with room
+				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey(fmt.Sprintf("grt_b%d", i), "calls"), Amount: "1", Max: "5"}}, At: now}
+			case 1: // a shared budget of 10, drawn by 50 settlements
+				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey("grt_shared", "calls"), Amount: "1", Max: "10"}}, At: now}
+			case 2: // no allowance
+			case 3: // decide fails: this settlement alone is dropped
+			}
+			d, err := s.Settle(ctx, a, func(drawn []store.Drawn, refused error) (v0.Decision, error) {
+				if i%4 == 3 {
+					return v0.Decision{}, errors.New("decide failed")
+				}
+				rec := base
+				rec.ID = fmt.Sprintf("dec_batch_%020d", i)
+				rec.Outcome = v0.OutcomeAllow
+				if refused != nil {
+					rec.Outcome = v0.OutcomeDeny
+				}
+				return rec, nil
+			})
+			results <- result{i, d, err}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	allowed, denied, failed := 0, 0, 0
+	for r := range results {
+		switch {
+		case r.i%4 == 3:
+			if r.err == nil || r.err.Error() != "decide failed" {
+				t.Errorf("settlement %d: %v, want decide failed", r.i, r.err)
+			}
+			failed++
+		case r.err != nil:
+			t.Errorf("settlement %d: %v", r.i, r.err)
+		case r.d.Outcome == v0.OutcomeAllow:
+			allowed++
+		default:
+			denied++
+		}
+	}
+	// 50 with their own budget, 50 without an allowance, 10 of the 50 on
+	// the shared budget: 110 allowed; 40 refused by the shared budget.
+	if allowed != 110 || denied != 40 || failed != 50 {
+		t.Errorf("allowed %d denied %d failed %d, want 110 40 50", allowed, denied, failed)
+	}
+	if v, _ := s.Counters().Consumed(ctx, store.GrantKey("grt_shared", "calls")); v != "10" {
+		t.Errorf("shared budget drew %s, want 10", v)
+	}
+	all, err := s.Decisions().Range(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := v0.Verify(all); len(all) != 150 || broken != -1 || err != nil {
+		t.Errorf("%d records, chain broken at %d: %v", len(all), broken, err)
+	}
+	st := s.Batches()
+	if st.Settlements != 150 || st.Batches >= 150 || st.Largest < 2 {
+		t.Errorf("no batching happened: %+v", st)
+	}
+	t.Logf("%d settlements in %d batches, largest %d", st.Settlements, st.Batches, st.Largest)
 }

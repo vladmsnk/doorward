@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -16,6 +18,9 @@ import (
 // Store is a store.Store on a connection pool.
 type Store struct {
 	pool *pgxpool.Pool
+
+	settleOnce sync.Once
+	writer     *settler
 }
 
 var _ store.Store = (*Store)(nil)
@@ -58,6 +63,19 @@ func (s *Store) LockConfig(ctx context.Context, fn func(store.Config) error) err
 	})
 }
 
+func (s *Store) ConfigVersion(ctx context.Context) (uint64, error) {
+	var v uint64
+	err := s.pool.QueryRow(ctx, "SELECT version FROM config_version WHERE id = 1").Scan(&v)
+	return v, err
+}
+
+// bumpConfig marks the configuration changed, inside the writer's own
+// transaction.
+func bumpConfig(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "UPDATE config_version SET version = version + 1, changed_at = now() WHERE id = 1")
+	return err
+}
+
 // configTx is the configuration seen through one transaction.
 type configTx struct{ tx pgx.Tx }
 
@@ -74,6 +92,9 @@ type db interface {
 }
 
 func (s *Store) Close() error {
+	if s.writer != nil {
+		s.writer.close()
+	}
 	s.pool.Close()
 	return nil
 }
@@ -89,9 +110,34 @@ func mapErr(err error) error {
 	if errors.Is(err, pgx.ErrNoRows) {
 		return store.ErrNotFound
 	}
-	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.Code == "23505" { // unique_violation
-		return store.ErrConflict
+	if errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("%w: %w", store.ErrTimeout, err)
 	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23505": // unique_violation
+			return store.ErrConflict
+		case "55P03", "57014": // lock_not_available, query_canceled (statement_timeout)
+			return fmt.Errorf("%w: %s", store.ErrTimeout, pgErr.Message)
+		}
+	}
+	return err
+}
+
+// deadlineSQL bounds how long a transaction waits for a lock, so a caller's
+// deadline holds inside the database as well as around it. Without a
+// deadline it sets nothing.
+func deadlineSQL(ctx context.Context, tx pgx.Tx) error {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return nil
+	}
+	left := time.Until(deadline)
+	if left <= 0 {
+		return fmt.Errorf("%w: no time left", store.ErrTimeout)
+	}
+	// SET LOCAL takes no bind parameters; the value is an integer we made.
+	_, err := tx.Exec(ctx, fmt.Sprintf("SET LOCAL lock_timeout = '%dms'", max(left.Milliseconds(), 1)))
 	return err
 }

@@ -184,25 +184,74 @@ stays at its maximum, and the call's other budgets are drawn, since the
 call ran. Records whose `observed` is set are the calls a mandate would
 have stopped: the list to read before switching it to `enforce`.
 
+### Configuration, read once per change
+
+Every configuration write bumps one version counter. A decision reads that
+counter and reuses its snapshot of the configuration (enabled manifests by
+audience, mandates and agents by name, decoded and checked once) until the
+counter changes, so a change still takes effect on the very next call
+while a decision costs one small query instead of reading and decoding
+every document. Public keys are cached by key ID; a key ID names one key
+forever.
+
+A document the running version cannot read, because it carries a field
+from a newer doorward or breaks a rule, is marked broken when the snapshot
+loads: calls that depend on it are refused with `internal_error` and
+recorded, calls under other documents are unaffected, and the log says
+which document. An older instance therefore never enforces less than it
+should. Upgrade every instance before writing configuration that uses a
+new field.
+
+### Deadlines
+
+Every decision has a deadline, `--decision-timeout` (default 5 s, at most
+20 s so that it stays under the 30-second HTTP write timeout). It covers
+the whole decision, the wait for the journal lock included: the lock is
+taken with a matching `lock_timeout`, so a held lock produces fast refusals
+instead of a stall. A decision that runs out of time is rolled back: nothing
+drawn, nothing recorded, and the gateway gets 503 with `Retry-After`. Set
+the gateway's own timeout above the decision timeout; a gateway that gives
+up first cannot learn an answer that was committed a moment later.
+
 Every record names the user or the owning team, the agent, the grant (its
 ID; never the token), the versions of the mandate and the manifest in
 force, the W3C trace ID, and every check. Records are chained: each one's
 `chain.hash` is the SHA-256 of the record in RFC 8785 canonical JSON
 without `chain.hash`, and covers the previous record's hash.
 
-- `--journal FILE` (or `-` for standard output) writes every record as one
-  JSON line once it is committed; `GET /admin/v0/decisions?from=SEQ`
-  exports them from the Admin API, and `doorward journal export` from the
-  command line.
+- `--journal FILE` keeps a complete copy of the chain as JSON lines: a
+  follower copies every committed record out of the database in sequence
+  order, including records other instances committed, so each instance's
+  file is the whole journal. On start it continues after the file's last
+  record, so nothing is lost to a crash; a new empty file receives the
+  whole history. `--journal -` streams to standard output from the current
+  head. `GET /admin/v0/decisions?from=SEQ` exports records from the Admin
+  API, and `doorward journal export` from the command line.
 - `doorward journal verify FILE` checks every record against the contract
-  and the chain. [`scripts/verify-journal.py`](../scripts/verify-journal.py)
-  checks the chain with Python's standard library alone, sharing no code
-  with doorward.
+  and the chain, in sequence order whatever order the lines are in, and
+  reports a sequence number seen twice.
+  [`scripts/verify-journal.py`](../scripts/verify-journal.py) checks the
+  chain with Python's standard library alone, sharing no code with
+  doorward.
 - With `OTEL_EXPORTER_OTLP_ENDPOINT` set, each evaluation is a span in the
   caller's trace, carrying the decision's ID, outcome, agent, mandate and
   reason.
 
-One allowed decision (HTTP, both sets of checks, a budget drawn, the record
-appended) takes about 5.5 ms against a local PostgreSQL, and sixteen
-concurrent callers get about 470 decisions a second; appends to the chain
-are serialized.
+### How decisions are written
+
+Every record joins one chain, so appends are serialized by one lock. One
+transaction per decision made that lock, with its commit to disk, the
+ceiling: about 550 decisions a second on a small machine, whatever the
+concurrency. Instead, a writer per instance takes the settlements that
+arrived while the previous batch was committing (up to 64) and settles
+them in one transaction: one lock, one read of the head, every allowance
+in one pipelined round trip, every record in another, one commit. A lone
+decision goes at once; batches grow with the arrival rate. Each allowance
+is one SQL statement that locks its budget rows in key order, checks that
+everything fits and writes all of it or nothing, so no item leaves partial
+state whatever happens to the others.
+
+On a shared 4-core machine with a local PostgreSQL, one caller sees about
+5 ms per decision; 16 concurrent callers get about 800 decisions a second
+at 20 ms median, 64 about 1,100 at 57 ms, and 256 about 1,300 at 200 ms.
+Several instances share the one chain and the same ceiling.

@@ -13,15 +13,19 @@ import (
 	"os/signal"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/store"
 	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/internal/telemetry"
 	"github.com/vladmsnk/doorward/schema"
@@ -44,7 +48,9 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
 	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
 	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
-	journal := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
+	shutdownDelay := fs.Duration("shutdown-delay", 0, "on SIGTERM, keep serving for this long while /healthz reports 503, so a load balancer stops sending before the listeners close; 5s is usual behind one")
+	decisionTimeout := fs.Duration("decision-timeout", pdp.DefaultTimeout, "how long one decision may take, the wait for the journal included; a decision that runs out of time is refused and nothing is recorded")
+	journalPath := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
 	var peps []pdp.Client
 	pepFlag := func(v string) error {
 		c, err := parsePEP(v)
@@ -72,6 +78,10 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "doorward serve: --db or DOORWARD_DB is required")
 		return 2
 	}
+	if *decisionTimeout <= 0 || *decisionTimeout > 20*time.Second {
+		fmt.Fprintln(stderr, "doorward serve: --decision-timeout must be between 1ms and 20s, under the 30s HTTP write timeout")
+		return 2
+	}
 	if len(*adminToken) < 16 {
 		fmt.Fprintln(stderr, "doorward serve: --admin-token or DOORWARD_ADMIN_TOKEN must be at least 16 characters")
 		return 2
@@ -82,22 +92,23 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 
-	var journalOut io.Writer
-	switch *journal {
-	case "":
-	case "-":
-		journalOut = stdout
+	// The journal file is opened before the store, so a bad path fails fast.
+	var journalFile *os.File
+	switch *journalPath {
+	case "", "-":
 	default:
-		f, err := os.OpenFile(*journal, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) // #nosec G304 -- the operator names the journal file
+		f, err := os.OpenFile(*journalPath, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o600) // #nosec G304 -- the operator names the journal file
 		if err != nil {
 			fmt.Fprintf(stderr, "doorward serve: --journal: %v\n", err)
 			return 2
 		}
 		defer func() { _ = f.Close() }()
-		journalOut = f
+		journalFile = f
 	}
 
-	log := slog.New(slog.NewJSONHandler(stdout, nil))
+	// Warnings and errors are sampled: one line per message per second, with
+	// a count of the rest, so an outage does not flood the log.
+	log := slog.New(telemetry.Sampled(slog.NewJSONHandler(stdout, nil), time.Second))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -121,7 +132,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	var stopping atomic.Bool
 	healthz := func(w http.ResponseWriter, r *http.Request) {
+		if stopping.Load() {
+			http.Error(w, "stopping", http.StatusServiceUnavailable)
+			return
+		}
 		if err := st.Pool().Ping(r.Context()); err != nil {
 			http.Error(w, "database unreachable", http.StatusServiceUnavailable)
 			return
@@ -149,19 +165,48 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	}
 	defer func() { _ = stopTracing(context.Background()) }()
 
+	// The journal follower copies every committed record, from any
+	// instance, to the file in order: a file resumes where it ended, and
+	// standard output starts at the current head.
+	var follower *journal.Follower
+	if *journalPath != "" {
+		var from uint64
+		out := stdout
+		if journalFile != nil {
+			if from, err = journal.Resume(journalFile); err != nil {
+				fmt.Fprintf(stderr, "doorward serve: --journal: %v\n", err)
+				return 2
+			}
+			out = journalFile
+		} else if head, err := st.Decisions().Head(ctx); err == nil {
+			from = head.Chain.Seq + 1
+		} else if !errors.Is(err, store.ErrNotFound) {
+			fmt.Fprintf(stderr, "doorward serve: %v\n", err)
+			return 1
+		}
+		follower = journal.New(st.Decisions(), out, from, 0, log)
+		go follower.Run(ctx)
+		log.Info("journal follower started", "from_seq", from, "to", *journalPath)
+	}
+
+	cfg := &config.Cache{Store: st, Validator: v, Log: log}
 	decisions := &pdp.PDP{
-		Store: st,
+		Store:  st,
+		Config: cfg,
 		Verifier: &grant.Verifier{
 			Keys:      km,
-			Status:    grant.StoreStatus{Store: st},
+			Status:    grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg)},
 			Validator: v,
 			Issuer:    *issuer,
 		},
 		ID:      *pdpID,
 		Version: versionString(),
-		Journal: journalOut,
 		Log:     log,
 		Tracer:  tp.Tracer("doorward"),
+		Timeout: *decisionTimeout,
+	}
+	if follower != nil {
+		decisions.Journal = follower
 	}
 	public.Handle("POST "+pdp.EvaluationPath, decisions.Handler(peps))
 
@@ -186,7 +231,13 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 
 	select {
 	case <-ctx.Done():
-		log.Info("shutting down")
+		stopping.Store(true)
+		log.Info("shutting down", "delay", shutdownDelay.String())
+		if *shutdownDelay > 0 {
+			// Health already says 503; keep answering while the load
+			// balancer notices.
+			time.Sleep(*shutdownDelay)
+		}
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
 			fmt.Fprintf(stderr, "doorward serve: %v\n", err)
@@ -198,6 +249,12 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	for _, srv := range servers {
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			fmt.Fprintf(stderr, "doorward serve: shutdown: %v\n", err)
+			return 1
+		}
+	}
+	if follower != nil {
+		if err := follower.Close(shutdownCtx); err != nil {
+			fmt.Fprintf(stderr, "doorward serve: journal: %v\n", err)
 			return 1
 		}
 	}
