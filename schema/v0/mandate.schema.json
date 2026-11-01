@@ -43,6 +43,7 @@
           "items": { "$ref": "common.schema.json#/$defs/permission" },
           "minItems": 1
         },
+        "enforcement": { "$ref": "common.schema.json#/$defs/enforcement" },
         "limits": {
           "type": "array",
           "items": { "$ref": "common.schema.json#/$defs/limit" }

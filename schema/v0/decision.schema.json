@@ -69,6 +69,24 @@
     },
     "sensitivity": { "$ref": "common.schema.json#/$defs/sensitivity" },
     "outcome": { "enum": ["allow", "deny", "approval_required"] },
+    "enforcement": {
+      "description": "observe when the decision was made in observe mode, under an agent or a mandate that is observed. Absent means enforced.",
+      "const": "observe"
+    },
+    "observed": {
+      "description": "In observe mode, what enforcement would have answered when it differs from what was answered: the call ran, or was held, but the mandate's rules would have refused it, for these reasons.",
+      "type": "object",
+      "required": ["outcome", "reasons"],
+      "properties": {
+        "outcome": { "const": "deny" },
+        "reasons": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reason" },
+          "minItems": 1
+        }
+      },
+      "additionalProperties": false
+    },
     "reasons": {
       "type": "array",
       "items": { "$ref": "#/$defs/reason" }

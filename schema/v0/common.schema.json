@@ -120,6 +120,11 @@
       "description": "Tier of an operation. read runs on any valid grant. write runs too, and the record is kept for review. critical never runs on a standing grant: a person approves the exact call first.",
       "enum": ["read", "write", "critical"]
     },
+    "enforcement": {
+      "description": "Whether decisions under an agent or a mandate are enforced, or only observed. Observed: the mandate's own rules (the operations and argument bounds of the grant, and its budgets) are evaluated and recorded but do not stop a call. The grant's validity, the agent's ceiling and the approval of critical operations are always enforced.",
+      "enum": ["enforce", "observe"],
+      "default": "enforce"
+    },
     "constraintBounds": {
       "description": "The ready-made constraint types. Every bound listed for a field must hold; a constrained field missing from the call fails the check. Each type can be compared with a narrower one, which is what makes 'request ⊆ grant' and narrowing on delegation decidable.",
       "properties": {

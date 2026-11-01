@@ -14,8 +14,14 @@ type Decision struct {
 	Versions    *Versions         `json:"versions,omitempty"`
 	ActionHash  string            `json:"action_hash,omitempty"`
 	Sensitivity Sensitivity       `json:"sensitivity,omitempty"`
-	Outcome     Outcome           `json:"outcome"`
-	Reasons     []Reason          `json:"reasons,omitempty"`
+	// Enforcement is EnforcementObserve for a decision made in observe
+	// mode, and empty otherwise.
+	Enforcement Enforcement `json:"enforcement,omitempty"`
+	// Observed is what enforcement would have answered, in observe mode,
+	// when it differs from the outcome.
+	Observed *Observed `json:"observed,omitempty"`
+	Outcome  Outcome   `json:"outcome"`
+	Reasons  []Reason  `json:"reasons,omitempty"`
 	// Checks lists every check the core ran, in order.
 	Checks []Check `json:"checks"`
 	PDP    PDP     `json:"pdp"`
@@ -64,6 +70,12 @@ type GrantRef struct {
 	ID      string `json:"id"`
 	Mandate string `json:"mandate"`
 	Consent string `json:"consent,omitempty"`
+}
+
+// Observed is a refusal observe mode recorded but did not enforce.
+type Observed struct {
+	Outcome Outcome  `json:"outcome"`
+	Reasons []Reason `json:"reasons"`
 }
 
 // Versions names the configuration a decision was made under.

@@ -60,6 +60,20 @@ const (
 	SensitivityCritical Sensitivity = "critical"
 )
 
+// Enforcement is whether decisions under an agent or a mandate are enforced
+// or only observed.
+type Enforcement string
+
+const (
+	// EnforcementEnforce is the default: every check's answer stands.
+	EnforcementEnforce Enforcement = "enforce"
+	// EnforcementObserve evaluates and records the mandate's own rules (the
+	// grant's operations and argument bounds, its budgets) without letting
+	// them stop a call. The grant's validity, the agent's ceiling and the
+	// approval of critical operations are still enforced.
+	EnforcementObserve Enforcement = "observe"
+)
+
 // Permission is what may be called, where, and with which argument values, as
 // written in an agent or a mandate.
 type Permission struct {
