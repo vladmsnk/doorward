@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -588,6 +589,18 @@ func TestPendingFor(t *testing.T) {
 	got, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash)
 	if err != nil || got.ID != a.ID {
 		t.Fatalf("same call: %+v %v", got.ID, err)
+	}
+	// Q3: a second open request for the same call is refused by the store.
+	dup := a
+	dup.ID = "apr_duplicate_000000000001"
+	if err := s.Approvals().Create(ctx, dup); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("a second pending request for one call: %v", err)
+	}
+	// A different call, or a closed request, does not collide.
+	other := a
+	other.ID, other.ActionHash = "apr_other_call_00000000001", "sha-256:"+strings.Repeat("b", 43)
+	if err := s.Approvals().Create(ctx, other); err != nil {
+		t.Errorf("another call: %v", err)
 	}
 	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, "sha-256:other"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("another call: %v", err)

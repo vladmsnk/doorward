@@ -396,7 +396,13 @@ func (p *PDP) approval(ctx context.Context, g v0.Grant, m v0.Mandate, mandateDig
 	if err := a.Check(); err != nil {
 		return v0.Approval{}, fmt.Errorf("approval request: %w", err)
 	}
-	return a, p.Store.Approvals().Create(ctx, a)
+	err = p.Store.Approvals().Create(ctx, a)
+	if errors.Is(err, store.ErrConflict) {
+		// Another decision opened the request for this call first; the
+		// store allows one open request per call. Use theirs.
+		return p.Store.Approvals().PendingFor(ctx, g.Actor.Subject, g.Mandate, g.Consent, hash)
+	}
+	return a, err
 }
 
 func (p *PDP) timeout() time.Duration {

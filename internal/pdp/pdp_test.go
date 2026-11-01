@@ -748,3 +748,37 @@ func TestJournalFollowsEveryInstance(t *testing.T) {
 		t.Error("junk accepted")
 	}
 }
+
+// Q3: fifty first attempts of one held call, at once, open one approval
+// request, and every answer names it.
+func TestOneApprovalPerCallUnderContention(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_contend_00000001", nil)
+	args := map[string]any{"invoice_id": "inv_contended", "amount": 1500.0, "currency": "EUR"}
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	requests := map[string]int{}
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			a := b.ask(alice, pepToken, payments, "pay_invoice", args, nil)
+			mu.Lock()
+			defer mu.Unlock()
+			if a.resp.Context.Outcome != v0.OutcomeApprovalRequired || a.resp.Context.Approval == nil {
+				requests["not held: "+a.raw]++
+				return
+			}
+			requests[a.resp.Context.Approval.Request]++
+		}()
+	}
+	wg.Wait()
+	if len(requests) != 1 {
+		t.Errorf("answers name %d different requests: %v", len(requests), requests)
+	}
+	pending, err := b.st.Approvals().Pending(ctx)
+	if err != nil || len(pending) != 1 {
+		t.Errorf("%d pending requests, want 1 (%v)", len(pending), err)
+	}
+}
