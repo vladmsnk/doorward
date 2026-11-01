@@ -19,6 +19,7 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
@@ -188,11 +189,13 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		log.Info("journal follower started", "from_seq", from, "to", *journalPath)
 	}
 
+	cfg := &config.Cache{Store: st, Validator: v, Log: log}
 	decisions := &pdp.PDP{
-		Store: st,
+		Store:  st,
+		Config: cfg,
 		Verifier: &grant.Verifier{
 			Keys:      km,
-			Status:    grant.StoreStatus{Store: st},
+			Status:    grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg)},
 			Validator: v,
 			Issuer:    *issuer,
 		},

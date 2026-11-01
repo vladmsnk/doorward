@@ -53,8 +53,10 @@ func (s documents) put(ctx context.Context, kind, name string, doc []byte, disab
 			VALUES ($1, $2, $3, $4, $5, $6, $7)
 			RETURNING `+documentColumns,
 			kind, name, next, digest, string(canon), disabled, by)
-		out, err = scanDocument(row)
-		return err
+		if out, err = scanDocument(row); err != nil {
+			return err
+		}
+		return bumpConfig(ctx, tx)
 	})
 	return out, mapErr(err)
 }

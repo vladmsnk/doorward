@@ -184,6 +184,24 @@ stays at its maximum, and the call's other budgets are drawn, since the
 call ran. Records whose `observed` is set are the calls a mandate would
 have stopped: the list to read before switching it to `enforce`.
 
+### Configuration, read once per change
+
+Every configuration write bumps one version counter. A decision reads that
+counter and reuses its snapshot of the configuration (enabled manifests by
+audience, mandates and agents by name, decoded and checked once) until the
+counter changes, so a change still takes effect on the very next call
+while a decision costs one small query instead of reading and decoding
+every document. Public keys are cached by key ID; a key ID names one key
+forever.
+
+A document the running version cannot read, because it carries a field
+from a newer doorward or breaks a rule, is marked broken when the snapshot
+loads: calls that depend on it are refused with `internal_error` and
+recorded, calls under other documents are unaffected, and the log says
+which document. An older instance therefore never enforces less than it
+should. Upgrade every instance before writing configuration that uses a
+new field.
+
 ### Deadlines
 
 Every decision has a deadline, `--decision-timeout` (default 5 s, at most

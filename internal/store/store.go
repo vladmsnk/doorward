@@ -58,6 +58,9 @@ type Store interface {
 	// through it, so a change is checked against the configuration it will
 	// actually join.
 	LockConfig(ctx context.Context, fn func(Config) error) error
+	// ConfigVersion is a counter every configuration write bumps: a reader
+	// that sees the same value it saw before can keep its copy.
+	ConfigVersion(ctx context.Context) (uint64, error)
 	Close() error
 }
 

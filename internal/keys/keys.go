@@ -57,6 +57,9 @@ type Manager struct {
 
 	mu     sync.RWMutex
 	active *Signer
+	// public caches keys by kid: a kid names one key forever, retired or
+	// not, so a lookup that hit the store once need never hit it again.
+	public sync.Map
 }
 
 // New returns a manager; call Ensure before signing.
@@ -154,6 +157,9 @@ func (m *Manager) JWKS(ctx context.Context) (Set, error) {
 // Public returns the public key for a kid, retired or not, so a grant
 // signed before a retirement can still be checked against the record.
 func (m *Manager) Public(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
+	if pub, ok := m.public.Load(kid); ok {
+		return pub.(*ecdsa.PublicKey), nil
+	}
 	keys, err := m.store.List(ctx)
 	if err != nil {
 		return nil, err
@@ -166,7 +172,12 @@ func (m *Manager) Public(ctx context.Context, kid string) (*ecdsa.PublicKey, err
 		if err := json.Unmarshal(k.PublicJWK, &jwk); err != nil {
 			return nil, err
 		}
-		return jwk.PublicKey()
+		pub, err := jwk.PublicKey()
+		if err != nil {
+			return nil, err
+		}
+		m.public.Store(kid, pub)
+		return pub, nil
 	}
 	return nil, store.ErrNotFound
 }

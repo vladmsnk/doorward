@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
@@ -132,9 +133,11 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	fctx, fcancel := context.WithCancel(ctx)
 	go b.follower.Run(fctx)
 	t.Cleanup(fcancel)
+	cfg := &config.Cache{Store: st, Validator: v}
 	p := &pdp.PDP{
 		Store:    st,
-		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Now: clock}, Validator: v, Now: clock},
+		Config:   cfg,
+		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg), Now: clock}, Validator: v, Now: clock},
 		ID:       "doorward-test", Version: "test",
 		Journal: b.follower, Now: clock,
 	}
@@ -679,7 +682,7 @@ func TestJournalFollowsEveryInstance(t *testing.T) {
 	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
 
 	// A second instance on the same store, with no follower of its own.
-	other := &pdp.PDP{Store: b.st, Verifier: b.pdp.Verifier, ID: "doorward-other", Version: "test", Now: b.pdp.Now}
+	other := &pdp.PDP{Store: b.st, Config: b.pdp.Config, Verifier: b.pdp.Verifier, ID: "doorward-other", Version: "test", Now: b.pdp.Now}
 	srv := httptest.NewServer(other.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-2", Kind: v0.PEPGateway}}}))
 	defer srv.Close()
 	for i := 0; i < 3; i++ {
@@ -780,5 +783,61 @@ func TestOneApprovalPerCallUnderContention(t *testing.T) {
 	pending, err := b.st.Approvals().Pending(ctx)
 	if err != nil || len(pending) != 1 {
 		t.Errorf("%d pending requests, want 1 (%v)", len(pending), err)
+	}
+}
+
+// Q5: configuration is read once per change. A document this version
+// cannot read fails closed for the calls that depend on it, and no other.
+func TestConfigurationSnapshot(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_snapshot_000001", nil)
+	rec := b.mint("grant/reconcile.json", "grt_reconciler_snapshot_01", nil)
+	read := map[string]any{"invoice_id": "i"}
+
+	v1, _ := b.st.ConfigVersion(ctx)
+	snap, err := b.pdp.Config.Current(ctx)
+	if err != nil || snap.Version != v1 {
+		t.Fatalf("snapshot %v %v, version %d", snap, err, v1)
+	}
+	if again, _ := b.pdp.Config.Current(ctx); again != snap {
+		t.Error("the snapshot was reloaded although nothing changed")
+	}
+	// A change bumps the version and takes effect on the next call.
+	b.putDoc(v0.KindMandate, "invoices", func(spec map[string]any) { spec["enforcement"] = "observe" })
+	if v2, _ := b.st.ConfigVersion(ctx); v2 != v1+1 {
+		t.Errorf("version %d after one write, want %d", v2, v1+1)
+	}
+	if a := b.ask(alice, pepToken, payments, "refund_payment", map[string]any{"payment_id": "p", "amount": 1.0}, nil); !a.resp.Decision {
+		t.Errorf("the change did not take effect: %s", a.raw)
+	}
+	if again, _ := b.pdp.Config.Current(ctx); again == snap {
+		t.Error("the snapshot was not reloaded after a change")
+	}
+
+	// A mandate from a newer doorward, with a field this version does not
+	// know, written straight to the store: calls under it are refused, the
+	// reconciler's are not.
+	cur, _ := b.st.Documents().Current(ctx, v0.KindMandate, "invoices")
+	newer := strings.Replace(string(cur.Doc), `"principal":"user"`, `"principal":"user","future_field":true`, 1)
+	if newer == string(cur.Doc) {
+		t.Fatal("the mandate changed shape")
+	}
+	if _, err := b.st.Documents().Put(ctx, v0.KindMandate, "invoices", []byte(newer), "a newer doorward"); err != nil {
+		t.Fatal(err)
+	}
+	// The refusal is recorded, with internal_error as its reason.
+	if a := b.ask(alice, pepToken, payments, "get_invoice", read, nil); a.resp.Decision || a.resp.Context.Outcome != v0.OutcomeDeny || a.resp.Context.Reasons[0].Code != v0.ReasonInternalError {
+		t.Errorf("a call under an unreadable mandate: %d %s", a.status, a.raw)
+	}
+	if a := b.ask(rec, pepToken, ledger, "list_unmatched", map[string]any{"day": "2026-11-01"}, nil); !a.resp.Decision {
+		t.Errorf("the reconciler, under another mandate: %s", a.raw)
+	}
+	// Repairing the document restores service.
+	if _, err := b.st.Documents().Put(ctx, v0.KindMandate, "invoices", cur.Doc, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if a := b.ask(alice, pepToken, payments, "get_invoice", read, nil); !a.resp.Decision {
+		t.Errorf("after the repair: %s", a.raw)
 	}
 }

@@ -23,8 +23,18 @@ import (
 // instant as a suspension.
 type StoreStatus struct {
 	Store store.Store
+	// Config, when set, answers for agents and mandates instead of the
+	// store, from a snapshot kept current by the decision point.
+	Config Config
 	// Now defaults to time.Now.
 	Now func() time.Time
+}
+
+// Config answers for the agents and mandates a grant depends on.
+// store.ErrNotFound means there is none.
+type Config interface {
+	Agent(ctx context.Context, name string) (v0.Agent, error)
+	Mandate(ctx context.Context, name string) (m v0.Mandate, disabled bool, err error)
 }
 
 func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error) {
@@ -44,16 +54,12 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 	if rec.SingleUse && rec.UsedAt != nil {
 		return refuse("single-use grant %s was used at %s", g.ID, rec.UsedAt.UTC().Format(v0.TimestampLayout))
 	}
-	doc, err := s.Store.Documents().Current(ctx, v0.KindAgent, rec.Agent)
+	a, err := s.agent(ctx, rec.Agent)
 	if errors.Is(err, store.ErrNotFound) {
 		return refuse("agent %s is not registered", rec.Agent)
 	}
 	if err != nil {
 		return Standing{}, err
-	}
-	var a v0.Agent
-	if err := json.Unmarshal(doc.Doc, &a); err != nil {
-		return Standing{}, fmt.Errorf("agent %s: %w", rec.Agent, err)
 	}
 	if a.Spec.Status == v0.AgentSuspended {
 		return refuse("agent %s is suspended", rec.Agent)
@@ -73,14 +79,14 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 			return refuse("consent %s expired at %s", c.ID, c.ExpiresAt.UTC().Format(v0.TimestampLayout))
 		}
 	}
-	m, err := s.Store.Documents().Current(ctx, v0.KindMandate, g.Mandate)
+	_, disabled, err := s.mandate(ctx, g.Mandate)
 	if errors.Is(err, store.ErrNotFound) {
 		return refuse("mandate %s does not exist", g.Mandate)
 	}
 	if err != nil {
 		return Standing{}, err
 	}
-	if m.Disabled {
+	if disabled {
 		return refuse("mandate %s is disabled", g.Mandate)
 	}
 	st := Standing{Ceiling: a.Spec.MaxSensitivity, SingleUse: rec.SingleUse, ActionHash: rec.ActionHash, Enforcement: a.Spec.Enforcement}
@@ -88,6 +94,36 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 		st.Owner = a.Spec.Owner.Team
 	}
 	return st, nil
+}
+
+func (s StoreStatus) agent(ctx context.Context, name string) (v0.Agent, error) {
+	if s.Config != nil {
+		return s.Config.Agent(ctx, name)
+	}
+	doc, err := s.Store.Documents().Current(ctx, v0.KindAgent, name)
+	if err != nil {
+		return v0.Agent{}, err
+	}
+	var a v0.Agent
+	if err := json.Unmarshal(doc.Doc, &a); err != nil {
+		return v0.Agent{}, fmt.Errorf("agent %s: %w", name, err)
+	}
+	return a, nil
+}
+
+func (s StoreStatus) mandate(ctx context.Context, name string) (v0.Mandate, bool, error) {
+	if s.Config != nil {
+		return s.Config.Mandate(ctx, name)
+	}
+	doc, err := s.Store.Documents().Current(ctx, v0.KindMandate, name)
+	if err != nil {
+		return v0.Mandate{}, false, err
+	}
+	var m v0.Mandate
+	if err := json.Unmarshal(doc.Doc, &m); err != nil {
+		return v0.Mandate{}, false, fmt.Errorf("mandate %s: %w", name, err)
+	}
+	return m, doc.Disabled, nil
 }
 
 func (s StoreStatus) now() time.Time {

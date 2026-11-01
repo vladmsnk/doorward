@@ -66,11 +66,15 @@ func scanKey(row pgx.Row) (store.SigningKey, error) {
 type secrets struct{ pool db }
 
 func (s secrets) Put(ctx context.Context, name string, sealed []byte, by string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO secrets (name, value_enc, updated_by) VALUES ($1, $2, $3)
-		ON CONFLICT (name) DO UPDATE SET value_enc = EXCLUDED.value_enc, updated_at = now(), updated_by = EXCLUDED.updated_by`,
-		name, sealed, by)
-	return err
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO secrets (name, value_enc, updated_by) VALUES ($1, $2, $3)
+			ON CONFLICT (name) DO UPDATE SET value_enc = EXCLUDED.value_enc, updated_at = now(), updated_by = EXCLUDED.updated_by`,
+			name, sealed, by); err != nil {
+			return err
+		}
+		return bumpConfig(ctx, tx)
+	})
 }
 
 func (s secrets) Get(ctx context.Context, name string) ([]byte, error) {
@@ -97,12 +101,14 @@ func (s secrets) List(ctx context.Context) ([]store.SecretInfo, error) {
 }
 
 func (s secrets) Delete(ctx context.Context, name string) error {
-	tag, err := s.pool.Exec(ctx, "DELETE FROM secrets WHERE name = $1", name)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	return pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx, "DELETE FROM secrets WHERE name = $1", name)
+		if err != nil {
+			return err
+		}
+		if tag.RowsAffected() == 0 {
+			return store.ErrNotFound
+		}
+		return bumpConfig(ctx, tx)
+	})
 }

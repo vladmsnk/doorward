@@ -15,6 +15,7 @@ import (
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/store"
 	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/schema"
 )
 
 // The tests need a real PostgreSQL: the chain lock, the version lock and the
@@ -666,5 +667,58 @@ func TestSettleHonoursTheDeadline(t *testing.T) {
 	if _, err := s.Settle(context.Background(), &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
 		func([]store.Drawn, error) (v0.Decision, error) { return base, nil }); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Q5: every configuration write bumps the version a decision point watches.
+func TestConfigVersionBumps(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	v0ver, err := s.ConfigVersion(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile("../../../examples/v0/config/mandate-invoices.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src, err := schema.Read("mandate-invoices.yaml", data, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := src[0].JSON
+	steps := []struct {
+		name string
+		do   func() error
+	}{
+		{"put a document", func() error { _, err := s.Documents().Put(ctx, v0.KindMandate, "invoices", doc, "t"); return err }},
+		{"disable it", func() error {
+			_, err := s.Documents().SetDisabled(ctx, v0.KindMandate, "invoices", true, "t")
+			return err
+		}},
+		{"put a secret", func() error { return s.Secrets().Put(ctx, "k", []byte("sealed"), "t") }},
+		{"delete the secret", func() error { return s.Secrets().Delete(ctx, "k") }},
+		{"a change under the configuration lock", func() error {
+			return s.LockConfig(ctx, func(c store.Config) error {
+				_, err := c.Documents().Put(ctx, v0.KindMandate, "invoices", doc, "t")
+				return err
+			})
+		}},
+	}
+	want := v0ver
+	for _, st := range steps {
+		if err := st.do(); err != nil {
+			t.Fatalf("%s: %v", st.name, err)
+		}
+		want++
+		if v, _ := s.ConfigVersion(ctx); v != want {
+			t.Errorf("after %s: version %d, want %d", st.name, v, want)
+		}
+	}
+	if _, err := s.Grants().Get(ctx, "grt_none"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatal(err)
+	}
+	if v, _ := s.ConfigVersion(ctx); v != want {
+		t.Error("a read bumped the version")
 	}
 }

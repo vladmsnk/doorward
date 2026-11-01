@@ -59,6 +59,19 @@ func (s *Store) LockConfig(ctx context.Context, fn func(store.Config) error) err
 	})
 }
 
+func (s *Store) ConfigVersion(ctx context.Context) (uint64, error) {
+	var v uint64
+	err := s.pool.QueryRow(ctx, "SELECT version FROM config_version WHERE id = 1").Scan(&v)
+	return v, err
+}
+
+// bumpConfig marks the configuration changed, inside the writer's own
+// transaction.
+func bumpConfig(ctx context.Context, tx pgx.Tx) error {
+	_, err := tx.Exec(ctx, "UPDATE config_version SET version = version + 1, changed_at = now() WHERE id = 1")
+	return err
+}
+
 // configTx is the configuration seen through one transaction.
 type configTx struct{ tx pgx.Tx }
 

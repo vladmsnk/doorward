@@ -7,7 +7,6 @@ package pdp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +18,7 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/config"
 	"github.com/vladmsnk/doorward/internal/core"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/ids"
@@ -36,10 +36,13 @@ const (
 // ResourceType is the AuthZEN resource type of a tool call.
 const ResourceType = "tool_call"
 
-// PDP decides calls. Store and Verifier are required.
+// PDP decides calls. Store, Verifier and Config are required.
 type PDP struct {
 	Store    store.Store
 	Verifier *grant.Verifier
+	// Config is the decision point's copy of the configuration, reloaded
+	// when it changes.
+	Config *config.Cache
 	// ID and Version name this decision point in every record.
 	ID      string
 	Version string
@@ -132,17 +135,23 @@ func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 	}
 	d.ActionHash = hash
 
-	// The configuration in force: the resource's manifest, the mandate.
-	man, manDigest, err := p.manifest(ctx, call.Resource)
+	// The configuration in force: the resource's manifest, the mandate. A
+	// location no manifest declares gives the zero manifest, which declares
+	// no operation, so the subset check refuses the call.
+	snap, err := p.Config.Current(ctx)
 	if err != nil {
 		return d, err
 	}
-	mandate, mandateDigest, err := p.mandate(ctx, g.Mandate)
+	man, _, err := snap.ManifestFor(call.Resource)
 	if err != nil {
 		return d, err
 	}
-	d.Versions = &v0.Versions{Mandate: mandateDigest, Manifest: manDigest}
-	op := core.Operation(man, call.Action)
+	mandate, err := snap.Mandate(g.Mandate)
+	if err != nil {
+		return d, fmt.Errorf("mandate %s: %w", g.Mandate, err)
+	}
+	d.Versions = &v0.Versions{Mandate: mandate.Digest, Manifest: man.Digest}
+	op := core.Operation(man.Manifest, call.Action)
 
 	// Observe mode: the mandate's own rules (subset, limits) are recorded
 	// but do not stop the call. Everything else is still enforced.
@@ -178,7 +187,7 @@ func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 			deny(&d, v0.Check{Name: v0.CheckSensitivity, Result: v0.CheckFail, Detail: msg}, v0.Reason{Code: v0.ReasonSensitivityExceeded, Message: msg})
 			return p.record(ctx, d, nil, nil)
 		}
-		a, err := p.approval(ctx, g, mandate, mandateDigest, call, hash, now)
+		a, err := p.approval(ctx, g, mandate.Mandate, mandate.Digest, call, hash, now)
 		if err != nil {
 			return d, err
 		}
@@ -317,41 +326,6 @@ func withoutToken(req v0.EvaluationRequest) v0.EvaluationRequest {
 	}
 	delete(out.Context, TokenKey)
 	return out
-}
-
-// manifest returns the enabled manifest whose audience is location, and its
-// version digest. A location no manifest declares gives the zero manifest,
-// which declares no operation, so the subset check refuses the call.
-func (p *PDP) manifest(ctx context.Context, location string) (v0.Manifest, string, error) {
-	docs, err := p.Store.Documents().List(ctx, v0.KindManifest)
-	if err != nil {
-		return v0.Manifest{}, "", err
-	}
-	for _, doc := range docs {
-		if doc.Disabled {
-			continue
-		}
-		var m v0.Manifest
-		if err := json.Unmarshal(doc.Doc, &m); err != nil {
-			return v0.Manifest{}, "", fmt.Errorf("manifest %s: %w", doc.Name, err)
-		}
-		if m.Spec.Audience == location {
-			return m, doc.Digest, nil
-		}
-	}
-	return v0.Manifest{}, "", nil
-}
-
-func (p *PDP) mandate(ctx context.Context, name string) (v0.Mandate, string, error) {
-	doc, err := p.Store.Documents().Current(ctx, v0.KindMandate, name)
-	if err != nil {
-		return v0.Mandate{}, "", fmt.Errorf("mandate %s: %w", name, err)
-	}
-	var m v0.Mandate
-	if err := json.Unmarshal(doc.Doc, &m); err != nil {
-		return v0.Mandate{}, "", fmt.Errorf("mandate %s: %w", name, err)
-	}
-	return m, doc.Digest, nil
 }
 
 // approval returns the open approval request for this exact call, opening
