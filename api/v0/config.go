@@ -47,6 +47,8 @@ type AgentSpec struct {
 	MaxTTL Duration `json:"max_ttl"`
 	// Permissions are the most the agent may ever call.
 	Permissions []Permission `json:"permissions"`
+	// Enforcement, when observe, observes every mandate the agent holds.
+	Enforcement Enforcement `json:"enforcement,omitempty"`
 	// Limits cap a mandate's limits of the same name.
 	Limits []Limit `json:"limits,omitempty"`
 }
@@ -119,7 +121,9 @@ type MandateSpec struct {
 	// TTL is the lifetime of one grant, capped by the agent's MaxTTL.
 	TTL         Duration     `json:"ttl"`
 	Permissions []Permission `json:"permissions"`
-	Limits      []Limit      `json:"limits,omitempty"`
+	// Enforcement, when observe, observes the mandate for every agent.
+	Enforcement Enforcement `json:"enforcement,omitempty"`
+	Limits      []Limit     `json:"limits,omitempty"`
 	// Approval says who approves the mandate's critical calls. Without it,
 	// a critical call is refused.
 	Approval *ApprovalPolicy `json:"approval,omitempty"`

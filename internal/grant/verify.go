@@ -36,6 +36,9 @@ type Standing struct {
 	Ceiling v0.Sensitivity
 	// Owner is the team that answers for the agent, if it has one.
 	Owner string
+	// Enforcement is the agent's: observe when every mandate it holds is
+	// observed.
+	Enforcement v0.Enforcement
 	// SingleUse marks a grant issued for one approved call; ActionHash is
 	// that call's hash.
 	SingleUse  bool

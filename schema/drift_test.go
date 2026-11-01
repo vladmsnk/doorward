@@ -48,6 +48,7 @@ func TestEnumsMatchSchemas(t *testing.T) {
 		{"common.schema.json#/$defs/sensitivity", strs(v0.SensitivityRead, v0.SensitivityWrite, v0.SensitivityCritical)},
 		{"common.schema.json#/$defs/limit/properties/kind", strs(v0.LimitCount, v0.LimitSum)},
 		{"common.schema.json#/$defs/limit/properties/per", strs(v0.PerGrant, v0.PerDay, v0.PerMonth)},
+		{"common.schema.json#/$defs/enforcement", strs(v0.EnforcementEnforce, v0.EnforcementObserve)},
 		{"common.schema.json#/$defs/authorizationDetail/properties/type", []string{v0.AuthorizationDetailType}},
 		{"common.schema.json#/$defs/apiVersion", []string{v0.APIVersion}},
 		{"common.schema.json#/$defs/subjectId/properties/format", []string{v0.SubjectIDFormat}},

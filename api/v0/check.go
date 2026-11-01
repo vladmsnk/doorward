@@ -106,18 +106,43 @@ func (d Decision) Check() error {
 			failed = append(failed, c.Name)
 		}
 	}
+	// In observe mode the mandate's own rules (subset, limits) may fail
+	// without stopping the call; the record then says what enforcement
+	// would have answered.
+	observed := d.Observed != nil
+	if observed && d.Enforcement != EnforcementObserve {
+		p.add("observed is recorded only in observe mode")
+	}
+	relaxed := func(n CheckName) bool { return observed && (n == CheckSubset || n == CheckLimits) }
 	switch d.Outcome {
 	case OutcomeAllow:
-		if len(failed) > 0 {
-			p.add("an allowed call cannot have failed checks %v", failed)
+		for _, f := range failed {
+			if !relaxed(f) {
+				p.add("an allowed call cannot have failed check %s", f)
+			}
+		}
+		if observed && len(failed) == 0 {
+			p.add("observed names a refusal, but no check failed")
 		}
 	case OutcomeDeny:
 		if len(failed) == 0 {
 			p.add("a denied call must have a failed check")
 		}
+		if observed {
+			p.add("a denied call was refused; there is nothing observed to record")
+		}
 	case OutcomeApprovalRequired:
-		if !slices.Equal(failed, []CheckName{CheckSensitivity}) {
+		var rest []CheckName
+		for _, f := range failed {
+			if f != CheckSensitivity && !relaxed(f) {
+				rest = append(rest, f)
+			}
+		}
+		if !slices.Contains(failed, CheckSensitivity) || len(rest) > 0 {
 			p.add("a held call fails the sensitivity check and nothing else, not %v", failed)
+		}
+		if observed && !slices.Contains(failed, CheckSubset) {
+			p.add("observed names a refusal, but no check failed")
 		}
 	}
 	if d.Principal != nil && d.Grant != nil {

@@ -163,9 +163,10 @@ const (
 
 // Values the edits below put into documents.
 var (
-	alice    = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7"}
-	bob      = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u5b0bR7tLm2Qa"}
-	someKeys = map[string]any{"keys": []any{map[string]any{"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}}}
+	observedDeny = map[string]any{"outcome": "deny", "reasons": []any{map[string]any{"code": "constraint_violated", "field": "/amount"}}}
+	alice        = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u8a1iceQ2xYz7"}
+	bob          = map[string]any{"format": "iss_sub", "iss": "https://login.example.com", "sub": "00u5b0bR7tLm2Qa"}
+	someKeys     = map[string]any{"keys": []any{map[string]any{"kty": "EC", "crv": "P-256", "x": "x", "y": "y"}}}
 )
 
 func TestInvalidDocuments(t *testing.T) {
@@ -356,7 +357,11 @@ func TestRuleChecks(t *testing.T) {
 		{"consent revoked before it was given", consent, schema.Consent, []edit{{set: "/status", value: "revoked"}, {set: "/revoked_by", value: "user"}, {set: "/revoked_at", value: "2026-10-30T09:00:00.000Z"}}, "revoked_at must lie between"},
 		{"signed in after consenting", consent, schema.Consent, []edit{{set: "/auth/auth_time", value: "2026-10-30T09:30:00.000Z"}}, "cannot sign in after consenting"},
 
-		{"allow with a failed check", allow, schema.Decision, []edit{{set: "/checks/1/result", value: "fail"}}, "cannot have failed checks"},
+		{"allow with a failed check", allow, schema.Decision, []edit{{set: "/checks/1/result", value: "fail"}}, "cannot have failed check signature"},
+		{"observed outside observe mode", allow, schema.Decision, []edit{{set: "/checks/6/result", value: "fail"}, {set: "/observed", value: observedDeny}}, "only in observe mode"},
+		{"allow with a failed subset, not observed", allow, schema.Decision, []edit{{set: "/checks/6/result", value: "fail"}, {set: "/enforcement", value: "observe"}}, "cannot have failed check subset"},
+		{"observe mode cannot excuse a forged grant", allow, schema.Decision, []edit{{set: "/checks/1/result", value: "fail"}, {set: "/enforcement", value: "observe"}, {set: "/observed", value: observedDeny}}, "cannot have failed check signature"},
+		{"a denied call with something observed", deny, schema.Decision, []edit{{set: "/enforcement", value: "observe"}, {set: "/observed", value: observedDeny}}, "nothing observed"},
 		{"deny with nothing failed", deny, schema.Decision, []edit{{set: "/checks/6/result", value: "pass"}}, "must have a failed check"},
 		{"hold for another reason", hold, schema.Decision, []edit{{set: "/checks/6/result", value: "fail"}}, "fails the sensitivity check and nothing else"},
 		{"check listed twice", allow, schema.Decision, []edit{{set: "/checks/1/name", value: "request"}}, `check "request" is listed twice`},
@@ -624,5 +629,19 @@ func TestDecisionsNameTheirVersions(t *testing.T) {
 		if want := byMandate[d.Grant.Mandate]; d.Versions == nil || *d.Versions != want {
 			t.Errorf("%s names versions %+v; the example documents are %+v", rel, d.Versions, want)
 		}
+	}
+}
+
+// An allowed call in observe mode may show the mandate's own checks failed,
+// with what enforcement would have answered.
+func TestObservedAllowIsValid(t *testing.T) {
+	v := newValidator(t)
+	doc := applyEdits(t, example(t, allow, schema.Decision), []edit{
+		{set: "/checks/6/result", value: "fail"},
+		{set: "/enforcement", value: "observe"},
+		{set: "/observed", value: observedDeny},
+	})
+	if err := v.Check(schema.Decision, doc); err != nil {
+		t.Fatalf("an observed allow is valid: %v", err)
 	}
 }

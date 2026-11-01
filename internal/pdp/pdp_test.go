@@ -499,3 +499,116 @@ func BenchmarkEvaluateParallel(b *testing.B) {
 		}
 	})
 }
+
+// putDoc stores a new version of a configuration document, changed by edit.
+// It writes to the store directly: the Admin API's rules are tested on
+// their own.
+func (b *box) putDoc(kind, name string, edit func(spec map[string]any)) {
+	b.t.Helper()
+	ctx := context.Background()
+	cur, err := b.st.Documents().Current(ctx, kind, name)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(cur.Doc, &doc); err != nil {
+		b.t.Fatal(err)
+	}
+	edit(doc["spec"].(map[string]any))
+	data, _ := json.Marshal(doc)
+	if _, err := b.st.Documents().Put(ctx, kind, name, data, "test"); err != nil {
+		b.t.Fatal(err)
+	}
+}
+
+// B6: observe mode lets the mandate's own rules be tried without stopping
+// calls, and enforces everything else.
+func TestObserveMode(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	b.putDoc(v0.KindMandate, "invoices", func(spec map[string]any) { spec["enforcement"] = "observe" })
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_observed_0000001", nil, func(g *v0.Grant) {
+		for i := range g.Limits {
+			if g.Limits[i].Name == "calls" {
+				g.Limits[i].Max = 2
+			}
+		}
+	})
+	observedReason := func(a answer) v0.ReasonCode {
+		if a.resp.Context.Observed == nil {
+			return ""
+		}
+		return a.resp.Context.Observed.Reasons[0].Code
+	}
+
+	// An operation the grant does not name runs, and the record says
+	// enforcement would have refused it.
+	a := b.ask(alice, pepToken, payments, "refund_payment", map[string]any{"payment_id": "pmt_1", "amount": 10.0}, nil)
+	if !a.resp.Decision || a.resp.Context.Enforcement != v0.EnforcementObserve || observedReason(a) != v0.ReasonActionNotGranted {
+		t.Fatalf("observed refund: %s", a.raw)
+	}
+	if got := checks(b.record(a.resp.Context.ID)); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:fail sensitivity:pass policy:skip limits:pass" {
+		t.Errorf("observed refund checks: %s", got)
+	}
+
+	// Over the budget: the call runs, the full budget stays at its max.
+	b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil)
+	a = b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil)
+	if !a.resp.Decision || observedReason(a) != v0.ReasonLimitExceeded {
+		t.Fatalf("observed over budget: %s", a.raw)
+	}
+	if v, _ := b.st.Counters().Consumed(ctx, "grant:grt_alice_observed_0000001:calls"); v != "2" {
+		t.Errorf("the calls budget holds %s, want its max of 2", v)
+	}
+
+	// Critical calls still wait for a person, observed or not; an amount
+	// over the grant is noted as well.
+	a = b.ask(alice, pepToken, payments, "pay_invoice", pay(1200), nil)
+	if a.resp.Context.Outcome != v0.OutcomeApprovalRequired || a.resp.Context.Observed != nil {
+		t.Errorf("observed 1,200 EUR: %s", a.raw)
+	}
+	a = b.ask(alice, pepToken, payments, "pay_invoice", pay(7500), nil)
+	if a.resp.Context.Outcome != v0.OutcomeApprovalRequired || observedReason(a) != v0.ReasonConstraintViolated {
+		t.Errorf("observed 7,500 EUR: %s", a.raw)
+	}
+
+	// What observe mode never lets through: an operation the manifest does
+	// not declare, a call without a valid grant, a tier above the agent's
+	// ceiling.
+	a = b.ask(alice, pepToken, payments, "delete_everything", nil, nil)
+	if a.resp.Decision || a.resp.Context.Reasons[0].Code != v0.ReasonActionNotGranted || a.resp.Context.Observed != nil {
+		t.Errorf("undeclared operation: %s", a.raw)
+	}
+	if a := b.ask("", pepToken, payments, "get_invoice", nil, nil); a.resp.Decision {
+		t.Errorf("no grant: %s", a.raw)
+	}
+	b.putDoc(v0.KindAgent, "invoice-assistant", func(spec map[string]any) { spec["max_sensitivity"] = "read" })
+	a = b.ask(alice, pepToken, payments, "refund_payment", map[string]any{"payment_id": "pmt_1", "amount": 10.0}, nil)
+	if a.resp.Decision || a.resp.Context.Reasons[0].Code != v0.ReasonSensitivityExceeded {
+		t.Errorf("above the agent's ceiling: %s", a.raw)
+	}
+
+	// Observe mode on the agent: the reconciler writes off more than its
+	// grant allows, and it runs.
+	b.putDoc(v0.KindAgent, "reconciler", func(spec map[string]any) { spec["enforcement"] = "observe" })
+	rec := b.mint("grant/reconcile.json", "grt_reconciler_observed_01", nil)
+	a = b.ask(rec, pepToken, ledger, "post_entry", map[string]any{"account_id": "acc_1", "amount": 5000.0, "memo": "m"}, nil)
+	if !a.resp.Decision || observedReason(a) != v0.ReasonConstraintViolated {
+		t.Errorf("observed reconciler: %s", a.raw)
+	}
+
+	// Every record is valid under the contract.
+	all, err := b.st.Decisions().Range(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range all {
+		doc, _ := json.Marshal(d)
+		if _, err := schema.Decode[v0.Decision](b.v, doc); err != nil {
+			t.Errorf("record %s (%s): %v", d.ID, d.Outcome, err)
+		}
+	}
+	if broken, err := v0.Verify(all); broken != -1 || err != nil {
+		t.Errorf("chain broken at %d: %v", broken, err)
+	}
+}

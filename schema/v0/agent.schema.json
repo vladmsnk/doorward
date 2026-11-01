@@ -57,6 +57,7 @@
           "items": { "$ref": "common.schema.json#/$defs/permission" },
           "minItems": 1
         },
+        "enforcement": { "$ref": "common.schema.json#/$defs/enforcement" },
         "limits": {
           "description": "Ceilings: a mandate's limit with the same name is capped at this max.",
           "type": "array",
