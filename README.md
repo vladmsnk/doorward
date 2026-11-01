@@ -42,10 +42,11 @@ tools. Doorward is that control point:
 | Verifiable journal: RFC 8785 canonical JSON, SHA-256 hash chain, JSON Lines export, OpenTelemetry spans, a verifier that shares no code with Doorward | ✅ available |
 | Agent registry: unverified, verified, suspended; owners; suspending an agent revokes its grants | ✅ available |
 | Grants as RFC 9068 JWT access tokens with RFC 9396 `authorization_details`; ES256 keys, JWK Set, rotation | ✅ available |
-| Upstream credentials sealed with AES-256-GCM; the agent never sees them | ✅ storage · 🚧 injection at the gateway |
+| Upstream credentials sealed with AES-256-GCM, added by the gateway; the agent never sees them | ✅ available |
 | Versioned configuration through an Admin API; every change checked against the whole configuration | ✅ available |
 | Observe mode: try a mandate or an agent without enforcing its rules; each record says what enforcement would have refused | ✅ available |
-| MCP gateway; OAuth authorization server (RFC 9728, RFC 8414, Client ID Metadata Documents); consent page | 🚧 next |
+| Thin MCP gateway (Streamable HTTP, 2025-11-25): one address per server, the tool list filtered to the grant, every `tools/call` decided, refusals and holds answered as tool errors with their reason | ✅ available |
+| OAuth authorization server (RFC 9728, RFC 8414, Client ID Metadata Documents); consent page | 🚧 next |
 | Kill switch, approval thresholds, notifications, admin sign-in | 📋 planned |
 | Enterprise identity (ID-JAG), per-user upstream OAuth tokens, workload identities, DPoP | 📋 planned |
 
@@ -148,6 +149,10 @@ request for that exact call.
 [`scripts/verify-journal.py`](scripts/verify-journal.py) checks the same
 journal with Python's standard library alone.
 
+To see the same from an MCP client's side, put the gateway in front of the
+demo ledger server and connect with MCP Inspector:
+[docs/gateway.md](docs/gateway.md#trying-it-with-the-demo-ledger).
+
 ## What Doorward does not do
 
 Doorward decides only on calls that pass through it, to tools a company has
@@ -178,7 +183,7 @@ OIDC provider), and not a general policy language.
 | [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON canonicalization | Action hashes and journal hash chain | ✅ |
 | [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638) JWK thumbprint | Signing key IDs in the JWK Set | ✅ |
 | [W3C Trace Context](https://www.w3.org/TR/trace-context/), OpenTelemetry | Trace ID in every record; a span per decision | ✅ |
-| [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) (2026-07-28) | Gateway and authorization server for MCP clients | 🚧 |
+| [MCP](https://modelcontextprotocol.io/specification/2025-11-25) Streamable HTTP and authorization (2025-11-25) | Gateway: transport, Bearer grants, audience, 401 challenge, 403 `insufficient_scope`; authorization server | ✅ gateway · 🚧 discovery, authorization server |
 | [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707), [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207), OAuth 2.1, Client ID Metadata Documents | Discovery, audience binding, client registration | 🚧 |
 | [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) token exchange, RFC 7523, ID-JAG | Workload agents and enterprise identity | 📋 |
 | [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) DPoP | Proof of possession, per agent or mandate | 📋 |
@@ -187,11 +192,13 @@ OIDC provider), and not a general policy language.
 
 ### How do I add authorization to an MCP server?
 
-Put Doorward in front of it. Its gateway will publish the protected resource
-metadata MCP clients look for, send users through OAuth and a consent page,
-and check every `tools/call` against the agent's grant. The decision core
-behind it works today; the gateway and authorization server are the next
-step on the [roadmap](docs/ROADMAP.md).
+Put Doorward in front of it. Its [gateway](docs/gateway.md) serves the
+server at `/mcp/{name}`, requires a grant, shows each client only the tools
+its grant allows and checks every `tools/call`, answering refusals and holds
+inside the protocol. It works today with grants minted from the command
+line; the protected resource metadata, OAuth flow and consent page MCP
+clients need to obtain a grant themselves are the next steps on the
+[roadmap](docs/ROADMAP.md).
 
 ### How is Doorward different from an MCP gateway?
 
@@ -221,9 +228,11 @@ arguments, within which budgets, and which calls a person approves first.
 
 ### Which AI clients will it work with?
 
-Any MCP client that follows the MCP authorization specification (Claude,
-ChatGPT, VS Code, Cursor, Claude Code), once the gateway and authorization
-server land. Agents you deploy yourself will authenticate with workload
+Any MCP client that speaks Streamable HTTP can connect to the gateway with
+a grant today (MCP Inspector does, in [docs/gateway.md](docs/gateway.md)).
+Clients that follow the MCP authorization specification (Claude, ChatGPT,
+VS Code, Cursor, Claude Code) will obtain their grants themselves once the
+authorization server lands. Agents you deploy yourself will authenticate with workload
 tokens, such as Kubernetes service-account tokens.
 
 ### Is Doorward production-ready?
@@ -243,6 +252,7 @@ measurements are in [docs/decision-point.md](docs/decision-point.md).
 
 - [Concepts](docs/concepts.md): the seven documents, how an agent gets authority, conventions
 - [Grants and the decision point](docs/decision-point.md): checks, refusal codes, the evaluation API, the journal
+- [The MCP gateway](docs/gateway.md): addresses, what happens to each message, trying it with the demo ledger
 - [Operating Doorward](docs/operations.md): Admin API, keys and secrets, storage, verifying a release
 - [Roadmap](docs/ROADMAP.md): what is built next, in order, and why
 - [Examples](examples/v0): every document, telling both stories (a user's assistant and a nightly service agent)

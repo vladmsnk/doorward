@@ -135,7 +135,9 @@ refused: limit_exceeded: budget payout-month has 1000 left this month; the call 
 `POST /access/v1/evaluation` on the public listener answers one call in the
 AuthZEN 1.0 shape. The point of enforcement (a gateway) authenticates with
 its own token, configured with `--pep ID=TOKEN` (or `DOORWARD_PEPS`), and
-sends the agent's grant in `context.token`:
+sends the agent's grant in `context.token`. The built-in
+[MCP gateway](gateway.md) asks the same question in process, and its
+records name it as the point of enforcement:
 
 ```sh
 curl -sS -X POST localhost:8080/access/v1/evaluation \

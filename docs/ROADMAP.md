@@ -68,9 +68,10 @@ vocabulary:
 | B6 | observe mode | done |
 | Q1–Q6 | durability: deadlines, a complete journal file, one approval per call, sampled logs and a shutdown delay, configuration read once per change, batched settlement | done |
 | P1–P7 | fail-open paths from the first review closed, each with a negative test | done |
+| C1 | thin MCP gateway: Streamable HTTP (2025-11-25), tool list filtered to the grant, every call decided, refusals and holds as tool errors, upstream credential from the secret store; demo ledger server | done |
 | | commits authored and signed off by a person, checked in CI | done |
 
-**Phases B and Q are complete. Next: C1, the thin MCP gateway.**
+**Phases B and Q are complete; C1 is done. Next: C2, manifests drafted from `tools/list`.**
 
 ## The build order at a glance
 
@@ -129,7 +130,7 @@ change would be a new record version.
 
 | # | Step | What it adds | Class | How you validate |
 |---|---|---|---|---|
-| C1 | **Thin MCP gateway** | A Streamable HTTP endpoint per manifest. It requires a Bearer grant, checks the audience, never passes the client's token on, adds the upstream credential from the secret store, filters `tools/list` to the grant, and sends each `tools/call` to the core in process. A refusal comes back as a tool error with its reason. A demo invoices MCP server is included. | T | With a minted grant in MCP Inspector: only granted tools are listed; 7,500 EUR is refused with "7500 is above the grant's max of 5000"; the demo server's log shows the upstream key, never the grant. |
+| C1 | **Thin MCP gateway** (done) | A Streamable HTTP endpoint per manifest. It requires a Bearer grant, checks the audience, never passes the client's token on, adds the upstream credential from the secret store, filters `tools/list` to the grant, and sends each `tools/call` to the core in process. A refusal comes back as a tool error with its reason; a held call names its approval request. A demo ledger MCP server is included. | T | With a minted grant in MCP Inspector: only the granted tools are listed; a 5,000 entry is refused with "5000 is above the grant's max of 1000"; a write-off is held with its approval request; the demo server's log shows the upstream key, never the grant. |
 | C2 | **Manifests from `tools/list`, with default tiers** | `doorward import mcp URL` drafts a manifest from a server's tools: parameters from each `inputSchema`; `readOnlyHint` gives read, `destructiveHint` gives critical, everything else write. The hints are treated as untrusted suggestions: the draft is a diff an administrator applies. A "reads pass, writes ask" mandate template. | G | Import the demo server: the draft shows its tools with tiers; apply it; a tool without hints comes out as write, never read. |
 | C3 | **Protected resource metadata** | RFC 9728 metadata per audience: the box as authorization server, the mandates as `scopes_supported`, proof of possession not required. A 401 points to it; a call that needs another mandate gets 403 `insufficient_scope` naming it, so the client asks the user. | T | `curl` without a token: 401 with the pointer; follow it. |
 | C4 | **Authorization server metadata and login** | RFC 8414 metadata, PKCE S256 only, the RFC 9207 `iss` parameter, and sign-in through an upstream OIDC provider (Dex in the quick start), with the user's groups. | T | `curl` the metadata; sign in as alice through Dex. |
