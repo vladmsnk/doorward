@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
@@ -60,6 +61,28 @@ func (s *Snapshot) ManifestFor(location string) (Manifest, bool, error) {
 		}
 	}
 	return m, ok, nil
+}
+
+// ManifestByName returns an enabled manifest by its name.
+func (s *Snapshot) ManifestByName(name string) (Manifest, bool) {
+	for _, m := range s.manifests {
+		if m.Metadata.Name == name {
+			return m, true
+		}
+	}
+	return Manifest{}, false
+}
+
+// MandatesWhere names the enabled mandates keep selects, sorted.
+func (s *Snapshot) MandatesWhere(keep func(v0.Mandate) bool) []string {
+	var out []string
+	for name, m := range s.mandates {
+		if !m.Disabled && keep(m.Mandate) {
+			out = append(out, name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // Mandate returns a mandate by name; store.ErrNotFound when there is none.

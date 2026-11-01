@@ -20,6 +20,7 @@ import (
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
 	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/keys"
@@ -48,6 +49,8 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	adminToken := fs.String("admin-token", os.Getenv("DOORWARD_ADMIN_TOKEN"), "bootstrap administrator token (or DOORWARD_ADMIN_TOKEN)")
 	issuer := fs.String("issuer", os.Getenv("DOORWARD_ISSUER"), "the only grant issuer accepted (or DOORWARD_ISSUER); default: any grant this box signed")
 	pdpID := fs.String("pdp-id", "doorward", "this decision point's name in decision records")
+	gatewayID := fs.String("gateway-id", "gateway", "the built-in MCP gateway's name in decision records")
+	gatewayOrigins := fs.String("gateway-origins", os.Getenv("DOORWARD_GATEWAY_ORIGINS"), "browser origins allowed to reach the MCP gateway besides its own host, comma-separated (or DOORWARD_GATEWAY_ORIGINS)")
 	shutdownDelay := fs.Duration("shutdown-delay", 0, "on SIGTERM, keep serving for this long while /healthz reports 503, so a load balancer stops sending before the listeners close; 5s is usual behind one")
 	decisionTimeout := fs.Duration("decision-timeout", pdp.DefaultTimeout, "how long one decision may take, the wait for the journal included; a decision that runs out of time is refused and nothing is recorded")
 	journalPath := fs.String("journal", os.Getenv("DOORWARD_JOURNAL"), `file that receives every decision record as one JSON line, "-" for standard output (or DOORWARD_JOURNAL)`)
@@ -209,6 +212,11 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		decisions.Journal = follower
 	}
 	public.Handle("POST "+pdp.EvaluationPath, decisions.Handler(peps))
+	mcp := &gateway.Gateway{
+		Config: cfg, PDP: decisions, Verifier: decisions.Verifier, Secrets: st.Secrets(), Sealer: sl,
+		ID: *gatewayID, Log: log, Origins: splitList(*gatewayOrigins),
+	}
+	public.Handle(gateway.Prefix, mcp.Handler())
 
 	adminMux := http.NewServeMux()
 	adminMux.HandleFunc("GET /healthz", healthz)
@@ -259,6 +267,16 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	return 0
+}
+
+func splitList(s string) []string {
+	var out []string
+	for _, v := range strings.Split(s, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
 }
 
 // parsePEP reads a point of enforcement as ID=TOKEN.
