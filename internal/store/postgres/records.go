@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -195,19 +192,34 @@ func (s decisions) Append(ctx context.Context, d v0.Decision) (v0.Decision, erro
 
 // appendTx appends d as the next link, under the chain lock, inside tx.
 func appendTx(ctx context.Context, tx pgx.Tx, d v0.Decision) (v0.Decision, error) {
-	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ChainLock); err != nil {
+	prev, err := lockChain(ctx, tx)
+	if err != nil {
 		return d, err
 	}
-	var prev *v0.Decision
+	return linkAndInsert(ctx, tx, d, prev)
+}
+
+// lockChain takes the chain lock for tx and returns the head record, nil
+// on an empty journal.
+func lockChain(ctx context.Context, tx pgx.Tx) (*v0.Decision, error) {
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", ChainLock); err != nil {
+		return nil, err
+	}
 	var head v0.Decision
 	err := scanJSON(tx.QueryRow(ctx, "SELECT doc FROM decisions ORDER BY seq DESC LIMIT 1"), &head)
 	switch {
 	case err == nil:
-		prev = &head
+		return &head, nil
 	case errors.Is(err, store.ErrNotFound):
+		return nil, nil
 	default:
-		return d, err
+		return nil, err
 	}
+}
+
+// linkAndInsert chains d after prev and stores it. The caller holds the
+// chain lock.
+func linkAndInsert(ctx context.Context, tx pgx.Tx, d v0.Decision, prev *v0.Decision) (v0.Decision, error) {
 	linked, err := v0.Link(d, prev)
 	if err != nil {
 		return d, err
@@ -350,17 +362,6 @@ func (s counters) Consumed(ctx context.Context, key string) (string, error) {
 	return v, err
 }
 
-// drawSQL takes amount from the budget at key if the result stays within
-// max, in one statement: a new counter is created only if the amount fits
-// at all, and an existing one is updated only if the sum fits. Nothing is
-// written and no row comes back otherwise. Amounts are numeric, exact.
-const drawSQL = `
-	INSERT INTO counters AS c (key, consumed)
-	SELECT $1, $2::numeric WHERE $2::numeric <= $3::numeric
-	ON CONFLICT (key) DO UPDATE SET consumed = c.consumed + EXCLUDED.consumed
-	WHERE c.consumed + EXCLUDED.consumed <= $3::numeric
-	RETURNING trim_scale($3::numeric - c.consumed)::text`
-
 // Allow spends a call's single-use grant and draws its budgets in one
 // transaction.
 func (s *Store) Allow(ctx context.Context, a store.Allowance) ([]store.Drawn, error) {
@@ -375,101 +376,31 @@ func (s *Store) Allow(ctx context.Context, a store.Allowance) ([]store.Drawn, er
 	return out, nil
 }
 
-// Settle spends an allowance and appends the resulting decision in one
-// transaction. The spending runs in a savepoint, so a refused draw is
-// undone while its refusal is still recorded.
+// Settle hands the settlement to the store's writer, which groups
+// settlements arriving together into one transaction (see settle.go), and
+// waits for the outcome. A caller whose context ends before its turn gets
+// ErrTimeout and nothing is done for it; once its turn has started, the
+// outcome is reported whatever happens to the context.
 func (s *Store) Settle(ctx context.Context, a *store.Allowance, decide func([]store.Drawn, error) (v0.Decision, error)) (v0.Decision, error) {
-	var out v0.Decision
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return out, mapErr(err)
-	}
-	// Once the work is done, the commit is seen through even if the
-	// caller's deadline passes meanwhile: an answer that is committed is
-	// an answer that is reported, never one left ambiguous.
-	after := context.WithoutCancel(ctx)
-	work := func() error {
-		if err := deadlineSQL(ctx, tx); err != nil {
-			return err
-		}
-		var drawn []store.Drawn
-		var refused error
-		if a != nil {
-			err := pgx.BeginFunc(ctx, tx, func(sp pgx.Tx) (err error) {
-				drawn, err = allowTx(ctx, sp, *a)
-				return err
-			})
-			switch {
-			case err == nil:
-			case errors.Is(err, store.ErrExhausted), errors.Is(err, store.ErrState):
-				refused, drawn = err, nil
-			default:
-				return err
-			}
-		}
-		d, err := decide(drawn, refused)
-		if err != nil {
-			return err
-		}
-		out, err = appendTx(ctx, tx, d)
-		return err
-	}
-	if err := work(); err != nil {
-		rbCtx, cancel := context.WithTimeout(after, 5*time.Second)
-		defer cancel()
-		_ = tx.Rollback(rbCtx)
-		return out, mapErr(err)
-	}
-	commitCtx, cancel := context.WithTimeout(after, 5*time.Second)
-	defer cancel()
-	if err := tx.Commit(commitCtx); err != nil {
-		return out, mapErr(err)
-	}
-	return out, nil
+	return s.settler().settle(ctx, a, decide)
 }
 
-// allowTx draws an allowance inside tx. Budgets are drawn in key order, so
-// two calls drawing the same budgets lock them in the same order and cannot
-// deadlock.
+// allowTx spends one allowance inside tx, all or nothing (or, best effort,
+// every budget that fits): the two statements of spendStatements, read
+// back with readSpend.
 func allowTx(ctx context.Context, tx pgx.Tx, a store.Allowance) ([]store.Drawn, error) {
-	if a.SingleUse != "" {
-		tag, err := tx.Exec(ctx,
-			"UPDATE grants SET used_at = $2 WHERE jti = $1 AND single_use AND used_at IS NULL", a.SingleUse, a.At)
-		if err != nil {
-			return nil, err
-		}
-		if tag.RowsAffected() == 0 {
-			return nil, fmt.Errorf("single-use grant %s: already spent or not single-use: %w", a.SingleUse, store.ErrState)
-		}
+	var b pgx.Batch
+	queueSpend(&b, a)
+	br := tx.SendBatch(ctx, &b)
+	defer func() { _ = br.Close() }()
+	if _, err := br.Exec(); err != nil {
+		return nil, err
 	}
-	draws := slices.Clone(a.Draws)
-	slices.SortFunc(draws, func(x, y store.Draw) int { return strings.Compare(x.Key, y.Key) })
-	result := make(map[string]store.Drawn, len(draws))
-	for _, d := range draws {
-		var left string
-		err := tx.QueryRow(ctx, drawSQL, d.Key, d.Amount, d.Max).Scan(&left)
-		if errors.Is(err, pgx.ErrNoRows) {
-			if err := tx.QueryRow(ctx,
-				"SELECT trim_scale($2::numeric - coalesce((SELECT consumed FROM counters WHERE key = $1), 0))::text", d.Key, d.Max,
-			).Scan(&left); err != nil {
-				return nil, err
-			}
-			if !a.BestEffort {
-				return nil, &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: left}
-			}
-			result[d.Key] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: left, Exhausted: true}
-			continue
-		}
-		if err != nil {
-			return nil, err
-		}
-		result[d.Key] = store.Drawn{Key: d.Key, Amount: d.Amount, Remaining: left}
+	rows, err := br.Query()
+	if err != nil {
+		return nil, err
 	}
-	out := make([]store.Drawn, len(a.Draws))
-	for i, d := range a.Draws {
-		out[i] = result[d.Key]
-	}
-	return out, nil
+	return readSpend(rows, a)
 }
 
 // ---------------------------------------------------------------- helpers

@@ -232,10 +232,12 @@ No. There is no tagged release yet, and the v0 contract may still change.
 
 ### How fast is a decision?
 
-About 5.5 ms for one allowed decision (HTTP, all checks, a budget drawn, the
-record appended) against a local PostgreSQL, and about 470 decisions a
-second from sixteen concurrent callers. Appends to the journal are
-serialized.
+About 5 ms for one caller against a local PostgreSQL, including the HTTP
+round trip, both sets of checks, the budget draw and the record. Decisions
+that arrive together are settled in one transaction, so sixteen concurrent
+callers get about 800 decisions a second and 256 about 1,300 on a shared
+4-core machine; every record still joins one chain. Details and the
+measurements are in [docs/decision-point.md](docs/decision-point.md).
 
 ## Documentation
 

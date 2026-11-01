@@ -237,7 +237,21 @@ without `chain.hash`, and covers the previous record's hash.
   caller's trace, carrying the decision's ID, outcome, agent, mandate and
   reason.
 
-One allowed decision (HTTP, both sets of checks, a budget drawn, the record
-appended) takes about 5.5 ms against a local PostgreSQL, and sixteen
-concurrent callers get about 470 decisions a second; appends to the chain
-are serialized.
+### How decisions are written
+
+Every record joins one chain, so appends are serialized by one lock. One
+transaction per decision made that lock, with its commit to disk, the
+ceiling: about 550 decisions a second on a small machine, whatever the
+concurrency. Instead, a writer per instance takes the settlements that
+arrived while the previous batch was committing (up to 64) and settles
+them in one transaction: one lock, one read of the head, every allowance
+in one pipelined round trip, every record in another, one commit. A lone
+decision goes at once; batches grow with the arrival rate. Each allowance
+is one SQL statement that locks its budget rows in key order, checks that
+everything fits and writes all of it or nothing, so no item leaves partial
+state whatever happens to the others.
+
+On a shared 4-core machine with a local PostgreSQL, one caller sees about
+5 ms per decision; 16 concurrent callers get about 800 decisions a second
+at 20 ms median, 64 about 1,100 at 57 ms, and 256 about 1,300 at 200 ms.
+Several instances share the one chain and the same ceiling.

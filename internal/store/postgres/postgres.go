@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,9 @@ import (
 // Store is a store.Store on a connection pool.
 type Store struct {
 	pool *pgxpool.Pool
+
+	settleOnce sync.Once
+	writer     *settler
 }
 
 var _ store.Store = (*Store)(nil)
@@ -88,6 +92,9 @@ type db interface {
 }
 
 func (s *Store) Close() error {
+	if s.writer != nil {
+		s.writer.close()
+	}
 	s.pool.Close()
 	return nil
 }

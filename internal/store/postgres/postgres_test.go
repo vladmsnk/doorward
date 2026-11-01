@@ -722,3 +722,88 @@ func TestConfigVersionBumps(t *testing.T) {
 		t.Error("a read bumped the version")
 	}
 }
+
+// Q6: settlements arriving together share one transaction, each in its own
+// savepoint: every outcome is right, a failing one does not fail the
+// others, and the chain is one unbroken sequence.
+func TestSettleBatches(t *testing.T) {
+	s := open(t)
+	ctx := context.Background()
+	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base.Chain = nil
+	now := time.Now()
+	const n = 200
+	type result struct {
+		i   int
+		d   v0.Decision
+		err error
+	}
+	results := make(chan result, n)
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			var a *store.Allowance
+			switch i % 4 {
+			case 0: // a budget with room
+				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey(fmt.Sprintf("grt_b%d", i), "calls"), Amount: "1", Max: "5"}}, At: now}
+			case 1: // a shared budget of 10, drawn by 50 settlements
+				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey("grt_shared", "calls"), Amount: "1", Max: "10"}}, At: now}
+			case 2: // no allowance
+			case 3: // decide fails: this settlement alone is dropped
+			}
+			d, err := s.Settle(ctx, a, func(drawn []store.Drawn, refused error) (v0.Decision, error) {
+				if i%4 == 3 {
+					return v0.Decision{}, errors.New("decide failed")
+				}
+				rec := base
+				rec.ID = fmt.Sprintf("dec_batch_%020d", i)
+				rec.Outcome = v0.OutcomeAllow
+				if refused != nil {
+					rec.Outcome = v0.OutcomeDeny
+				}
+				return rec, nil
+			})
+			results <- result{i, d, err}
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+	allowed, denied, failed := 0, 0, 0
+	for r := range results {
+		switch {
+		case r.i%4 == 3:
+			if r.err == nil || r.err.Error() != "decide failed" {
+				t.Errorf("settlement %d: %v, want decide failed", r.i, r.err)
+			}
+			failed++
+		case r.err != nil:
+			t.Errorf("settlement %d: %v", r.i, r.err)
+		case r.d.Outcome == v0.OutcomeAllow:
+			allowed++
+		default:
+			denied++
+		}
+	}
+	// 50 with their own budget, 50 without an allowance, 10 of the 50 on
+	// the shared budget: 110 allowed; 40 refused by the shared budget.
+	if allowed != 110 || denied != 40 || failed != 50 {
+		t.Errorf("allowed %d denied %d failed %d, want 110 40 50", allowed, denied, failed)
+	}
+	if v, _ := s.Counters().Consumed(ctx, store.GrantKey("grt_shared", "calls")); v != "10" {
+		t.Errorf("shared budget drew %s, want 10", v)
+	}
+	all, err := s.Decisions().Range(ctx, 0, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if broken, err := v0.Verify(all); len(all) != 150 || broken != -1 || err != nil {
+		t.Errorf("%d records, chain broken at %d: %v", len(all), broken, err)
+	}
+	st := s.Batches()
+	if st.Settlements != 150 || st.Batches >= 150 || st.Largest < 2 {
+		t.Errorf("no batching happened: %+v", st)
+	}
+	t.Logf("%d settlements in %d batches, largest %d", st.Settlements, st.Batches, st.Largest)
+}

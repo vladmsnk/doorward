@@ -66,10 +66,11 @@ vocabulary:
 | B4 | budgets: exact, atomic, drawn last with the single-use grant | done |
 | B5 | AuthZEN evaluation endpoint; journal in RFC 8785, exported and verifiable outside the box; tracing | done |
 | B6 | observe mode | done |
+| Q1–Q6 | durability: deadlines, a complete journal file, one approval per call, sampled logs and a shutdown delay, configuration read once per change, batched settlement | done |
 | P1–P7 | fail-open paths from the first review closed, each with a negative test | done |
 | | commits authored and signed off by a person, checked in CI | done |
 
-**Phase B is complete. Next: C1, the thin MCP gateway.**
+**Phases B and Q are complete. Next: C1, the thin MCP gateway.**
 
 ## The build order at a glance
 
@@ -100,6 +101,29 @@ and records in the pull request what it checked.
 | B4 | **Budgets** | Counters per grant and, under a consent, per day and month, kept in exact decimal minor units and drawn in one atomic statement with no compensating second write. Drawn last, only for a call that is otherwise allowed. | D | 100 parallel calls against a budget of 50: exactly 50 pass. A refused or held call leaves every counter unchanged. 0.1 + 0.2 EUR is exactly 0.30 EUR. |
 | B5 | **Evaluation endpoint and journal** | `POST /access/v1/evaluation` in the AuthZEN 1.0 shape, running B1 to B4 in order. Allowing a call spends its single-use grant and its budget together. Every answer appends a record hashed as RFC 8785 canonical JSON, with the user and the agent, the manifest and mandate version digests and the W3C trace ID. Records are exported as JSON lines and OpenTelemetry. | T, D | `curl` the example requests: the three outcomes, with the example records' checks and reasons. A script outside the box verifies the chain from the exported lines. A benchmark reports the time per decision. |
 | B6 | **Observe mode** | `enforcement: observe` on an agent or a mandate: the mandate's own rules (the grant's operations and bounds, its budgets) are recorded but do not stop a call; the grant's validity, the agent's ceiling, approval of critical operations and undeclared operations stay enforced. Records and answers carry what enforcement would have refused. | — | An over-limit call in observe mode passes, and its record says it would have been denied with `constraint_violated`; a critical call is still held. |
+
+## Phase Q: durability
+
+A load, outage and deploy test of the finished decision core found six
+things to fix before real traffic. Each step reran the same experiments:
+a concurrency ladder, 500 calls against a budget of 100, 50 uses of one
+single-use grant, 50 attempts of one held call, the database stopped
+under load, the process killed under load, and a rolling restart of two
+instances.
+
+| # | Step | What it fixed | How it was validated |
+|---|---|---|---|
+| Q1 | **Deadlines** | A decision stuck behind the journal lock waited as long as the lock was held, and answers that outlived the HTTP timeout were lost while their records said allow. Every decision now has a deadline (`--decision-timeout`, default 5 s), the lock is taken with a matching lock timeout, and a decision out of time rolls back and answers 503. | The lock held for 20 s under load: every caller refused within 5 s, no answer lost, records and budgets exact. |
+| Q2 | **The journal file** | Written per decision, out of order, with a line lost to a crash and, with several instances, no file holding the whole chain. A follower now copies committed records from the database in order, whichever instance committed them, and resumes after a file's last record. | After kill -9 the file caught up and matched the database; two instances produced identical complete files. |
+| Q3 | **One approval per call** | Two first attempts arriving together could each open a request. A partial unique index refuses the second; the decision point reuses the first. | 50 simultaneous first attempts: one request. |
+| Q4 | **Logs and stopping** | An 8-second outage logged 97,000 lines; SIGTERM refused connections at once. Warnings and errors are sampled per message per second; `--shutdown-delay` keeps serving while health says 503. | The same outage logs 26 lines; health is 503 while decisions still answer for the delay. |
+| Q5 | **Configuration once per change** | Every decision read and decoded every manifest; unknown fields were silently ignored. A version counter bumped by every write lets a decision reuse its snapshot; documents decode strictly, and one this version cannot read fails closed for its calls alone. | A decision costs 3.8 ms instead of 5.2; 300 manifests add 0.2 ms; a disable under load takes effect within the second. |
+| Q6 | **Batched settlement** | One transaction and one disk commit per decision under one lock capped throughput at about 550 a second. A writer settles the decisions that arrive together in one pipelined transaction, each allowance one all-or-nothing statement. | 1,100 decisions a second at 64 callers (57 ms median) and 1,300 at 256, from 544; contention checks still exact; chain and files intact through outage, crash and rolling restart. |
+
+Left for later, on purpose: the journal's growth (about 2.3 KB per
+decision) waits for the retention rules of F3; nothing is lost meanwhile,
+since export exists. The chain's hashing is fixed for v0 records; any
+change would be a new record version.
 
 ## Phase C: the first slice, with the small give-aways
 
