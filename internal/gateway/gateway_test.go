@@ -456,3 +456,57 @@ func TestGateway(t *testing.T) {
 		}
 	}
 }
+
+func TestGatewayHardening(t *testing.T) {
+	b := newBox(t)
+	rec := b.mint("grt_reconciler_000000000001")
+	raw := func(s string) reply { return b.send(http.MethodPost, endpoint, rec, []byte(s), nil) }
+	count := func() int { return len(b.ledger.Requests()) }
+
+	// A message that this gateway and a case-sensitive server would read as
+	// two different calls is refused, not forwarded: here a second "Method"
+	// alongside "method", and a second "Arguments" alongside "arguments".
+	n := count()
+	r := raw(`{"jsonrpc":"2.0","id":1,"method":"tools/call","Method":"ping","params":{"name":"write_off","arguments":{"payment_id":"p","amount":50000,"reason":"x"}}}`)
+	if r.status != 400 || r.msg["error"] == nil {
+		t.Fatalf("ambiguous method: %d %s", r.status, r.body)
+	}
+	r = raw(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"post_entry","arguments":{"account_id":"a","amount":50000},"Arguments":{"account_id":"a","amount":1}}}`)
+	if r.status != 400 || r.msg["error"] == nil {
+		t.Fatalf("ambiguous arguments: %d %s", r.status, r.body)
+	}
+	if count() != n {
+		t.Error("an ambiguous message reached the server")
+	}
+
+	// Methods the manifest cannot describe are refused in the protocol, not
+	// proxied undecided.
+	n = count()
+	for _, m := range []string{"resources/read", "resources/list", "prompts/list", "logging/setLevel", "sampling/createMessage"} {
+		r := b.rpc(rec, 3, m, map[string]any{"uri": "ledger://export/all"}, nil)
+		errObj, _ := r.msg["error"].(map[string]any)
+		if errObj == nil || errObj["code"].(float64) != -32601 {
+			t.Errorf("%s: want a -32601 error, got %d %s", m, r.status, r.body)
+		}
+	}
+	if count() != n {
+		t.Error("a method the manifest does not describe reached the server")
+	}
+
+	// The client's own headers do not reach the server: the grant, cookies
+	// and anything a server might read as an identity are dropped.
+	r = b.rpc(rec, 4, "tools/call",
+		map[string]any{"name": "post_entry", "arguments": map[string]any{"account_id": "acc_EU_448120", "amount": 240.5}},
+		map[string]string{"X-Forwarded-User": "cfo@example.com", "Cookie": "session=abc", "X-Real-Ip": "10.0.0.9"})
+	if _, _, isErr := r.toolError(); isErr {
+		t.Fatalf("post_entry with extra headers: %s", r.body)
+	}
+	for _, seen := range b.ledger.Requests() {
+		if len(seen.Extra) != 0 {
+			t.Errorf("the server saw client headers it should not: %v", seen.Extra)
+		}
+		if seen.Credential != "api key" {
+			t.Errorf("the server saw credential %q, not the upstream key", seen.Credential)
+		}
+	}
+}

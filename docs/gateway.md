@@ -56,11 +56,36 @@ other message is handled by what it is:
 | `tools/list` | Forwarded; the server's list is filtered to the tools the grant allows and the manifest declares, in plain JSON or inside the event stream. A tool the server offers but no manifest declares is never shown. |
 | `initialize`, `ping`, notifications, responses, resources, prompts, `GET` (listening stream), `DELETE` (session end) | Forwarded unchanged once the grant verifies. Session IDs and protocol versions are the server's. |
 
-The gateway never passes the agent's grant upstream: `Authorization` and
-`Cookie` are stripped and the upstream credential is set in their place.
+The gateway never passes the agent's grant upstream, and it forwards only
+the headers the MCP transport defines (`MCP-Protocol-Version`, the
+`Mcp-*` request-metadata headers) and the tracing headers (`traceparent`,
+`tracestate`, `baggage`). Everything else the client sent, including its
+`Authorization`, any `Cookie`, and anything a server might mistake for an
+identity such as an `X-Forwarded-*` header, is dropped; the upstream
+credential is set in its place.
+
 It takes one JSON-RPC message per request, as the 2025-11-25 transport
 requires; a batch is refused with `-32600`. A request whose `Origin` is
 neither the gateway's own host nor one of `--gateway-origins` gets `403`.
+
+## Reading the message the same way the server does
+
+The gateway decides on its own reading of a message and then forwards the
+message to the server. If the two could read it differently, an agent could
+get one call decided and another one run. Go's JSON decoder matches member
+names without regard to case and keeps the last of any duplicates, so a
+message carrying both `method` and `Method`, or both `arguments` and
+`Arguments`, reads one way here and another at a case-sensitive server. The
+gateway refuses any message in which an object has two member names equal
+ignoring case, at any depth, with `-32600`, so the two readings cannot
+diverge.
+
+For the same reason the gateway decides only on what the manifest
+describes, which is tools. It passes through the protocol's own lifecycle
+(`initialize`, `ping`, `notifications/*`, and a client's response to a
+server-initiated request) once the grant verifies, and refuses every other
+method, `resources/*`, `prompts/*`, `logging/*`, `sampling/*` and the rest,
+with `-32601` rather than forward it undecided.
 
 Results the gateway writes itself carry the decision under `_meta`, under
 the key `dev.doorward/decision`:
@@ -131,3 +156,13 @@ the 401 (C3), the authorization server and consent page themselves (C4,
 C6), and the approval page a held call waits on (C7, C8) follow on the
 [roadmap](ROADMAP.md). `doorward import mcp` (C2) will draft a manifest
 from a server's `tools/list`.
+
+Two hardening steps also wait on later work. The `Origin` check still
+trusts the request's `Host` header, so a browser request whose `Host` and
+`Origin` both carry an attacker's name passes it; every request still needs
+a valid grant, which a cross-site page cannot obtain, and C3 adds the
+gateway's own public URL to check against. And the gateway does not yet tie
+a server's MCP session to the grant that opened it, so a server that keys
+state on its session ID alone, rather than on the per-call decision, leaves
+that state reachable by another grant that learns the ID; MCP removes
+protocol-level sessions in revision 2026-07-28.

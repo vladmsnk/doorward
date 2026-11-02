@@ -223,14 +223,18 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	api := &admin.Server{Store: st, Validator: v, Token: *adminToken, Sealer: sl, Keys: km, Log: log}
 	adminMux.Handle("/admin/", api.Handler())
 
-	newServer := func(addr string, h http.Handler) *http.Server {
+	newServer := func(addr string, h http.Handler, writeTimeout time.Duration) *http.Server {
 		return &http.Server{
 			Addr: addr, Handler: h,
 			ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
-			WriteTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
+			WriteTimeout: writeTimeout, IdleTimeout: 2 * time.Minute,
 		}
 	}
-	servers := []*http.Server{newServer(*addr, public), newServer(*adminAddr, adminMux)}
+	// The public listener carries the gateway's event streams, which a
+	// write deadline would cut off mid-call, so it has none; the slow-client
+	// guards that remain are the read and idle timeouts. The admin listener
+	// serves only short request-response calls and keeps a write deadline.
+	servers := []*http.Server{newServer(*addr, public, 0), newServer(*adminAddr, adminMux, 30*time.Second)}
 	errc := make(chan error, len(servers))
 	for _, srv := range servers {
 		go func(srv *http.Server) { errc <- srv.ListenAndServe() }(srv)
