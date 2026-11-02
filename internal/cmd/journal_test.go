@@ -1,37 +1,23 @@
 package cmd
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/schema"
 )
 
 func TestJournalExportAndVerify(t *testing.T) {
 	dsn, _, st := grantEnv(t)
-	ctx := context.Background()
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Three records appended as the decision point would.
 	for i, f := range []string{"1-allow-get-invoice.json", "2-deny-amount-over-grant.json", "3-approval-required-pay-invoice.json"} {
-		data, err := os.ReadFile(filepath.Join("../../examples/v0/decision", f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		d, err := schema.Decode[v0.Decision](v, data)
-		if err != nil {
-			t.Fatal(err)
-		}
+		d := testhelpers.Example[v0.Decision](t, "decision/"+f)
 		d.ID, d.Chain = []string{"dec_journal_test_00000001", "dec_journal_test_00000002", "dec_journal_test_00000003"}[i], nil
-		if _, err := st.Decisions().Append(ctx, d); err != nil {
-			t.Fatal(err)
-		}
+		testhelpers.Record(t, st, d)
 	}
 
 	code, out, stderr := runCLI("journal", "export", "--db", dsn)

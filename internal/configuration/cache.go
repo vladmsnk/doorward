@@ -43,13 +43,6 @@ func (c *Cache) Current(ctx context.Context) (*Snapshot, error) {
 	return snap, nil
 }
 
-// Invalidate drops the cached snapshot; the next Current reloads.
-func (c *Cache) Invalidate() {
-	c.mu.Lock()
-	c.snap = nil
-	c.mu.Unlock()
-}
-
 // load reads every document. The version was read before the documents,
 // so a write that lands in between shows as a newer version next time
 // and the snapshot is reloaded then.

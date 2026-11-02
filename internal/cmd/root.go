@@ -53,6 +53,21 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 	}
 }
 
+// dispatch runs the subcommand args name, or prints usage and returns 2
+// when there is none or it is unknown.
+func dispatch(command, usage string, args []string, stderr io.Writer, subcommands map[string]func([]string) int) int {
+	if len(args) == 0 {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	run, ok := subcommands[args[0]]
+	if !ok {
+		fmt.Fprintf(stderr, "doorward %s: unknown command %q\n\n%s", command, args[0], usage)
+		return 2
+	}
+	return run(args[1:])
+}
+
 // runMasterKey prints a fresh master key for an operator setting up a box.
 func runMasterKey(stdout, stderr io.Writer) int {
 	k, err := sealer.Generate()

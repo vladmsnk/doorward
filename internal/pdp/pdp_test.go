@@ -108,25 +108,8 @@ func newBox(t testing.TB, opts ...option) *box {
 	})
 	st := reg.Persister().(*sql.Persister)
 	v := reg.Validator()
-	for _, f := range []string{"manifest-payments-api.yaml", "manifest-ledger-mcp.yaml", "mandate-invoices.yaml", "mandate-reconcile.yaml",
-		"agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
-		data, err := os.ReadFile(filepath.Join("../../examples/v0/config", f))
-		if err != nil {
-			t.Fatal(err)
-		}
-		src, err := schema.Read(f, data, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		var meta struct {
-			Metadata struct{ Name string } `json:"metadata"`
-		}
-		_ = json.Unmarshal(src[0].JSON, &meta)
-		if _, err := st.Documents().Put(ctx, string(src[0].Kind), meta.Metadata.Name, src[0].JSON, "test"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	consent := load[v0.Consent](t, v, "consent/alice-invoice-assistant.json", schema.Consent)
+	testhelpers.PutExampleConfig(t, st.Documents(), nil)
+	consent := testhelpers.Example[v0.Consent](t, "consent/alice-invoice-assistant.json")
 	if err := st.Consents().Create(ctx, consent); err != nil {
 		t.Fatal(err)
 	}
@@ -143,28 +126,11 @@ func newBox(t testing.TB, opts ...option) *box {
 	return b
 }
 
-func load[T schema.Document](t testing.TB, v *schema.Validator, rel string, kind schema.Kind) T {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("../../examples/v0", rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err := schema.Read(rel, data, kind)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := schema.Decode[T](v, src[0].JSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 // mint issues and records a grant from an example, valid from the box's
 // clock; bound, when set, makes it single-use for that call.
 func (b *box) mint(rel, id string, bound *v0.ApprovedAction, edits ...func(*v0.Grant)) string {
 	b.t.Helper()
-	g := load[v0.Grant](b.t, b.v, rel, schema.Grant)
+	g := testhelpers.Example[v0.Grant](b.t, rel)
 	for _, e := range edits {
 		e(&g)
 	}
@@ -239,14 +205,6 @@ func (b *box) record(id string) v0.Decision {
 	return d
 }
 
-func checks(d v0.Decision) string {
-	var s []string
-	for _, c := range d.Checks {
-		s = append(s, string(c.Name)+":"+string(c.Result))
-	}
-	return strings.Join(s, " ")
-}
-
 func pay(amount float64) map[string]any {
 	return map[string]any{"invoice_id": "inv_7Q2M9X4K", "amount": amount, "currency": "EUR"}
 }
@@ -263,7 +221,7 @@ func TestEvaluate(t *testing.T) {
 		t.Fatalf("read: %d %s", a.status, a.raw)
 	}
 	d := b.record(a.resp.Context.ID)
-	if got := checks(d); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:pass sensitivity:pass policy:skip limits:pass" {
+	if got := testhelpers.Checks(d.Checks); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:pass sensitivity:pass policy:skip limits:pass" {
 		t.Errorf("read checks: %s", got)
 	}
 	if d.TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" || d.Principal.User != "alice@example.com" || d.Grant.Consent != aliceCnsn {
@@ -285,7 +243,7 @@ func TestEvaluate(t *testing.T) {
 	if a.resp.Decision || a.resp.Context.Outcome != v0.OutcomeDeny || a.resp.Context.Reasons[0].Message != "7500 is above the grant's max of 5000" {
 		t.Fatalf("7,500 EUR: %s", a.raw)
 	}
-	if got := checks(b.record(a.resp.Context.ID)); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:fail sensitivity:skip policy:skip limits:skip" {
+	if got := testhelpers.Checks(b.record(a.resp.Context.ID).Checks); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:fail sensitivity:skip policy:skip limits:skip" {
 		t.Errorf("deny checks: %s", got)
 	}
 
@@ -333,7 +291,7 @@ func TestEvaluate(t *testing.T) {
 		t.Errorf("no grant: %s", a.raw)
 	}
 	a = b.ask(alice, pepToken, "payments", "get_invoice", nil, nil)
-	if a.resp.Decision || a.resp.Context.Reasons[0].Code != v0.ReasonRequestMalformed || checks(b.record(a.resp.Context.ID))[:12] != "request:fail" {
+	if a.resp.Decision || a.resp.Context.Reasons[0].Code != v0.ReasonRequestMalformed || testhelpers.Checks(b.record(a.resp.Context.ID).Checks)[:12] != "request:fail" {
 		t.Errorf("malformed: %s", a.raw)
 	}
 
@@ -563,7 +521,7 @@ func TestObserveMode(t *testing.T) {
 	if !a.resp.Decision || a.resp.Context.Enforcement != v0.EnforcementObserve || observedReason(a) != v0.ReasonActionNotGranted {
 		t.Fatalf("observed refund: %s", a.raw)
 	}
-	if got := checks(b.record(a.resp.Context.ID)); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:fail sensitivity:pass policy:skip limits:pass" {
+	if got := testhelpers.Checks(b.record(a.resp.Context.ID).Checks); got != "request:pass signature:pass status:pass pop:skip audience:pass time:pass subset:fail sensitivity:pass policy:skip limits:pass" {
 		t.Errorf("observed refund checks: %s", got)
 	}
 

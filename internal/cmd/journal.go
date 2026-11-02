@@ -21,19 +21,10 @@ const journalUsage = `usage:
 `
 
 func runJournal(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, journalUsage)
-		return 2
-	}
-	switch args[0] {
-	case "export":
-		return runJournalExport(args[1:], stdout, stderr)
-	case "verify":
-		return runJournalVerify(args[1:], stdin, stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "doorward journal: unknown command %q\n\n%s", args[0], journalUsage)
-		return 2
-	}
+	return dispatch("journal", journalUsage, args, stderr, map[string]func([]string) int{
+		"export": func(a []string) int { return runJournalExport(a, stdout, stderr) },
+		"verify": func(a []string) int { return runJournalVerify(a, stdin, stdout, stderr) },
+	})
 }
 
 func runJournalExport(args []string, stdout, stderr io.Writer) int {

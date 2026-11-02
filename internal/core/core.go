@@ -1,7 +1,7 @@
 // Package core is the decision core: given a verified grant and a call, it
-// answers allow, deny or approval_required and says why. Each step is a
-// pure function over the grant, the call and the manifest; the HTTP
-// endpoint that runs them in order and writes the record comes last (B5).
+// answers allow, deny or approval_required and says why. Each check is a
+// pure function over the grant, the call and the manifest; package pdp
+// runs them in order and records the decision.
 package core
 
 import v0 "github.com/vladmsnk/doorward/api/v0"

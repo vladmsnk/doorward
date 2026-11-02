@@ -80,18 +80,3 @@ func (s grants) revokeWhere(ctx context.Context, where, arg string, at time.Time
 	}
 	return ids, rows.Err()
 }
-
-func (s grants) Spend(ctx context.Context, jti string, at time.Time) error {
-	tag, err := s.pool.Exec(ctx,
-		"UPDATE grants SET used_at = $2 WHERE jti = $1 AND single_use AND used_at IS NULL AND revoked_at IS NULL", jti, at)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() == 0 {
-		if _, err := s.Get(ctx, jti); err != nil {
-			return err
-		}
-		return x.ErrState
-	}
-	return nil
-}

@@ -1,13 +1,12 @@
 package core_test
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
+
+	"github.com/vladmsnk/doorward/internal/testhelpers"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/core"
-	"github.com/vladmsnk/doorward/schema"
 )
 
 const (
@@ -15,36 +14,14 @@ const (
 	ledger   = "https://ledger.example.internal/mcp"
 )
 
-func load[T schema.Document](t *testing.T, rel string) T {
-	t.Helper()
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join("../../examples/v0", rel)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	src, err := schema.Read(path, data, schema.KindOf[T]())
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc, err := schema.Decode[T](v, src[0].JSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return doc
-}
-
 type world struct {
 	manifests map[string]v0.Manifest
 }
 
 func newWorld(t *testing.T) world {
 	return world{manifests: map[string]v0.Manifest{
-		payments: load[v0.Manifest](t, "config/manifest-payments-api.yaml"),
-		ledger:   load[v0.Manifest](t, "config/manifest-ledger-mcp.yaml"),
+		payments: testhelpers.Example[v0.Manifest](t, "config/manifest-payments-api.yaml"),
+		ledger:   testhelpers.Example[v0.Manifest](t, "config/manifest-ledger-mcp.yaml"),
 	}}
 }
 
@@ -54,8 +31,8 @@ func (w world) subset(g v0.Grant, call core.Call) (v0.Check, *v0.Reason) {
 
 func TestSubsetExamples(t *testing.T) {
 	w := newWorld(t)
-	alice := load[v0.Grant](t, "grant/pay-invoice.json")
-	reconciler := load[v0.Grant](t, "grant/reconcile.json")
+	alice := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
+	reconciler := testhelpers.Example[v0.Grant](t, "grant/reconcile.json")
 
 	cases := []struct {
 		name   string
@@ -121,7 +98,7 @@ func TestSubsetExamples(t *testing.T) {
 
 func TestSubsetUnknownOperation(t *testing.T) {
 	// The grant names an operation the manifest no longer has.
-	g := load[v0.Grant](t, "grant/pay-invoice.json")
+	g := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
 	_, reason := core.Subset(g, nil, core.Call{payments, "get_invoice", nil})
 	if reason == nil || reason.Code != v0.ReasonActionNotGranted || reason.Message != "the manifest of "+payments+" declares no operation get_invoice" {
 		t.Fatalf("%+v", reason)

@@ -7,11 +7,10 @@ import (
 	"github.com/vladmsnk/doorward/internal/budget"
 )
 
-// Manager is the hash-chained journal of decision records.
+// Manager reads the hash-chained journal of decision records. Records are
+// appended only by settling a decision (Settler), so the spending a record
+// shows is written with it.
 type Manager interface {
-	// Append stores d as the next link: it fills d.Chain from the previous
-	// record, computes the hash, and returns the stored record.
-	Append(ctx context.Context, d v0.Decision) (v0.Decision, error)
 	Get(ctx context.Context, id string) (v0.Decision, error)
 	// Range returns records with seq in [from, to), oldest first.
 	Range(ctx context.Context, from, to uint64) ([]v0.Decision, error)

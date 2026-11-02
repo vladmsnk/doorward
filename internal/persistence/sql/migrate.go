@@ -33,15 +33,7 @@ func Migrations() []string {
 // Migrate applies every migration file not yet recorded in schema_migrations,
 // in order, each in its own transaction. Files are named NNNN_name.sql.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	entries, err := fs.ReadDir(migrations, "migrations")
-	if err != nil {
-		return err
-	}
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		names = append(names, e.Name())
-	}
-	sort.Strings(names)
+	names := Migrations()
 
 	// The first migration creates schema_migrations itself, so take an
 	// advisory lock instead of relying on the table to exist.

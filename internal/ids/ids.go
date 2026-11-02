@@ -11,16 +11,12 @@ import (
 // Prefixes of the records the box creates.
 const (
 	Grant    = "grt"
-	Consent  = "cns"
 	Decision = "dec"
 	Approval = "apr"
 )
 
 // Crockford's base32, as ULIDs use it.
 const alphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
-
-// New returns prefix_ULID for the current time.
-func New(prefix string) string { return At(prefix, time.Now()) }
 
 // At returns prefix_ULID for the given time.
 func At(prefix string, t time.Time) string {

@@ -2,15 +2,15 @@ package sql_test
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/vladmsnk/doorward/internal/testhelpers"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/budget"
@@ -22,46 +22,8 @@ import (
 	"github.com/vladmsnk/doorward/schema"
 )
 
-// The tests need a real PostgreSQL: the chain lock, the version lock and the
-// conditional counter update are what is being tested, and only the database
-// can arbitrate them. Point DOORWARD_TEST_POSTGRES_DSN at an empty database;
-// without it the tests skip. Every package that uses the database truncates
-// it first, so `make test` runs packages one at a time (-p 1).
-func open(t *testing.T) *sql.Persister {
-	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
-	ctx := context.Background()
-	s, err := sql.Open(ctx, dsn)
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	// Each test starts from an empty database.
-	_, err = s.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
-
-func example[T any](t *testing.T, rel string) T {
-	t.Helper()
-	data, err := os.ReadFile(filepath.Join("../../../examples/v0", rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var v T
-	if err := json.Unmarshal(data, &v); err != nil {
-		t.Fatalf("%s: %v", rel, err)
-	}
-	return v
-}
-
 func TestMigrateIsIdempotent(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	if err := sql.Migrate(context.Background(), s.Pool()); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
@@ -75,7 +37,7 @@ func TestMigrateIsIdempotent(t *testing.T) {
 }
 
 func TestDocumentsAreVersioned(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	docs := s.Documents()
 
@@ -135,7 +97,7 @@ func TestDocumentsAreVersioned(t *testing.T) {
 
 // Concurrent writers get consecutive versions, never the same one.
 func TestDocumentVersionsUnderConcurrency(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	var wg sync.WaitGroup
 	errs := make(chan error, 20)
@@ -161,9 +123,9 @@ func TestDocumentVersionsUnderConcurrency(t *testing.T) {
 }
 
 func TestConsentsAndGrants(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
-	c := example[v0.Consent](t, "consent/alice-invoice-assistant.json")
+	c := testhelpers.Example[v0.Consent](t, "consent/alice-invoice-assistant.json")
 	if err := s.Consents().Create(ctx, c); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +141,7 @@ func TestConsentsAndGrants(t *testing.T) {
 		t.Errorf("ByUser: %d", len(mine))
 	}
 
-	g := example[v0.Grant](t, "grant/pay-invoice.json")
+	g := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
 	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "invoice-assistant"}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,40 +173,17 @@ func TestConsentsAndGrants(t *testing.T) {
 	}
 }
 
-func TestSingleUseGrantIsSpentOnce(t *testing.T) {
-	s := open(t)
-	ctx := context.Background()
-	g := example[v0.Grant](t, "grant/reconcile.json")
-	g.ID = "grt_single_use_0001"
-	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: v0.Digest([]byte("call"))}); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Grants().Spend(ctx, g.ID, time.Now()); err != nil {
-		t.Fatalf("first spend: %v", err)
-	}
-	if err := s.Grants().Spend(ctx, g.ID, time.Now()); !errors.Is(err, x.ErrState) {
-		t.Errorf("second spend: %v", err)
-	}
-	if err := s.Grants().Spend(ctx, "grt_does_not_exist", time.Now()); !errors.Is(err, x.ErrNotFound) {
-		t.Errorf("unknown grant: %v", err)
-	}
-}
-
 func TestDecisionsChain(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	if _, err := s.Decisions().Head(ctx); !errors.Is(err, x.ErrNotFound) {
 		t.Fatalf("empty journal head: %v", err)
 	}
 	var stored []v0.Decision
 	for _, name := range []string{"1-allow-get-invoice", "2-deny-amount-over-grant", "3-approval-required-pay-invoice", "4-allow-reconciler-post-entry"} {
-		d := example[v0.Decision](t, "decision/"+name+".json")
+		d := testhelpers.Example[v0.Decision](t, "decision/"+name+".json")
 		d.Chain = nil
-		out, err := s.Decisions().Append(ctx, d)
-		if err != nil {
-			t.Fatalf("%s: %v", name, err)
-		}
-		stored = append(stored, out)
+		stored = append(stored, testhelpers.Record(t, s, d))
 	}
 	if stored[0].Chain.Seq != 0 || stored[3].Chain.Seq != 3 || stored[3].Chain.Prev != stored[2].Chain.Hash {
 		t.Errorf("chain not linked: %+v", stored[3].Chain)
@@ -265,11 +204,11 @@ func TestDecisionsChain(t *testing.T) {
 	}
 }
 
-// Parallel appends still produce one dense, verifiable chain.
+// Parallel settlements still produce one dense, verifiable chain.
 func TestDecisionsChainUnderConcurrency(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
-	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base := testhelpers.Example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	var wg sync.WaitGroup
 	for i := 0; i < 25; i++ {
 		wg.Add(1)
@@ -278,7 +217,7 @@ func TestDecisionsChainUnderConcurrency(t *testing.T) {
 			d := base
 			d.ID = fmt.Sprintf("dec_concurrent_%03d", i)
 			d.Chain = nil
-			if _, err := s.Decisions().Append(ctx, d); err != nil {
+			if _, err := s.Settle(ctx, nil, func([]budget.Drawn, error) (v0.Decision, error) { return d, nil }); err != nil {
 				t.Error(err)
 			}
 		}(i)
@@ -294,9 +233,9 @@ func TestDecisionsChainUnderConcurrency(t *testing.T) {
 }
 
 func TestApprovalsLifecycle(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
-	a := example[v0.Approval](t, "approval/write-off-rounding.json")
+	a := testhelpers.Example[v0.Approval](t, "approval/write-off-rounding.json")
 	votes := a.Votes
 	a.Status, a.Closed, a.SingleUseGrant, a.Votes = v0.ApprovalPending, nil, "", []v0.Vote{}
 	if err := s.Approvals().Create(ctx, a); err != nil {
@@ -333,7 +272,7 @@ func TestApprovalsLifecycle(t *testing.T) {
 }
 
 func TestKeysAndSecrets(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	if _, err := s.Keys().Active(ctx); !errors.Is(err, x.ErrNotFound) {
 		t.Fatalf("empty: %v", err)
@@ -383,7 +322,7 @@ func TestKeysAndSecrets(t *testing.T) {
 // B4: budgets are exact, a call draws all of its budgets or none, and a
 // single-use grant is spent with them, once.
 func TestAllowIsExactAndAtomic(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	now := time.Now()
 	draw := func(key, amount, max string) budget.Draw { return budget.Draw{Key: key, Amount: amount, Max: max} }
@@ -438,7 +377,7 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 
 	// A single-use grant is spent with its budgets, once, and not at all
 	// when a budget refuses.
-	g := example[v0.Grant](t, "grant/reconcile.json")
+	g := testhelpers.Example[v0.Grant](t, "grant/reconcile.json")
 	g.ID = "grt_single_use_000000000001"
 	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
 		t.Fatal(err)
@@ -504,10 +443,10 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 
 // B5: a decision and the spending it records commit together.
 func TestSettle(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	now := time.Now()
-	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base := testhelpers.Example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	base.Chain = nil
 	key := budget.GrantKey("grt_settle", "calls")
 	allowance := &budget.Allowance{Draws: []budget.Draw{{Key: key, Amount: "1", Max: "1"}}, At: now}
@@ -553,12 +492,12 @@ func TestSettle(t *testing.T) {
 		t.Errorf("an aborted settlement was recorded: seq %d", head.Chain.Seq)
 	}
 	// A spent single-use grant comes to decide as a refusal.
-	g := example[v0.Grant](t, "grant/reconcile.json")
+	g := testhelpers.Example[v0.Grant](t, "grant/reconcile.json")
 	g.ID = "grt_single_use_settle_0001"
 	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Grants().Spend(ctx, g.ID, now); err != nil {
+	if _, err := s.Allow(ctx, budget.Allowance{SingleUse: g.ID, At: now}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Settle(ctx, &budget.Allowance{SingleUse: g.ID, At: now}, func(_ []budget.Drawn, err error) (v0.Decision, error) {
@@ -580,12 +519,12 @@ func TestSettle(t *testing.T) {
 }
 
 func TestPendingFor(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
-	a := example[v0.Approval](t, "approval/pay-invoice-1200-eur.json")
+	a := testhelpers.Example[v0.Approval](t, "approval/pay-invoice-1200-eur.json")
 	a.Status, a.Closed, a.Votes, a.SingleUseGrant = v0.ApprovalPending, nil, []v0.Vote{}, ""
 	// The approval names a consent, which must exist.
-	if err := s.Consents().Create(ctx, example[v0.Consent](t, "consent/alice-invoice-assistant.json")); err != nil {
+	if err := s.Consents().Create(ctx, testhelpers.Example[v0.Consent](t, "consent/alice-invoice-assistant.json")); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Approvals().Create(ctx, a); err != nil {
@@ -642,13 +581,13 @@ func holdChainLock(t testing.TB, s *sql.Persister) func() {
 // Q1: a settlement that cannot get the journal in time is rolled back
 // within the caller's deadline, drawing and recording nothing.
 func TestSettleHonoursTheDeadline(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	release := holdChainLock(t, s)
 	defer release()
 	key := budget.GrantKey("grt_deadline", "calls")
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
-	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base := testhelpers.Example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	base.Chain = nil
 	start := time.Now()
 	_, err := s.Settle(ctx, &budget.Allowance{Draws: []budget.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
@@ -676,7 +615,7 @@ func TestSettleHonoursTheDeadline(t *testing.T) {
 
 // Q5: every configuration write bumps the version a decision point watches.
 func TestConfigVersionBumps(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	v0ver, err := s.ConfigVersion(ctx)
 	if err != nil {
@@ -727,13 +666,13 @@ func TestConfigVersionBumps(t *testing.T) {
 	}
 }
 
-// Q6: settlements arriving together share one transaction, each in its own
-// savepoint: every outcome is right, a failing one does not fail the
-// others, and the chain is one unbroken sequence.
+// Q6: settlements arriving together share one transaction, each allowance
+// written all or nothing: every outcome is right, a failing one does not
+// fail the others, and the chain is one unbroken sequence.
 func TestSettleBatches(t *testing.T) {
-	s := open(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
-	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
+	base := testhelpers.Example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	base.Chain = nil
 	now := time.Now()
 	const n = 200

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/jwk"
@@ -130,21 +132,13 @@ func (f *fixture) payload(t *testing.T, edit func(m map[string]any)) string {
 
 const goodHeader = `{"alg":"ES256","typ":"at+jwt","kid":"kid-1"}`
 
-func checks(r grant.Result) string {
-	var b strings.Builder
-	for _, c := range r.Checks {
-		b.WriteString(string(c.Name) + ":" + string(c.Result) + " ")
-	}
-	return strings.TrimSpace(b.String())
-}
-
 func TestValidGrant(t *testing.T) {
 	f := setup(t)
 	r, err := f.v.Verify(context.Background(), f.sign(t, f.claims), aud)
 	if err != nil || !r.OK() {
 		t.Fatalf("refused: %+v %v", r.Reason, err)
 	}
-	if got := checks(r); got != "signature:pass status:pass pop:skip audience:pass time:pass" {
+	if got := testhelpers.Checks(r.Checks); got != "signature:pass status:pass pop:skip audience:pass time:pass" {
 		t.Errorf("checks: %s", got)
 	}
 	if r.Standing == nil || r.Standing.Ceiling != v0.SensitivityCritical {
@@ -227,8 +221,8 @@ func TestStatus(t *testing.T) {
 	tok := f.sign(t, f.claims)
 	f.v.Status = fakeStatus{f.claims.ID: "agent invoice-assistant is suspended"}
 	r, err := f.v.Verify(context.Background(), tok, aud)
-	if err != nil || r.OK() || r.Reason.Code != v0.ReasonGrantRevoked || checks(r) != "signature:pass status:fail" {
-		t.Fatalf("revoked grant: %s %+v %v", checks(r), r.Reason, err)
+	if err != nil || r.OK() || r.Reason.Code != v0.ReasonGrantRevoked || testhelpers.Checks(r.Checks) != "signature:pass status:fail" {
+		t.Fatalf("revoked grant: %s %+v %v", testhelpers.Checks(r.Checks), r.Reason, err)
 	}
 	if r.Reason.Message != "agent invoice-assistant is suspended" {
 		t.Errorf("message: %q", r.Reason.Message)
@@ -260,7 +254,7 @@ func TestTime(t *testing.T) {
 		case c.code == "" && !r.OK():
 			t.Errorf("at %s: refused with %+v", c.at.UTC(), r.Reason)
 		case c.code != "" && (r.OK() || r.Reason.Code != c.code):
-			t.Errorf("at %s: want %s, got %s %+v", c.at.UTC(), c.code, checks(r), r.Reason)
+			t.Errorf("at %s: want %s, got %s %+v", c.at.UTC(), c.code, testhelpers.Checks(r.Checks), r.Reason)
 		}
 	}
 }
@@ -280,8 +274,8 @@ func TestRetiredKeyStillVerifies(t *testing.T) {
 func TestNoAudienceIsSkipped(t *testing.T) {
 	f := setup(t)
 	r, _ := f.v.Verify(context.Background(), f.sign(t, f.claims), "")
-	if !r.OK() || checks(r) != "signature:pass status:pass pop:skip audience:skip time:pass" {
-		t.Fatalf("%s %+v", checks(r), r.Reason)
+	if !r.OK() || testhelpers.Checks(r.Checks) != "signature:pass status:pass pop:skip audience:skip time:pass" {
+		t.Fatalf("%s %+v", testhelpers.Checks(r.Checks), r.Reason)
 	}
 }
 
@@ -298,8 +292,8 @@ func TestDependencyFailures(t *testing.T) {
 	f = setup(t)
 	f.v.Status = fakeStatus{"*": "error"}
 	r, err = f.v.Verify(context.Background(), f.sign(t, f.claims), aud)
-	if err == nil || r.OK() || r.Reason.Code != v0.ReasonInternalError || checks(r) != "signature:pass status:fail" {
-		t.Errorf("status down: %s %+v %v", checks(r), r.Reason, err)
+	if err == nil || r.OK() || r.Reason.Code != v0.ReasonInternalError || testhelpers.Checks(r.Checks) != "signature:pass status:fail" {
+		t.Errorf("status down: %s %+v %v", testhelpers.Checks(r.Checks), r.Reason, err)
 	}
 }
 
@@ -337,7 +331,7 @@ func TestBoundGrantFailsPoP(t *testing.T) {
 	g := f.claims
 	g.Confirmation = &v0.Confirmation_{JKT: strings.Repeat("k", 43)}
 	r, err := f.v.Verify(context.Background(), f.sign(t, g), aud)
-	if err != nil || r.OK() || r.Reason.Code != v0.ReasonPoPMissing || checks(r) != "signature:pass status:pass pop:fail" {
-		t.Fatalf("%s %+v %v", checks(r), r.Reason, err)
+	if err != nil || r.OK() || r.Reason.Code != v0.ReasonPoPMissing || testhelpers.Checks(r.Checks) != "signature:pass status:pass pop:fail" {
+		t.Fatalf("%s %+v %v", testhelpers.Checks(r.Checks), r.Reason, err)
 	}
 }

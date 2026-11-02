@@ -8,30 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/budget"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/persistence"
-	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/schema"
 )
-
-func openStore(t *testing.T) *sql.Persister {
-	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
-	ctx := context.Background()
-	s, err := sql.Open(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s.Close() })
-	if _, err := s.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
-		t.Fatal(err)
-	}
-	return s
-}
 
 func putDoc(t *testing.T, s persistence.Persister, rel string) {
 	t.Helper()
@@ -72,7 +56,7 @@ func putAgent(t *testing.T, s persistence.Persister, status v0.AgentStatus) {
 }
 
 func TestStoreStatus(t *testing.T) {
-	s := openStore(t)
+	s := testhelpers.OpenPersister(t)
 	ctx := context.Background()
 	f := setup(t)
 	st := grant.StoreStatus{Store: s, Now: func() time.Time { return f.now }}
@@ -140,7 +124,7 @@ func TestStoreStatus(t *testing.T) {
 	if err != nil || got.Refusal != "" || !got.SingleUse || got.ActionHash != "sha-256:"+strings.Repeat("a", 43) {
 		t.Fatalf("single-use grant: %+v %v", got, err)
 	}
-	if err := s.Grants().Spend(ctx, once.ID, time.Now()); err != nil {
+	if _, err := s.Allow(ctx, budget.Allowance{SingleUse: once.ID, At: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Standing(ctx, once); !strings.Contains(got.Refusal, "was used at") {

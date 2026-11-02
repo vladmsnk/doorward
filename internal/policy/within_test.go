@@ -2,46 +2,24 @@ package policy_test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/policy"
-	"github.com/vladmsnk/doorward/schema"
 )
 
 func f(x float64) *float64 { return &x }
 func s(x string) *string   { return &x }
 
-func load[T schema.Document](t *testing.T, rel string) T {
-	t.Helper()
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join("../../examples/v0/config", rel))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srcs, err := schema.Read(rel, data, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := schema.Decode[T](v, srcs[0].JSON)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
-// The example mandates lie within the example agents, as the Admin API will
-// require.
+// The example mandates lie within the example agents, as the Admin API
+// requires.
 func TestExamplesAreWithin(t *testing.T) {
-	invoices := load[v0.Mandate](t, "mandate-invoices.yaml")
-	assistant := load[v0.Agent](t, "agent-invoice-assistant.yaml")
+	invoices := testhelpers.Example[v0.Mandate](t, "config/mandate-invoices.yaml")
+	assistant := testhelpers.Example[v0.Agent](t, "config/agent-invoice-assistant.yaml")
 	// The payments API has /amount only on pay_invoice and refund_payment.
 	declared := func(loc, act, field string) bool {
 		return field != "/amount" || act == "pay_invoice" || act == "refund_payment" || act == "post_entry" || act == "write_off"
@@ -49,8 +27,8 @@ func TestExamplesAreWithin(t *testing.T) {
 	if p := policy.Within(invoices.Spec.Permissions, "mandate invoices", assistant.Spec.Permissions, "agent invoice-assistant", declared); p != nil {
 		t.Errorf("invoices within invoice-assistant: %v", p)
 	}
-	reconcile := load[v0.Mandate](t, "mandate-reconcile.yaml")
-	reconciler := load[v0.Agent](t, "agent-reconciler.yaml")
+	reconcile := testhelpers.Example[v0.Mandate](t, "config/mandate-reconcile.yaml")
+	reconciler := testhelpers.Example[v0.Agent](t, "config/agent-reconciler.yaml")
 	if p := policy.Within(reconcile.Spec.Permissions, "mandate reconcile", reconciler.Spec.Permissions, "agent reconciler", declared); p != nil {
 		t.Errorf("reconcile within reconciler: %v", p)
 	}

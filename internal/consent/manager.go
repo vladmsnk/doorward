@@ -18,8 +18,6 @@ type Manager interface {
 	ByUser(ctx context.Context, user v0.SubjectID, activeOnly bool) ([]v0.Consent, error)
 	// Revoke ends an active consent. x.ErrState if it is not active.
 	Revoke(ctx context.Context, id string, by v0.Revoker, at time.Time) (v0.Consent, error)
-	// Expire marks active consents past their expiry; it returns how many.
-	Expire(ctx context.Context, now time.Time) (int, error)
 }
 
 // ManagerProvider gives access to the consents.
