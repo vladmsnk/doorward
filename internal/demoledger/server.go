@@ -13,6 +13,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"sync"
 )
 
@@ -26,7 +27,10 @@ type Server struct {
 	// SSE answers requests as event streams instead of plain JSON, as
 	// many servers do.
 	SSE bool
-	Log *slog.Logger
+	// PageSize, when set, has tools/list answer that many tools a page,
+	// with a cursor to the next page.
+	PageSize int
+	Log      *slog.Logger
 
 	mu      sync.Mutex
 	entries []Entry
@@ -177,7 +181,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, msg.ID, map[string]any{}, nil)
 	case "tools/list":
 		s.note(seen)
-		s.respond(w, msg.ID, map[string]any{"tools": tools}, nil)
+		page, rerr := s.toolPage(msg.Params)
+		s.respond(w, msg.ID, page, rerr)
 	case "tools/call":
 		var p struct {
 			Name      string         `json:"name"`
@@ -200,6 +205,32 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 type rpcError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+// toolPage is one page of the tool list: the whole list, or PageSize tools
+// from the cursor, which is the index of the page's first tool.
+func (s *Server) toolPage(params json.RawMessage) (map[string]any, *rpcError) {
+	if s.PageSize <= 0 {
+		return map[string]any{"tools": tools}, nil
+	}
+	var p struct {
+		Cursor string `json:"cursor"`
+	}
+	_ = json.Unmarshal(params, &p)
+	start := 0
+	if p.Cursor != "" {
+		n, err := strconv.Atoi(p.Cursor)
+		if err != nil || n <= 0 || n >= len(tools) {
+			return nil, &rpcError{-32602, "invalid cursor"}
+		}
+		start = n
+	}
+	end := min(start+s.PageSize, len(tools))
+	page := map[string]any{"tools": tools[start:end]}
+	if end < len(tools) {
+		page["nextCursor"] = strconv.Itoa(end)
+	}
+	return page, nil
 }
 
 func (s *Server) call(name string, args map[string]any) (map[string]any, *rpcError) {
