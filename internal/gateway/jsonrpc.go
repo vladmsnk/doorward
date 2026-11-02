@@ -77,7 +77,7 @@ func walkUnambiguous(dec *json.Decoder) error {
 // writeToolError answers a tools/call with a tool execution error, which
 // the protocol says is how a refused or invalid call is reported so the
 // model can correct itself, with the decision under _meta.
-func writeToolError(w http.ResponseWriter, id json.RawMessage, text string, d v0.Decision) {
+func writeToolError(w http.ResponseWriter, id json.RawMessage, text string, d v0.Decision, modern bool) {
 	meta := map[string]any{"decision": d.ID, "outcome": d.Outcome, "action_hash": d.ActionHash}
 	if len(d.Reasons) > 0 {
 		meta["reasons"] = d.Reasons
@@ -89,6 +89,10 @@ func writeToolError(w http.ResponseWriter, id json.RawMessage, text string, d v0
 		"content": []map[string]any{{"type": "text", "text": text}},
 		"isError": true,
 		"_meta":   map[string]any{MetaKey: meta},
+	}
+	if modern {
+		// From 2026-07-28 every result says what kind it is.
+		result["resultType"] = "complete"
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})

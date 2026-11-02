@@ -14,11 +14,16 @@ import (
 )
 
 // rewrite is what the proxy does to one forwarded POST: the body to send,
-// and for tools/list, the tools to keep.
+// and for tools/list, the tools to keep and whether to mark the list
+// private.
 type rewrite struct {
 	body   []byte
 	id     json.RawMessage
 	filter func(tool string) bool
+	// private marks the list for this caller alone (cacheScope), as the
+	// filtered list is: a modern revision lets shared caches keep a
+	// "public" one.
+	private bool
 }
 
 // proxy forwards the request to the manifest's upstream with the server's

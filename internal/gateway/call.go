@@ -16,7 +16,7 @@ import (
 
 // toolsCall has the decision point decide the call, then forwards it or
 // answers for it.
-func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *configuration.Snapshot, man configuration.Manifest, token string, msg rpcMessage, body []byte) {
+func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *configuration.Snapshot, man configuration.Manifest, token string, msg rpcMessage, body []byte, modern bool) {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -50,7 +50,7 @@ func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *config
 	case v0.OutcomeApprovalRequired:
 		text := fmt.Sprintf("doorward holds this call for approval: %s is a critical operation. Approval request %s. Retry the exact same call once a person has approved it.",
 			params.Name, d.Approval.Request)
-		writeToolError(w, msg.ID, text, d)
+		writeToolError(w, msg.ID, text, d, modern)
 	default:
 		if failed := firstFailed(d); failed == v0.CheckSignature || failed == v0.CheckStatus || failed == v0.CheckTime || failed == v0.CheckAudience || failed == v0.CheckPoP {
 			h.challenge(w, http.StatusUnauthorized, "invalid_token", reasonText(d), nil)
@@ -64,7 +64,7 @@ func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *config
 				return
 			}
 		}
-		writeToolError(w, msg.ID, "doorward refused this call: "+reasonText(d), d)
+		writeToolError(w, msg.ID, "doorward refused this call: "+reasonText(d), d, modern)
 	}
 }
 

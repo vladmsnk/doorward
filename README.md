@@ -45,7 +45,7 @@ tools. Doorward is that control point:
 | Upstream credentials sealed with AES-256-GCM, added by the gateway; the agent never sees them | ✅ available |
 | Versioned configuration through an Admin API; every change checked against the whole configuration | ✅ available |
 | Observe mode: try a mandate or an agent without enforcing its rules; each record says what enforcement would have refused | ✅ available |
-| Thin MCP gateway (Streamable HTTP, 2025-11-25): one address per server, the tool list filtered to the grant, every `tools/call` decided, refusals and holds answered as tool errors with their reason | ✅ available |
+| Thin MCP gateway (Streamable HTTP, 2026-07-28 and 2025-11-25): one address per server, the tool list filtered to the grant, every `tools/call` decided, refusals and holds answered as tool errors with their reason | ✅ available |
 | OAuth authorization server (RFC 9728, RFC 8414, Client ID Metadata Documents); consent page | 🚧 next |
 | Kill switch, approval thresholds, notifications, admin sign-in | 📋 planned |
 | Enterprise identity (ID-JAG), per-user upstream OAuth tokens, workload identities, DPoP | 📋 planned |
@@ -183,7 +183,7 @@ OIDC provider), and not a general policy language.
 | [RFC 8785](https://www.rfc-editor.org/rfc/rfc8785) JSON canonicalization | Action hashes and journal hash chain | ✅ |
 | [RFC 7638](https://www.rfc-editor.org/rfc/rfc7638) JWK thumbprint | Signing key IDs in the JWK Set | ✅ |
 | [W3C Trace Context](https://www.w3.org/TR/trace-context/), OpenTelemetry | Trace ID in every record; a span per decision | ✅ |
-| [MCP](https://modelcontextprotocol.io/specification/2025-11-25) Streamable HTTP and authorization (2025-11-25) | Gateway: transport, Bearer grants, audience, 401 challenge, 403 `insufficient_scope`; authorization server | ✅ gateway · 🚧 discovery, authorization server |
+| [MCP](https://modelcontextprotocol.io/specification/2026-07-28) Streamable HTTP and authorization (2026-07-28, 2025-11-25) | Gateway: transport, Bearer grants, audience, 401 challenge, 403 `insufficient_scope`; authorization server | ✅ gateway · 🚧 discovery, authorization server |
 | [RFC 9728](https://www.rfc-editor.org/rfc/rfc9728), [RFC 8414](https://www.rfc-editor.org/rfc/rfc8414), [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707), [RFC 9207](https://www.rfc-editor.org/rfc/rfc9207), OAuth 2.1, Client ID Metadata Documents | Discovery, audience binding, client registration | 🚧 |
 | [RFC 8693](https://www.rfc-editor.org/rfc/rfc8693) token exchange, RFC 7523, ID-JAG | Workload agents and enterprise identity | 📋 |
 | [RFC 9449](https://www.rfc-editor.org/rfc/rfc9449) DPoP | Proof of possession, per agent or mandate | 📋 |
