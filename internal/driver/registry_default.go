@@ -8,7 +8,6 @@ package driver
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,7 +18,6 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/admin"
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/gateway"
@@ -30,6 +28,7 @@ import (
 	"github.com/vladmsnk/doorward/internal/persistence"
 	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -52,7 +51,6 @@ type RegistryDefault struct {
 	verifier lazy[*grant.Verifier]
 	pdp      lazy[*pdp.PDP]
 	gateway  lazy[*gateway.Gateway]
-	admin    lazy[*admin.Server]
 }
 
 // New returns a registry for the settings.
@@ -164,6 +162,12 @@ func (r *RegistryDefault) GrantManager() grant.Manager                { return r
 func (r *RegistryDefault) JournalManager() journal.Manager            { return r.persister.Decisions() }
 func (r *RegistryDefault) KeyManager() jwk.Manager                    { return r.persister.Keys() }
 
+// ConfigurationLocker serializes configuration changes.
+func (r *RegistryDefault) ConfigurationLocker() configuration.Locker { return r.persister }
+
+// GrantRevoker revokes a suspended agent's grants.
+func (r *RegistryDefault) GrantRevoker() configuration.GrantRevoker { return r.persister.Grants() }
+
 // ---------------------------------------------------------------- components
 
 // KeyRing is the box's signing keys.
@@ -223,36 +227,24 @@ func (r *RegistryDefault) Gateway() *gateway.Gateway {
 	})
 }
 
-// AdminServer is the Admin API.
-func (r *RegistryDefault) AdminServer() *admin.Server {
-	return r.admin.get(func() *admin.Server {
-		return &admin.Server{Store: r.persister, Validator: r.validator, Token: r.conf.AdminToken, Sealer: r.sealer,
-			Keys: r.KeyRing(), Log: r.log, Now: r.now}
-	})
-}
-
 // ---------------------------------------------------------------- routes
 
 // RegisterPublicRoutes serves the JWK Set, the evaluation endpoint and the
 // MCP gateway on the public listener.
 func (r *RegistryDefault) RegisterPublicRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /.well-known/jwks.json", func(w http.ResponseWriter, req *http.Request) {
-		set, err := r.KeyRing().JWKS(req.Context())
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Cache-Control", "public, max-age=300")
-		_ = json.NewEncoder(w).Encode(set)
-	})
+	jwk.NewHandler(r).SetPublicRoutes(mux)
 	mux.Handle("POST "+pdp.EvaluationPath, r.PDP().Handler(r.pdpClients()))
 	mux.Handle(gateway.Prefix, r.Gateway().Handler())
 }
 
-// RegisterAdminRoutes serves the Admin API on the admin listener.
+// RegisterAdminRoutes serves the Admin API on the admin listener: every
+// domain's routes, all behind the administrator's token.
 func (r *RegistryDefault) RegisterAdminRoutes(mux *http.ServeMux) {
-	mux.Handle("/admin/", r.AdminServer().Handler())
+	a := x.NewAdminRouter(r.conf.AdminToken)
+	configuration.NewHandler(r).SetAdminRoutes(a)
+	jwk.NewHandler(r).SetAdminRoutes(a)
+	journal.NewHandler(r).SetAdminRoutes(a)
+	mux.Handle("/admin/", a)
 }
 
 func (r *RegistryDefault) pdpClients() []pdp.Client {

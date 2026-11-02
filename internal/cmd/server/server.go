@@ -94,15 +94,15 @@ func Serve(args []string, stdout, stderr io.Writer, version string) int {
 	public := http.NewServeMux()
 	public.HandleFunc("GET /healthz", healthz)
 	reg.RegisterPublicRoutes(public)
-	admin := http.NewServeMux()
-	admin.HandleFunc("GET /healthz", healthz)
-	reg.RegisterAdminRoutes(admin)
+	adminMux := http.NewServeMux()
+	adminMux.HandleFunc("GET /healthz", healthz)
+	reg.RegisterAdminRoutes(adminMux)
 
 	// The public listener carries the gateway's event streams, which a
 	// write deadline would cut off mid-call, so it has none; the slow-client
 	// guards that remain are the read and idle timeouts. The admin listener
 	// serves only short request-response calls and keeps a write deadline.
-	servers := []*http.Server{newServer(conf.Addr, public, 0), newServer(conf.AdminAddr, admin, 30*time.Second)}
+	servers := []*http.Server{newServer(conf.Addr, public, 0), newServer(conf.AdminAddr, adminMux, 30*time.Second)}
 	errc := make(chan error, len(servers))
 	for _, srv := range servers {
 		go func(srv *http.Server) { errc <- srv.ListenAndServe() }(srv)

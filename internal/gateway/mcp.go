@@ -22,7 +22,6 @@ import (
 	"sync"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/admin"
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/pdp"
@@ -384,7 +383,7 @@ func (g *Gateway) credential(ctx context.Context, man configuration.Manifest) (s
 	if err != nil {
 		return "", "", fmt.Errorf("secret %s: %w", auth.SecretRef, err)
 	}
-	plain, err := g.Sealer.Open(sealed, admin.SecretPurpose(auth.SecretRef))
+	plain, err := g.Sealer.Open(sealed, configuration.SecretPurpose(auth.SecretRef))
 	if err != nil {
 		return "", "", fmt.Errorf("secret %s: %w", auth.SecretRef, err)
 	}

@@ -3,8 +3,6 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -13,7 +11,6 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/journal"
-	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -38,9 +35,6 @@ func runJournal(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 }
 
-// exportPage is how many records are read from the store at a time.
-const exportPage = 1000
-
 func runJournalExport(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("journal export", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -57,38 +51,11 @@ func runJournalExport(args []string, stdout, stderr io.Writer) int {
 	defer func() { _ = st.Close() }()
 	w := bufio.NewWriter(stdout)
 	defer func() { _ = w.Flush() }()
-	if err := exportJournal(ctx, st.Decisions(), *from, w); err != nil {
+	if err := journal.Export(ctx, st.Decisions(), *from, w); err != nil {
 		fmt.Fprintf(stderr, "doorward journal export: %v\n", err)
 		return 1
 	}
 	return 0
-}
-
-// exportJournal writes the records from seq on as JSON lines.
-func exportJournal(ctx context.Context, d journal.Manager, from uint64, w io.Writer) error {
-	head, err := d.Head(ctx)
-	if errors.Is(err, x.ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	for seq := from; seq <= head.Chain.Seq; seq += exportPage {
-		page, err := d.Range(ctx, seq, seq+exportPage)
-		if err != nil {
-			return err
-		}
-		for _, rec := range page {
-			line, err := json.Marshal(rec)
-			if err != nil {
-				return err
-			}
-			if _, err := w.Write(append(line, '\n')); err != nil {
-				return err
-			}
-		}
-	}
-	return nil
 }
 
 func runJournalVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

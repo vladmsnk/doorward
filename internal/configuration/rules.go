@@ -1,4 +1,4 @@
-package admin
+package configuration
 
 import (
 	"context"
@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"maps"
 	"slices"
-	"sort"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/policy"
 )
 
@@ -37,8 +35,9 @@ func (p Problems) Error() string {
 	return fmt.Sprintf("%d problems: %s", len(p), p[0])
 }
 
-// snapshot is the enabled configuration, loaded once per change.
-type snapshot struct {
+// state is the enabled configuration as the rules see it, loaded once per
+// change.
+type state struct {
 	manifests map[string]v0.Manifest // by name
 	byAud     map[string]v0.Manifest // by audience
 	agents    map[string]v0.Agent
@@ -50,9 +49,9 @@ type snapshot struct {
 	disabledMandates map[string]bool
 }
 
-func load(ctx context.Context, st configuration.Store) (*snapshot, error) {
+func loadState(ctx context.Context, st Store) (*state, error) {
 	docs := st.Documents()
-	s := &snapshot{
+	s := &state{
 		manifests: map[string]v0.Manifest{}, byAud: map[string]v0.Manifest{},
 		agents: map[string]v0.Agent{}, mandates: map[string]v0.Mandate{}, secrets: map[string]bool{},
 		disabledMandates: map[string]bool{},
@@ -112,12 +111,12 @@ func load(ctx context.Context, st configuration.Store) (*snapshot, error) {
 
 // enabled returns the enabled current documents of a kind; a disabled
 // document does not take part in any rule.
-func enabled(ctx context.Context, docs configuration.Manager, kind string) ([]configuration.Document, error) {
+func enabled(ctx context.Context, docs Manager, kind string) ([]Document, error) {
 	all, err := docs.List(ctx, kind)
 	if err != nil {
 		return nil, err
 	}
-	var out []configuration.Document
+	var out []Document
 	for _, d := range all {
 		if !d.Disabled {
 			out = append(out, d)
@@ -129,7 +128,7 @@ func enabled(ctx context.Context, docs configuration.Manager, kind string) ([]co
 // declared reports whether the manifest for location gives action the
 // argument field. An unknown manifest or operation is reported elsewhere;
 // here it counts as declared so the message is not repeated.
-func (s *snapshot) declared(location, action, field string) bool {
+func (s *state) declared(location, action, field string) bool {
 	man, ok := s.byAud[location]
 	if !ok {
 		return true
@@ -143,31 +142,26 @@ func (s *snapshot) declared(location, action, field string) bool {
 }
 
 // problems returns every rule the configuration breaks, without repeats.
-func (s *snapshot) problems() Problems {
+func (s *state) problems() Problems {
 	s.reindex()
 	var p Problems
 	audiences := map[string][]string{}
-	for _, name := range sortedManifestNames(s.manifests) {
+	for _, name := range slices.Sorted(maps.Keys(s.manifests)) {
 		m := s.manifests[name]
 		audiences[m.Spec.Audience] = append(audiences[m.Spec.Audience], name)
 		if a := m.Spec.Upstream.Auth; a != nil && !s.secrets[a.SecretRef] {
 			p = append(p, fmt.Sprintf("manifest %s names secret %s, which has not been stored; put it first", name, a.SecretRef))
 		}
 	}
-	auds := make([]string, 0, len(audiences))
-	for a := range audiences {
-		auds = append(auds, a)
-	}
-	sort.Strings(auds)
-	for _, aud := range auds {
+	for _, aud := range slices.Sorted(maps.Keys(audiences)) {
 		for _, other := range audiences[aud][1:] {
 			p = append(p, fmt.Sprintf("audience %s of manifest %s already belongs to manifest %s", aud, other, audiences[aud][0]))
 		}
 	}
-	for _, name := range sortedMandateNames(s.mandates) {
+	for _, name := range slices.Sorted(maps.Keys(s.mandates)) {
 		p = append(p, s.checkMandate(s.mandates[name])...)
 	}
-	for _, name := range sortedAgentNames(s.agents) {
+	for _, name := range slices.Sorted(maps.Keys(s.agents)) {
 		p = append(p, s.checkAgent(s.agents[name])...)
 	}
 	seen := map[string]bool{}
@@ -182,7 +176,7 @@ func (s *snapshot) problems() Problems {
 }
 
 // introduced returns the problems after has that before did not.
-func introduced(before, after *snapshot) Problems {
+func introduced(before, after *state) Problems {
 	old := map[string]bool{}
 	for _, p := range before.problems() {
 		old[p] = true
@@ -196,10 +190,10 @@ func introduced(before, after *snapshot) Problems {
 	return out
 }
 
-// clone copies the snapshot so a change can be tried on the copy. The
+// clone copies the state so a change can be tried on the copy. The
 // documents themselves are never modified, only replaced.
-func (s *snapshot) clone() *snapshot {
-	return &snapshot{
+func (s *state) clone() *state {
+	return &state{
 		manifests: maps.Clone(s.manifests), byAud: map[string]v0.Manifest{},
 		agents: maps.Clone(s.agents), mandates: maps.Clone(s.mandates), secrets: maps.Clone(s.secrets),
 		disabledMandates: maps.Clone(s.disabledMandates),
@@ -207,7 +201,7 @@ func (s *snapshot) clone() *snapshot {
 }
 
 // put adds or replaces an enabled document, as storing a new version does.
-func (s *snapshot) put(kind string, doc []byte) error {
+func (s *state) put(kind string, doc []byte) error {
 	switch kind {
 	case v0.KindManifest:
 		var m v0.Manifest
@@ -235,7 +229,7 @@ func (s *snapshot) put(kind string, doc []byte) error {
 }
 
 // disable takes a document out of the rules.
-func (s *snapshot) disable(kind, name string) {
+func (s *state) disable(kind, name string) {
 	switch kind {
 	case v0.KindManifest:
 		delete(s.manifests, name)
@@ -245,9 +239,9 @@ func (s *snapshot) disable(kind, name string) {
 	}
 }
 
-func (s *snapshot) reindex() {
+func (s *state) reindex() {
 	s.byAud = map[string]v0.Manifest{}
-	for _, name := range sortedManifestNames(s.manifests) {
+	for _, name := range slices.Sorted(maps.Keys(s.manifests)) {
 		m := s.manifests[name]
 		if _, taken := s.byAud[m.Spec.Audience]; !taken {
 			s.byAud[m.Spec.Audience] = m
@@ -256,9 +250,9 @@ func (s *snapshot) reindex() {
 }
 
 // secretUsers names the enabled manifests whose upstream uses a secret.
-func (s *snapshot) secretUsers(name string) []string {
+func (s *state) secretUsers(name string) []string {
 	var out []string
-	for _, mn := range sortedManifestNames(s.manifests) {
+	for _, mn := range slices.Sorted(maps.Keys(s.manifests)) {
 		if a := s.manifests[mn].Spec.Upstream.Auth; a != nil && a.SecretRef == name {
 			out = append(out, mn)
 		}
@@ -266,22 +260,13 @@ func (s *snapshot) secretUsers(name string) []string {
 	return out
 }
 
-func sortedManifestNames(m map[string]v0.Manifest) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 // checkMandate: every operation exists, and the mandate lies within every
 // agent that may hold it.
-func (s *snapshot) checkMandate(m v0.Mandate) Problems {
+func (s *state) checkMandate(m v0.Mandate) Problems {
 	var p Problems
 	p = append(p, s.operationsExist(m.Spec.Permissions, "mandate "+m.Metadata.Name)...)
 	p = append(p, policy.Coherent(m.Spec.Permissions, "mandate "+m.Metadata.Name)...)
-	for _, name := range sortedAgentNames(s.agents) {
+	for _, name := range slices.Sorted(maps.Keys(s.agents)) {
 		a := s.agents[name]
 		if slices.Contains(a.Spec.Mandates, m.Metadata.Name) || (m.Spec.Open && a.Spec.Status == v0.AgentUnverified) {
 			p = append(p, s.mandateWithinAgent(m, a)...)
@@ -292,7 +277,7 @@ func (s *snapshot) checkMandate(m v0.Mandate) Problems {
 
 // checkAgent: the mandates it lists exist and lie within it, and no other
 // agent claims one of its identities.
-func (s *snapshot) checkAgent(a v0.Agent) Problems {
+func (s *state) checkAgent(a v0.Agent) Problems {
 	var p Problems
 	for _, name := range a.Spec.Mandates {
 		m, ok := s.mandates[name]
@@ -305,7 +290,7 @@ func (s *snapshot) checkAgent(a v0.Agent) Problems {
 		p = append(p, s.mandateWithinAgent(m, a)...)
 	}
 	if a.Spec.Status == v0.AgentUnverified {
-		for _, name := range sortedMandateNames(s.mandates) {
+		for _, name := range slices.Sorted(maps.Keys(s.mandates)) {
 			if m := s.mandates[name]; m.Spec.Open {
 				p = append(p, s.mandateWithinAgent(m, a)...)
 			}
@@ -313,7 +298,7 @@ func (s *snapshot) checkAgent(a v0.Agent) Problems {
 	}
 	p = append(p, s.operationsExist(a.Spec.Permissions, "agent "+a.Metadata.Name)...)
 	p = append(p, policy.Coherent(a.Spec.Permissions, "agent "+a.Metadata.Name)...)
-	for _, on := range sortedAgentNames(s.agents) {
+	for _, on := range slices.Sorted(maps.Keys(s.agents)) {
 		other := s.agents[on]
 		if other.Metadata.Name == a.Metadata.Name {
 			continue
@@ -329,7 +314,7 @@ func (s *snapshot) checkAgent(a v0.Agent) Problems {
 	return p
 }
 
-func (s *snapshot) mandateWithinAgent(m v0.Mandate, a v0.Agent) Problems {
+func (s *state) mandateWithinAgent(m v0.Mandate, a v0.Agent) Problems {
 	mn, an := "mandate "+m.Metadata.Name, "agent "+a.Metadata.Name
 	p := Problems(policy.Within(m.Spec.Permissions, mn, a.Spec.Permissions, an, s.declared))
 	if m.Spec.TTL.D() > a.Spec.MaxTTL.D() {
@@ -365,7 +350,7 @@ func (s *snapshot) mandateWithinAgent(m v0.Mandate, a v0.Agent) Problems {
 
 // operationsExist: every location is a manifest's audience and every action
 // one of its operations.
-func (s *snapshot) operationsExist(perms []v0.Permission, who string) Problems {
+func (s *state) operationsExist(perms []v0.Permission, who string) Problems {
 	var p Problems
 	for _, perm := range perms {
 		for _, loc := range perm.Locations {
@@ -381,7 +366,7 @@ func (s *snapshot) operationsExist(perms []v0.Permission, who string) Problems {
 			}
 			// A bound applies to the operations that have the argument; a
 			// bound none of them has is a mistake, usually a typo.
-			for _, field := range sortedFields(perm.Constraints) {
+			for _, field := range slices.Sorted(maps.Keys(perm.Constraints)) {
 				declaredSomewhere := false
 				for _, act := range perm.Actions {
 					if op, ok := findOp(man, act); ok {
@@ -401,9 +386,9 @@ func (s *snapshot) operationsExist(perms []v0.Permission, who string) Problems {
 
 // dependents names the enabled mandates that reference a manifest's
 // audience, for refusing to disable it under them.
-func (s *snapshot) dependents(audience string) []string {
+func (s *state) dependents(audience string) []string {
 	var out []string
-	for _, name := range sortedMandateNames(s.mandates) {
+	for _, name := range slices.Sorted(maps.Keys(s.mandates)) {
 		for _, perm := range s.mandates[name].Spec.Permissions {
 			if slices.Contains(perm.Locations, audience) {
 				out = append(out, name)
@@ -446,33 +431,6 @@ func describe(id v0.AgentIdentity) string {
 	return string(id.Type)
 }
 
-func sortedFields(m map[string]v0.Constraint) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedAgentNames(m map[string]v0.Agent) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedMandateNames(m map[string]v0.Mandate) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
 // IsProblems reports whether err is a validation failure, for the HTTP
 // layer to turn into a 400.
 func IsProblems(err error) (Problems, bool) {
@@ -488,3 +446,25 @@ func IsProblems(err error) (Problems, bool) {
 type inUse string
 
 func (e inUse) Error() string { return string(e) }
+
+// change makes one configuration change under the configuration lock. It
+// loads the configuration as the last change left it, lets try apply the
+// change to a copy, refuses the change if the copy breaks a rule the
+// original did not, and otherwise lets commit write it. Nothing is written
+// unless the whole change is accepted.
+func change(ctx context.Context, l Locker, try func(after *state, c Store) error, commit func(c Store) error) error {
+	return l.LockConfig(ctx, func(c Store) error {
+		before, err := loadState(ctx, c)
+		if err != nil {
+			return err
+		}
+		after := before.clone()
+		if err := try(after, c); err != nil {
+			return err
+		}
+		if p := introduced(before, after); len(p) > 0 {
+			return p
+		}
+		return commit(c)
+	})
+}

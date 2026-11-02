@@ -1,11 +1,9 @@
-package admin_test
+package configuration_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,42 +12,22 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/vladmsnk/doorward/internal/admin"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/jwk"
-	"github.com/vladmsnk/doorward/internal/persistence/sql"
-	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/schema"
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
-const token = "test-admin-token-0123456789"
+const token = testhelpers.AdminToken
 
+// newServer serves the Admin API as serve does: every domain's routes on
+// one router behind the administrator's token.
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
-	ctx := context.Background()
-	st, err := sql.Open(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
-		t.Fatal(err)
-	}
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
-	master, _ := sealer.Generate()
-	sl, _ := sealer.Parse(master)
-	km := jwk.NewKeyRing(st.Keys(), sl)
-	if _, err := km.Ensure(ctx); err != nil {
-		t.Fatal(err)
-	}
-	api := &admin.Server{Store: st, Validator: v, Token: token, Sealer: sl, Keys: km, Log: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	srv := httptest.NewServer(api.Handler())
+	reg := testhelpers.NewRegistry(t, nil)
+	mux := http.NewServeMux()
+	reg.RegisterAdminRoutes(mux)
+	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
 }
@@ -57,7 +35,7 @@ func newServer(t *testing.T) *httptest.Server {
 type result struct {
 	status   int
 	body     string
-	resp     admin.Response
+	resp     configuration.Response
 	problems []string
 }
 
@@ -80,7 +58,7 @@ func call(t *testing.T, srv *httptest.Server, method, path string, body []byte, 
 	if res.StatusCode == http.StatusOK && method != http.MethodGet {
 		_ = json.Unmarshal(raw, &out.resp)
 	}
-	var e admin.ErrorResponse
+	var e x.ErrorResponse
 	if res.StatusCode >= 400 && json.Unmarshal(raw, &e) == nil {
 		out.problems = e.Problems
 	}
@@ -132,7 +110,7 @@ func TestExamplesLoadAndRead(t *testing.T) {
 	loadExamples(t, srv)
 
 	r := call(t, srv, http.MethodGet, "/admin/v0/mandates", nil, "", true)
-	var list []admin.Response
+	var list []configuration.Response
 	if err := json.Unmarshal([]byte(r.body), &list); err != nil || len(list) != 3 {
 		t.Fatalf("list: %d %s", r.status, r.body)
 	}
@@ -156,7 +134,7 @@ func TestEveryWriteIsAVersion(t *testing.T) {
 		t.Fatalf("second put: version %d", v2.Version)
 	}
 	r := call(t, srv, http.MethodGet, "/admin/v0/mandates/invoices/versions", nil, "", true)
-	var hist []admin.Response
+	var hist []configuration.Response
 	_ = json.Unmarshal([]byte(r.body), &hist)
 	if len(hist) != 2 || hist[0].Digest != hist[1].Digest || hist[0].CreatedBy != "admin-token" {
 		t.Fatalf("history: %s", r.body)
@@ -276,7 +254,7 @@ func TestSecretsAndKeys(t *testing.T) {
 
 	// Keys: one active key at start; rotation adds one; the active key cannot be retired.
 	r = call(t, srv, http.MethodGet, "/admin/v0/keys", nil, "", true)
-	var ks []admin.KeyResponse
+	var ks []jwk.KeyResponse
 	if err := json.Unmarshal([]byte(r.body), &ks); err != nil || len(ks) != 1 || !ks[0].Active {
 		t.Fatalf("keys: %d %s", r.status, r.body)
 	}

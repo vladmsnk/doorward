@@ -2,11 +2,10 @@ package x
 
 import (
 	"crypto/subtle"
+	"errors"
+	"log/slog"
 	"net/http"
 )
-
-// AdminPrefix is where the Admin API lives.
-const AdminPrefix = "/admin/v0"
 
 // AdminRouter serves the Admin API. Each domain package registers its routes
 // on it (SetAdminRoutes), and every route registered requires the
@@ -56,3 +55,18 @@ func WriteError(w http.ResponseWriter, status int, code, message string, problem
 // AdminActor names who made a change. With the bootstrap token that is all
 // that is known; administrators who sign in come with C12.
 func AdminActor(*http.Request) string { return "admin-token" }
+
+// FailAdmin answers an Admin API request that failed with err: 404 for
+// ErrNotFound, 409 for ErrConflict, and otherwise 500, with the error
+// logged rather than shown.
+func FailAdmin(w http.ResponseWriter, log *slog.Logger, err error) {
+	switch {
+	case errors.Is(err, ErrNotFound):
+		WriteError(w, http.StatusNotFound, "not_found", "no such document", nil)
+	case errors.Is(err, ErrConflict):
+		WriteError(w, http.StatusConflict, "conflict", err.Error(), nil)
+	default:
+		log.Error("admin request failed", "err", err)
+		WriteError(w, http.StatusInternalServerError, "internal", "internal error", nil)
+	}
+}

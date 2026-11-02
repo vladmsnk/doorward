@@ -16,7 +16,6 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/admin"
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/demoledger"
 	"github.com/vladmsnk/doorward/internal/gateway"
@@ -111,7 +110,7 @@ func newBox(t testing.TB) *box {
 
 	mk, _ := sealer.Generate()
 	sl, _ := sealer.Parse(mk)
-	sealed, err := sl.Seal([]byte(apiKey), admin.SecretPurpose(keyRef))
+	sealed, err := sl.Seal([]byte(apiKey), configuration.SecretPurpose(keyRef))
 	if err != nil {
 		t.Fatal(err)
 	}
