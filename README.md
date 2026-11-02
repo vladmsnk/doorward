@@ -82,7 +82,7 @@ Approval) are described in [docs/concepts.md](docs/concepts.md).
 
 ## Quick start
 
-Needs Go 1.25 and PostgreSQL 16. All of it runs on one machine with the
+Needs Go 1.26 and PostgreSQL 16. All of it runs on one machine with the
 [examples](examples/v0): Alice lets Acme's `invoice-assistant` read and pay
 her invoices, up to 5,000 EUR per payment.
 

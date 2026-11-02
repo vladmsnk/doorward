@@ -33,7 +33,7 @@ assistance is disclosed, not hidden:
 
 ## Development setup
 
-Go 1.25 and, for `make lint`, golangci-lint v2. The store tests need
+Go 1.26 and, for `make lint`, golangci-lint v2.15 or later. The store tests need
 PostgreSQL 16: `make test-db` starts a throwaway one and prints the
 `DOORWARD_TEST_POSTGRES_DSN` to export; without that variable they skip.
 
@@ -51,6 +51,14 @@ make ci
 It runs what CI runs: `go mod tidy -diff`, gofmt, `go vet`, golangci-lint,
 the tests with the race detector, and validation of every example through the
 CLI.
+
+## Updating dependencies
+
+Dependencies are updated by a person, in a signed-off commit like any
+other: a bot's commits cannot pass the sign-off check. The Dependencies
+workflow runs `govulncheck` every week and whenever `go.mod` changes, and
+lists the direct dependencies with a newer release in its summary. Update
+with `go get MODULE@VERSION`, then `go mod tidy` and `make ci`.
 
 ## Changing a schema
 

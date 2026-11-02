@@ -31,9 +31,9 @@ jobs:
       DOORWARD_TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:5432/doorward_test?sslmode=disable
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
@@ -56,15 +56,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: golangci/golangci-lint-action@v8
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: v2.5.0
+          version: v2.15.0
 
   # The release configuration is checked on every change, so a tag never
   # discovers a broken one. Signing needs the tag's OIDC identity and is
@@ -72,15 +72,15 @@ jobs:
   release-check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           version: "~> v2"
           args: release --snapshot --clean --skip=publish,sign

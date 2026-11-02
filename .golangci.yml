@@ -20,11 +20,13 @@ linters:
         - fmt.Fprintln
   exclusions:
     rules:
-      # Tests read their fixtures from paths they build themselves, and run
-      # tools (python3 for the independent journal verifier) found on PATH.
+      # Tests read and write their fixtures at paths they build themselves
+      # (G304, and its taint-tracking form G703), run tools found on PATH
+      # (python3 for the independent journal verifier), and use example
+      # credentials such as the demo ledger's key (G101).
       - path: _test\.go
         linters: [gosec]
-        text: G304|G204
+        text: G304|G703|G204|G101
       # The test helpers read the example documents the same way.
       - path: internal/testhelpers/
         linters: [gosec]
