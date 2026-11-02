@@ -8,6 +8,7 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/core"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/policy"
 )
@@ -56,9 +57,30 @@ func scopesFor(snap *configuration.Snapshot, audience string) []string {
 	})
 }
 
-// scopesAllowing names the enabled mandates that allow one tool.
-func scopesAllowing(snap *configuration.Snapshot, audience, tool string) []string {
-	return snap.MandatesWhere(func(m v0.Mandate) bool { return policy.Allows(m.Spec.Permissions, audience, tool) })
+// scopesAllowing names the mandates that would let the caller run tool if
+// it asked for them: enabled, for the same kind of principal as its grant,
+// ones its agent may request, and only when the agent's own ceiling allows
+// the tool. A caller that could obtain none gets a plain refusal instead
+// of an invitation to a step-up that can only fail.
+func scopesAllowing(snap *configuration.Snapshot, man configuration.Manifest, tool string, p *v0.Principal) []string {
+	if p == nil {
+		return nil
+	}
+	op := core.Operation(man.Manifest, tool)
+	agent, err := snap.Agent(p.Agent)
+	if op == nil || err != nil {
+		return nil
+	}
+	if !policy.Allows(agent.Spec.Permissions, man.Spec.Audience, tool) || policy.Tier(op.Sensitivity) > policy.Tier(agent.Spec.MaxSensitivity) {
+		return nil
+	}
+	principal := v0.PrincipalService
+	if p.User != "" {
+		principal = v0.PrincipalUser
+	}
+	return snap.MandatesWhere(func(m v0.Mandate) bool {
+		return m.Spec.Principal == principal && configuration.MayRequest(agent.Agent, m) && policy.Allows(m.Spec.Permissions, man.Spec.Audience, tool)
+	})
 }
 
 func firstNonEmpty(a, b string) string {

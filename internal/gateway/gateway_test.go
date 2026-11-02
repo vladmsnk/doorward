@@ -515,3 +515,104 @@ func TestGatewayServesAnImportedManifest(t *testing.T) {
 		t.Errorf("the record names manifest %+v, not the imported %s", v, stored.Digest)
 	}
 }
+
+// put stores a document directly, as an example configuration is stored.
+func (b *box) put(kind string, doc map[string]any) string {
+	b.t.Helper()
+	data, err := json.Marshal(doc)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	k, err := schema.ParseKind(kind)
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	if err := b.v.Check(k, data); err != nil {
+		b.t.Fatalf("%s: %v", data, err)
+	}
+	d, err := b.st.Documents().Put(context.Background(), kind, doc["metadata"].(map[string]any)["name"].(string), data, "test")
+	if err != nil {
+		b.t.Fatal(err)
+	}
+	return d.Digest
+}
+
+// userGrant mints a grant for a user, through agent, under mandate, with
+// the consent it rests on, for list_unmatched alone.
+func (b *box) userGrant(id, agent, mandate, digest string) string {
+	b.t.Helper()
+	user := v0.SubjectID{Format: v0.SubjectIDFormat, Issuer: "https://login.example.com", Sub: "u_alice"}
+	c := v0.Consent{
+		ID: "cns_" + id, User: user, Agent: agent, Mandate: mandate, MandateVersion: digest, Status: v0.ConsentActive,
+		GrantedAt: v0.Timestamp{Time: now.Add(-time.Hour)}, ExpiresAt: v0.Timestamp{Time: now.Add(24 * time.Hour)},
+	}
+	if err := b.st.Consents().Create(context.Background(), c); err != nil {
+		b.t.Fatal(err)
+	}
+	return b.mint("grt_"+id, func(g *v0.Grant) {
+		g.Subject, g.SubjectID, g.ClientID, g.Consent = "alice@example.com", &user, "client-"+agent, c.ID
+		g.Actor, g.Mandate, g.Limits, g.Audience = v0.Actor{Subject: agent}, mandate, nil, []string{ledgerAud}
+		g.AuthorizationDetails = []v0.AuthorizationDetail{{Type: v0.AuthorizationDetailType, Locations: []string{ledgerAud}, Actions: []string{"list_unmatched"}}}
+	})
+}
+
+// A refused tool names, in the 403, only the mandates the caller could
+// obtain: ones its agent may request, for its kind of principal, within
+// its ceiling. Otherwise the refusal is a plain tool error, not an
+// invitation to a step-up that can only fail.
+func TestGatewayStepUpNamesOnlyMandatesTheAgentCanGet(t *testing.T) {
+	b := newBox(t)
+	ledger := func(actions ...string) []map[string]any {
+		return []map[string]any{{"locations": []string{ledgerAud}, "actions": actions}}
+	}
+	mandate := func(name string, open bool, actions ...string) string {
+		spec := map[string]any{"principal": "user", "ttl": "10m",
+			"consent": map[string]any{"text": "Read the ledger.", "max_duration": "24h"}, "permissions": ledger(actions...)}
+		if open {
+			spec["open"] = true
+		}
+		return b.put(v0.KindMandate, map[string]any{"apiVersion": v0.APIVersion, "kind": v0.KindMandate, "metadata": map[string]any{"name": name}, "spec": spec})
+	}
+	agent := func(name string, status v0.AgentStatus, ceiling v0.Sensitivity, mandates []string, actions ...string) {
+		doc := map[string]any{"apiVersion": v0.APIVersion, "kind": v0.KindAgent, "metadata": map[string]any{"name": name},
+			"spec": map[string]any{"status": status, "max_sensitivity": ceiling, "max_ttl": "1h",
+				"identities":  []map[string]any{{"type": "oauth_client", "client_id": "client-" + name, "redirect_uris": []string{"http://127.0.0.1:1/cb"}}},
+				"permissions": ledger(actions...)}}
+		spec := doc["spec"].(map[string]any)
+		if mandates != nil {
+			spec["mandates"] = mandates
+		}
+		if status == v0.AgentUnverified {
+			spec["publisher"] = map[string]any{"name": "Peek"}
+		} else {
+			spec["owner"] = map[string]any{"team": "finance-platform"}
+		}
+		b.put(v0.KindAgent, doc)
+	}
+	glance := mandate("ledger-glance", true, "list_unmatched")
+	mandate("ledger-books", false, "list_unmatched", "post_entry")
+	agent("peek-1a2b", v0.AgentUnverified, v0.SensitivityRead, nil, "list_unmatched", "post_entry")
+	agent("books-helper", v0.AgentVerified, v0.SensitivityWrite, []string{"ledger-books"}, "list_unmatched", "post_entry", "write_off")
+
+	refused := func(name string, r reply) {
+		t.Helper()
+		if text, _, isErr := r.toolError(); r.status != 200 || !isErr || !strings.Contains(text, "action_not_granted") {
+			t.Errorf("%s: want a plain refusal, got %d %q %s", name, r.status, r.header.Get("WWW-Authenticate"), r.body)
+		}
+	}
+	// Unverified: it may ask only for open mandates, and none allows the
+	// write, so neither ledger-books nor the service mandate reconcile is
+	// named.
+	peek := b.userGrant("peek_000000001", "peek-1a2b", "ledger-glance", glance)
+	refused("unverified agent", b.tool(peek, "post_entry", entry(10)))
+
+	// Verified: the mandate it lists is named, and the service mandate
+	// that also allows the tool is not.
+	helper := b.userGrant("helper_0000001", "books-helper", "ledger-glance", glance)
+	r := b.tool(helper, "post_entry", entry(10))
+	if r.status != 403 || !strings.Contains(r.header.Get("WWW-Authenticate"), `scope="ledger-books"`) {
+		t.Errorf("verified agent: %d %q %s", r.status, r.header.Get("WWW-Authenticate"), r.body)
+	}
+	// Above its ceiling: write_off is critical, the agent stops at write.
+	refused("above the ceiling", b.tool(helper, "write_off", map[string]any{"payment_id": "p", "amount": 1.0, "reason": "x"}))
+}
