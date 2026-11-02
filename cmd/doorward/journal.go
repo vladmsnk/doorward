@@ -13,7 +13,7 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/journal"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -65,9 +65,9 @@ func runJournalExport(args []string, stdout, stderr io.Writer) int {
 }
 
 // exportJournal writes the records from seq on as JSON lines.
-func exportJournal(ctx context.Context, d store.Decisions, from uint64, w io.Writer) error {
+func exportJournal(ctx context.Context, d journal.Manager, from uint64, w io.Writer) error {
 	head, err := d.Head(ctx)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, x.ErrNotFound) {
 		return nil
 	}
 	if err != nil {

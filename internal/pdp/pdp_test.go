@@ -20,14 +20,14 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/internal/pdp"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -44,9 +44,9 @@ var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 
 type box struct {
 	t        testing.TB
-	st       *postgres.Store
+	st       *sql.Persister
 	v        *schema.Validator
-	signer   *keys.Signer
+	signer   *jwk.Signer
 	srv      *httptest.Server
 	journal  *syncBuffer
 	follower *journal.Follower
@@ -86,7 +86,7 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	st, err := postgres.Open(ctx, dsn)
+	st, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +122,7 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	}
 	mk, _ := sealer.Generate()
 	sl, _ := sealer.Parse(mk)
-	km := keys.New(st.Keys(), sl)
+	km := jwk.NewKeyRing(st.Keys(), sl)
 	signer, err := km.Ensure(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	fctx, fcancel := context.WithCancel(ctx)
 	go b.follower.Run(fctx)
 	t.Cleanup(fcancel)
-	cfg := &config.Cache{Store: st, Validator: v}
+	cfg := &configuration.Cache{Store: st, Validator: v}
 	p := &pdp.PDP{
 		Store:    st,
 		Config:   cfg,
@@ -176,7 +176,7 @@ func (b *box) mint(rel, id string, bound *v0.ApprovedAction, edits ...func(*v0.G
 		e(&g)
 	}
 	g.ID, g.IssuedAt, g.Expiry = id, now.Add(-time.Minute).Unix(), now.Add(14*time.Minute).Unix()
-	rec := store.GrantRecord{Grant: g, Agent: g.Actor.Subject}
+	rec := grant.Record{Grant: g, Agent: g.Actor.Subject}
 	if bound != nil {
 		h, err := bound.Hash()
 		if err != nil {
@@ -646,7 +646,7 @@ func TestDecisionDeadline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", sql.ChainLock); err != nil {
 		t.Fatal(err)
 	}
 	start := time.Now()
@@ -658,12 +658,12 @@ func TestDecisionDeadline(t *testing.T) {
 	if took > 2*time.Second {
 		t.Errorf("answer took %s on a 300ms deadline", took)
 	}
-	_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+	_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", sql.ChainLock)
 	conn.Release()
 	if v, _ := b.st.Counters().Consumed(ctx, "grant:grt_alice_deadline_000001:calls"); v != "0" {
 		t.Errorf("the refused call drew %s", v)
 	}
-	if _, err := b.st.Decisions().Head(ctx); !errors.Is(err, store.ErrNotFound) {
+	if _, err := b.st.Decisions().Head(ctx); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("the refused call was recorded: %v", err)
 	}
 	if a := b.ask(alice, pepToken, payments, "get_invoice", map[string]any{"invoice_id": "i"}, nil); !a.resp.Decision {

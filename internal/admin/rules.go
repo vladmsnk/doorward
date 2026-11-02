@@ -10,8 +10,8 @@ import (
 	"sort"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/policy"
-	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // The rules that span documents. Each document's own schema and Check have
@@ -50,7 +50,7 @@ type snapshot struct {
 	disabledMandates map[string]bool
 }
 
-func load(ctx context.Context, st store.Config) (*snapshot, error) {
+func load(ctx context.Context, st configuration.Store) (*snapshot, error) {
 	docs := st.Documents()
 	s := &snapshot{
 		manifests: map[string]v0.Manifest{}, byAud: map[string]v0.Manifest{},
@@ -112,12 +112,12 @@ func load(ctx context.Context, st store.Config) (*snapshot, error) {
 
 // enabled returns the enabled current documents of a kind; a disabled
 // document does not take part in any rule.
-func enabled(ctx context.Context, docs store.Documents, kind string) ([]store.Document, error) {
+func enabled(ctx context.Context, docs configuration.Manager, kind string) ([]configuration.Document, error) {
 	all, err := docs.List(ctx, kind)
 	if err != nil {
 		return nil, err
 	}
-	var out []store.Document
+	var out []configuration.Document
 	for _, d := range all {
 		if !d.Disabled {
 			out = append(out, d)

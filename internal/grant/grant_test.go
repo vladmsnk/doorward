@@ -16,8 +16,8 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/grant"
-	"github.com/vladmsnk/doorward/internal/keys"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -30,7 +30,7 @@ func (f fakeKeys) Public(_ context.Context, kid string) (*ecdsa.PublicKey, error
 	if k, ok := f[kid]; ok {
 		return k, nil
 	}
-	return nil, store.ErrNotFound
+	return nil, x.ErrNotFound
 }
 
 type brokenKeys struct{}
@@ -50,7 +50,7 @@ func (f fakeStatus) Standing(_ context.Context, g v0.Grant) (grant.Standing, err
 }
 
 type fixture struct {
-	signer *keys.Signer
+	signer *jwk.Signer
 	claims v0.Grant
 	v      *grant.Verifier
 	now    time.Time
@@ -76,7 +76,7 @@ func setup(t *testing.T) *fixture {
 	}
 	now := time.Unix(claims.IssuedAt, 0).Add(5 * time.Minute)
 	f := &fixture{
-		signer: &keys.Signer{KID: "kid-1", Private: priv},
+		signer: &jwk.Signer{KID: "kid-1", Private: priv},
 		claims: claims,
 		now:    now,
 	}

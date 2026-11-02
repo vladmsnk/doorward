@@ -23,12 +23,11 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/policy"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // Prefix is where the gateway serves manifests: /mcp/{manifest name}.
@@ -44,10 +43,10 @@ const MetaKey = "dev.doorward/decision"
 // Gateway serves the MCP endpoints. Config, PDP, Verifier, Secrets and
 // Sealer are required.
 type Gateway struct {
-	Config   *config.Cache
+	Config   *configuration.Cache
 	PDP      *pdp.PDP
 	Verifier *grant.Verifier
-	Secrets  store.Secrets
+	Secrets  configuration.SecretManager
 	Sealer   *sealer.Sealer
 	// ID names this gateway as the point of enforcement in records.
 	ID  string
@@ -123,7 +122,7 @@ func (g *Gateway) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) post(w http.ResponseWriter, r *http.Request, snap *config.Snapshot, man config.Manifest, token string) {
+func (g *Gateway) post(w http.ResponseWriter, r *http.Request, snap *configuration.Snapshot, man configuration.Manifest, token string) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxBody+1))
 	if err != nil || len(body) > MaxBody {
 		http.Error(w, "message too large", http.StatusRequestEntityTooLarge)
@@ -255,7 +254,7 @@ func walkUnambiguous(dec *json.Decoder) error {
 
 // toolsCall has the decision point decide the call, then forwards it or
 // answers for it.
-func (g *Gateway) toolsCall(w http.ResponseWriter, r *http.Request, snap *config.Snapshot, man config.Manifest, token string, msg rpcMessage, body []byte) {
+func (g *Gateway) toolsCall(w http.ResponseWriter, r *http.Request, snap *configuration.Snapshot, man configuration.Manifest, token string, msg rpcMessage, body []byte) {
 	var params struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"`
@@ -318,7 +317,7 @@ type rewrite struct {
 // proxy forwards the request to the manifest's upstream with the server's
 // credential, and streams the answer back, rewriting a tool list on the
 // way when asked.
-func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, man config.Manifest, rw *rewrite) {
+func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, man configuration.Manifest, rw *rewrite) {
 	target, err := url.Parse(man.Spec.Upstream.URL)
 	if err != nil {
 		http.Error(w, "the manifest's upstream URL is invalid", http.StatusBadGateway)
@@ -363,7 +362,7 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, man config.Manif
 
 // credential returns the header the upstream wants, opened from the secret
 // store; cached per configuration version.
-func (g *Gateway) credential(ctx context.Context, man config.Manifest) (string, string, error) {
+func (g *Gateway) credential(ctx context.Context, man configuration.Manifest) (string, string, error) {
 	auth := man.Spec.Upstream.Auth
 	if auth == nil {
 		return "", "", nil
@@ -398,7 +397,7 @@ func (g *Gateway) credential(ctx context.Context, man config.Manifest) (string, 
 
 // refuseGrant answers a request whose grant did not verify: 401 for a bad
 // or expired grant, as the protocol requires.
-func (g *Gateway) refuseGrant(w http.ResponseWriter, res grant.Result, snap *config.Snapshot, man config.Manifest) {
+func (g *Gateway) refuseGrant(w http.ResponseWriter, res grant.Result, snap *configuration.Snapshot, man configuration.Manifest) {
 	desc := ""
 	if res.Reason != nil {
 		desc = res.Reason.Message
@@ -558,7 +557,7 @@ func toPermissions(details []v0.AuthorizationDetail) []v0.Permission {
 	return out
 }
 
-func opDeclared(man config.Manifest, tool string) bool {
+func opDeclared(man configuration.Manifest, tool string) bool {
 	for _, op := range man.Spec.Operations {
 		if op.Name == tool {
 			return true
@@ -569,7 +568,7 @@ func opDeclared(man config.Manifest, tool string) bool {
 
 // scopesFor names the enabled mandates that allow anything at the
 // audience: what a client without a grant should ask for.
-func scopesFor(snap *config.Snapshot, audience string) []string {
+func scopesFor(snap *configuration.Snapshot, audience string) []string {
 	return snap.MandatesWhere(func(m v0.Mandate) bool {
 		for _, p := range m.Spec.Permissions {
 			for _, loc := range p.Locations {
@@ -583,7 +582,7 @@ func scopesFor(snap *config.Snapshot, audience string) []string {
 }
 
 // scopesAllowing names the enabled mandates that allow one tool.
-func scopesAllowing(snap *config.Snapshot, audience, tool string) []string {
+func scopesAllowing(snap *configuration.Snapshot, audience, tool string) []string {
 	return snap.MandatesWhere(func(m v0.Mandate) bool { return policy.Allows(m.Spec.Permissions, audience, tool) })
 }
 

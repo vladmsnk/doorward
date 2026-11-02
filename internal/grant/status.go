@@ -8,7 +8,9 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/consent"
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
 // StoreStatus reads a grant's standing from the box's own records: the
@@ -22,7 +24,7 @@ import (
 // resting on it; reading the agent too covers a grant issued in the same
 // instant as a suspension.
 type StoreStatus struct {
-	Store store.Store
+	Store StatusSource
 	// Config, when set, answers for agents and mandates instead of the
 	// store, from a snapshot kept current by the decision point.
 	Config Config
@@ -30,8 +32,16 @@ type StoreStatus struct {
 	Now func() time.Time
 }
 
+// StatusSource is what StoreStatus reads: the grants, the consents they
+// rest on, and the documents of their agents and mandates.
+type StatusSource interface {
+	Grants() Manager
+	Consents() consent.Manager
+	Documents() configuration.Manager
+}
+
 // Config answers for the agents and mandates a grant depends on.
-// store.ErrNotFound means there is none.
+// x.ErrNotFound means there is none.
 type Config interface {
 	Agent(ctx context.Context, name string) (v0.Agent, error)
 	Mandate(ctx context.Context, name string) (m v0.Mandate, disabled bool, err error)
@@ -42,7 +52,7 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 		return Standing{Refusal: fmt.Sprintf(format, a...)}, nil
 	}
 	rec, err := s.Store.Grants().Get(ctx, g.ID)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, x.ErrNotFound) {
 		return refuse("the box has no record of grant %s", g.ID)
 	}
 	if err != nil {
@@ -55,7 +65,7 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 		return refuse("single-use grant %s was used at %s", g.ID, rec.UsedAt.UTC().Format(v0.TimestampLayout))
 	}
 	a, err := s.agent(ctx, rec.Agent)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, x.ErrNotFound) {
 		return refuse("agent %s is not registered", rec.Agent)
 	}
 	if err != nil {
@@ -66,7 +76,7 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 	}
 	if g.Consent != "" {
 		c, err := s.Store.Consents().Get(ctx, g.Consent)
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, x.ErrNotFound) {
 			return refuse("consent %s, which the grant rests on, is not recorded", g.Consent)
 		}
 		if err != nil {
@@ -80,7 +90,7 @@ func (s StoreStatus) Standing(ctx context.Context, g v0.Grant) (Standing, error)
 		}
 	}
 	_, disabled, err := s.mandate(ctx, g.Mandate)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, x.ErrNotFound) {
 		return refuse("mandate %s does not exist", g.Mandate)
 	}
 	if err != nil {

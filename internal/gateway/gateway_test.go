@@ -17,15 +17,14 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/demoledger"
 	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/internal/pdp"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -43,9 +42,9 @@ var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 // point and a signer to mint grants with.
 type box struct {
 	t      testing.TB
-	st     *postgres.Store
+	st     *sql.Persister
 	v      *schema.Validator
-	signer *keys.Signer
+	signer *jwk.Signer
 	gw     *gateway.Gateway
 	srv    *httptest.Server
 
@@ -61,7 +60,7 @@ func newBox(t testing.TB) *box {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	st, err := postgres.Open(ctx, dsn)
+	st, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,13 +118,13 @@ func newBox(t testing.TB) *box {
 	if err := st.Secrets().Put(ctx, keyRef, sealed, "test"); err != nil {
 		t.Fatal(err)
 	}
-	km := keys.New(st.Keys(), sl)
+	km := jwk.NewKeyRing(st.Keys(), sl)
 	b.signer, err = km.Ensure(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clock := func() time.Time { return now }
-	cfg := &config.Cache{Store: st, Validator: v}
+	cfg := &configuration.Cache{Store: st, Validator: v}
 	p := &pdp.PDP{
 		Store:    st,
 		Config:   cfg,
@@ -174,7 +173,7 @@ func (b *box) mint(id string, edits ...func(*v0.Grant)) string {
 		e(&g)
 	}
 	g.ID, g.IssuedAt, g.Expiry = id, now.Add(-time.Minute).Unix(), now.Add(14*time.Minute).Unix()
-	if err := b.st.Grants().Create(context.Background(), store.GrantRecord{Grant: g, Agent: g.Actor.Subject}); err != nil {
+	if err := b.st.Grants().Create(context.Background(), grant.Record{Grant: g, Agent: g.Actor.Subject}); err != nil {
 		b.t.Fatal(err)
 	}
 	tok, err := grant.Sign(b.signer, g)

@@ -10,19 +10,19 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/grant"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/internal/persistence"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/schema"
 )
 
-func openStore(t *testing.T) *postgres.Store {
+func openStore(t *testing.T) *sql.Persister {
 	t.Helper()
 	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	s, err := postgres.Open(ctx, dsn)
+	s, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -33,7 +33,7 @@ func openStore(t *testing.T) *postgres.Store {
 	return s
 }
 
-func putDoc(t *testing.T, s store.Store, rel string) {
+func putDoc(t *testing.T, s persistence.Persister, rel string) {
 	t.Helper()
 	data, err := os.ReadFile("../../examples/v0/" + rel)
 	if err != nil {
@@ -52,7 +52,7 @@ func putDoc(t *testing.T, s store.Store, rel string) {
 	}
 }
 
-func putAgent(t *testing.T, s store.Store, status v0.AgentStatus) {
+func putAgent(t *testing.T, s persistence.Persister, status v0.AgentStatus) {
 	t.Helper()
 	data, err := os.ReadFile("../../examples/v0/config/agent-invoice-assistant.yaml")
 	if err != nil {
@@ -102,7 +102,7 @@ func TestStoreStatus(t *testing.T) {
 	if err := s.Consents().Create(ctx, consent); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: f.claims, Agent: "invoice-assistant"}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: f.claims, Agent: "invoice-assistant"}); err != nil {
 		t.Fatal(err)
 	}
 	standing("agent invoice-assistant is not registered")
@@ -133,7 +133,7 @@ func TestStoreStatus(t *testing.T) {
 	// A single-use grant stands, bound to its call, until it is spent.
 	once := f.claims
 	once.ID = "grt_01JBXR7D2F4H6K8M0P3R5T7V9X"
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: once, Agent: "invoice-assistant", SingleUse: true, ActionHash: "sha-256:" + strings.Repeat("a", 43)}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: once, Agent: "invoice-assistant", SingleUse: true, ActionHash: "sha-256:" + strings.Repeat("a", 43)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := st.Standing(ctx, once)
@@ -159,7 +159,7 @@ func TestStoreStatus(t *testing.T) {
 	}
 	other := f.claims
 	other.ID = "grt_01JBXR9Z9Z9Z9Z9Z9Z9Z9Z9Z9Z"
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: other, Agent: "invoice-assistant"}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: other, Agent: "invoice-assistant"}); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := st.Standing(ctx, other); got.Refusal != "consent cns_01JBXR4Q8M2P4R6T8V0X2Z4B6D is revoked" {

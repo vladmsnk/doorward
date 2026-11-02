@@ -6,8 +6,8 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/budget"
 	"github.com/vladmsnk/doorward/internal/core"
-	"github.com/vladmsnk/doorward/internal/store"
 )
 
 func TestBudgets(t *testing.T) {
@@ -27,7 +27,7 @@ func TestBudgets(t *testing.T) {
 	if reason != nil {
 		t.Fatal(reason)
 	}
-	want := []store.Draw{
+	want := []budget.Draw{
 		{Key: "consent:" + alice.Consent + ":payout-month:2026-10", Amount: "1200", Max: "5000"},
 		{Key: "grant:" + alice.ID + ":calls", Amount: "1", Max: "50"},
 	}
@@ -77,7 +77,7 @@ func TestLimitsCheck(t *testing.T) {
 		Arguments: map[string]any{"invoice_id": "i", "amount": 1200.0, "currency": "EUR"}}, time.Now())
 
 	// Drawn: the check passes and the record lists each budget.
-	check, reason, uses := core.LimitsCheck(budgets, []store.Drawn{
+	check, reason, uses := core.LimitsCheck(budgets, []budget.Drawn{
 		{Key: budgets[0].Draw.Key, Amount: "1200", Remaining: "3800"},
 		{Key: budgets[1].Draw.Key, Amount: "1", Remaining: "49"},
 	}, nil)
@@ -87,7 +87,7 @@ func TestLimitsCheck(t *testing.T) {
 
 	// Exhausted: the check fails, naming the budget, and nothing is listed
 	// as drawn.
-	err := &store.ExhaustedError{Key: budgets[0].Draw.Key, Amount: "1200", Remaining: "1000"}
+	err := &budget.ExhaustedError{Key: budgets[0].Draw.Key, Amount: "1200", Remaining: "1000"}
 	check, reason, uses = core.LimitsCheck(budgets, nil, err)
 	if check.Result != v0.CheckFail || check.Detail != "payout-month" || uses != nil ||
 		reason.Code != v0.ReasonLimitExceeded || reason.Message != "budget payout-month has 1000 left this month; the call needs 1200" {
@@ -101,7 +101,7 @@ func TestLimitsCheckBestEffort(t *testing.T) {
 	alice := load[v0.Grant](t, "grant/pay-invoice.json")
 	budgets, _ := core.Budgets(alice, core.Call{Resource: payments, Action: "pay_invoice",
 		Arguments: map[string]any{"invoice_id": "i", "amount": 1200.0, "currency": "EUR"}}, time.Now())
-	check, reason, uses := core.LimitsCheck(budgets, []store.Drawn{
+	check, reason, uses := core.LimitsCheck(budgets, []budget.Drawn{
 		{Key: budgets[0].Draw.Key, Amount: "1200", Remaining: "1000", Exhausted: true},
 		{Key: budgets[1].Draw.Key, Amount: "1", Remaining: "49"},
 	}, nil)

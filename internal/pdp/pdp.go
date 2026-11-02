@@ -18,11 +18,13 @@ import (
 	"go.opentelemetry.io/otel/trace/noop"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/budget"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/core"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/ids"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/persistence"
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
 // TokenKey is the request context member that carries the grant. The record
@@ -38,11 +40,11 @@ const ResourceType = "tool_call"
 
 // PDP decides calls. Store, Verifier and Config are required.
 type PDP struct {
-	Store    store.Store
+	Store    persistence.Persister
 	Verifier *grant.Verifier
 	// Config is the decision point's copy of the configuration, reloaded
 	// when it changes.
-	Config *config.Cache
+	Config *configuration.Cache
 	// ID and Version name this decision point in every record.
 	ID      string
 	Version string
@@ -83,7 +85,7 @@ func (p *PDP) Evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 	ctx, cancel := context.WithTimeout(ctx, p.timeout())
 	defer cancel()
 	d, err := p.evaluate(ctx, req, pep, traceID)
-	if errors.Is(err, store.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, x.ErrTimeout) || errors.Is(err, context.DeadlineExceeded) {
 		return d, fmt.Errorf("%w: %w", ErrTimeout, err)
 	}
 	return d, err
@@ -203,7 +205,7 @@ func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 
 	// limits: last, and spent together with the record.
 	budgets, reason := core.Budgets(g, call, now)
-	allowance := &store.Allowance{At: now, BestEffort: observe}
+	allowance := &budget.Allowance{At: now, BestEffort: observe}
 	if st.SingleUse {
 		allowance.SingleUse = g.ID
 	}
@@ -218,8 +220,8 @@ func (p *PDP) evaluate(ctx context.Context, req v0.EvaluationRequest, pep v0.PEP
 		budgets = nil
 	}
 	allowance.Draws = core.Draws(budgets)
-	return p.record(ctx, d, allowance, func(d v0.Decision, drawn []store.Drawn, err error) v0.Decision {
-		if errors.Is(err, store.ErrState) {
+	return p.record(ctx, d, allowance, func(d v0.Decision, drawn []budget.Drawn, err error) v0.Decision {
+		if errors.Is(err, x.ErrState) {
 			// Another call spent the single-use grant after this one's
 			// status check. Enforced in every mode.
 			msg := fmt.Sprintf("single-use grant %s was spent by another call", g.ID)
@@ -255,8 +257,8 @@ func observedOf(reasons []v0.Reason) *v0.Observed {
 // record settles the allowance, if any, appends the decision with every
 // check the core did not reach marked as skipped, and writes it to the
 // journal.
-func (p *PDP) record(ctx context.Context, d v0.Decision, a *store.Allowance, settle func(v0.Decision, []store.Drawn, error) v0.Decision) (v0.Decision, error) {
-	out, err := p.Store.Settle(ctx, a, func(drawn []store.Drawn, refused error) (v0.Decision, error) {
+func (p *PDP) record(ctx context.Context, d v0.Decision, a *budget.Allowance, settle func(v0.Decision, []budget.Drawn, error) v0.Decision) (v0.Decision, error) {
+	out, err := p.Store.Settle(ctx, a, func(drawn []budget.Drawn, refused error) (v0.Decision, error) {
 		if settle != nil {
 			d = settle(d, drawn, refused)
 		}
@@ -340,10 +342,10 @@ func (p *PDP) approval(ctx context.Context, g v0.Grant, m v0.Mandate, mandateDig
 		if open.PolicyVersion == mandateDigest && now.Before(open.Created.Add(policy.ExpiresAfter.D())) {
 			return open, nil
 		}
-		if _, err := p.Store.Approvals().Close(ctx, open.ID, v0.ApprovalExpired, now, ""); err != nil && !errors.Is(err, store.ErrState) {
+		if _, err := p.Store.Approvals().Close(ctx, open.ID, v0.ApprovalExpired, now, ""); err != nil && !errors.Is(err, x.ErrState) {
 			return v0.Approval{}, err
 		}
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, x.ErrNotFound):
 	default:
 		return v0.Approval{}, err
 	}
@@ -371,7 +373,7 @@ func (p *PDP) approval(ctx context.Context, g v0.Grant, m v0.Mandate, mandateDig
 		return v0.Approval{}, fmt.Errorf("approval request: %w", err)
 	}
 	err = p.Store.Approvals().Create(ctx, a)
-	if errors.Is(err, store.ErrConflict) {
+	if errors.Is(err, x.ErrConflict) {
 		// Another decision opened the request for this call first; the
 		// store allows one open request per call. Use theirs.
 		return p.Store.Approvals().PendingFor(ctx, g.Actor.Subject, g.Mandate, g.Consent, hash)

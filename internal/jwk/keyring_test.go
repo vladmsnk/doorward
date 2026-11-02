@@ -1,4 +1,4 @@
-package keys_test
+package jwk_test
 
 import (
 	"context"
@@ -10,19 +10,19 @@ import (
 	"testing"
 	"time"
 
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
-// memKeys is an in-memory store.Keys, enough to test the manager's logic
+// memKeys is an in-memory jwk.Manager, enough to test the manager's logic
 // without a database; the Postgres store has its own tests.
 type memKeys struct {
 	mu   sync.Mutex
-	keys []store.SigningKey
+	keys []jwk.SigningKey
 }
 
-func (m *memKeys) Create(_ context.Context, k store.SigningKey) error {
+func (m *memKeys) Create(_ context.Context, k jwk.SigningKey) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	k.CreatedAt = time.Now()
@@ -30,7 +30,7 @@ func (m *memKeys) Create(_ context.Context, k store.SigningKey) error {
 	return nil
 }
 
-func (m *memKeys) Active(context.Context) (store.SigningKey, error) {
+func (m *memKeys) Active(context.Context) (jwk.SigningKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for i := len(m.keys) - 1; i >= 0; i-- {
@@ -38,13 +38,13 @@ func (m *memKeys) Active(context.Context) (store.SigningKey, error) {
 			return m.keys[i], nil
 		}
 	}
-	return store.SigningKey{}, store.ErrNotFound
+	return jwk.SigningKey{}, x.ErrNotFound
 }
 
-func (m *memKeys) List(context.Context) ([]store.SigningKey, error) {
+func (m *memKeys) List(context.Context) ([]jwk.SigningKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := make([]store.SigningKey, len(m.keys))
+	out := make([]jwk.SigningKey, len(m.keys))
 	for i := range m.keys {
 		out[len(m.keys)-1-i] = m.keys[i]
 	}
@@ -60,7 +60,7 @@ func (m *memKeys) Retire(_ context.Context, kid string, at time.Time) error {
 			return nil
 		}
 	}
-	return store.ErrNotFound
+	return x.ErrNotFound
 }
 
 func newSealer(t *testing.T) *sealer.Sealer {
@@ -77,12 +77,12 @@ func TestEnsureCreatesOnceAndSurvivesRestart(t *testing.T) {
 	ctx := context.Background()
 	st, sl := &memKeys{}, newSealer(t)
 
-	first, err := keys.New(st, sl).Ensure(ctx)
+	first, err := jwk.NewKeyRing(st, sl).Ensure(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	// A "restart": a new manager over the same store and master key.
-	again, err := keys.New(st, sl).Ensure(ctx)
+	again, err := jwk.NewKeyRing(st, sl).Ensure(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,14 +93,14 @@ func TestEnsureCreatesOnceAndSurvivesRestart(t *testing.T) {
 		t.Fatalf("%d keys stored", len(st.keys))
 	}
 	// A restart with the wrong master key cannot open it.
-	if _, err := keys.New(st, newSealer(t)).Ensure(ctx); err == nil {
+	if _, err := jwk.NewKeyRing(st, newSealer(t)).Ensure(ctx); err == nil {
 		t.Fatal("opened the key with another master key")
 	}
 }
 
 func TestSignVerifyAndJWKS(t *testing.T) {
 	ctx := context.Background()
-	m := keys.New(&memKeys{}, newSealer(t))
+	m := jwk.NewKeyRing(&memKeys{}, newSealer(t))
 	signer, err := m.Ensure(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -133,7 +133,7 @@ func TestSignVerifyAndJWKS(t *testing.T) {
 
 func TestRotateAndRetire(t *testing.T) {
 	ctx := context.Background()
-	m := keys.New(&memKeys{}, newSealer(t))
+	m := jwk.NewKeyRing(&memKeys{}, newSealer(t))
 	first, _ := m.Ensure(ctx)
 
 	rotated, err := m.Rotate(ctx)
@@ -161,7 +161,7 @@ func TestRotateAndRetire(t *testing.T) {
 	if _, err := m.Public(ctx, first.KID); err != nil {
 		t.Errorf("Public(retired): %v", err)
 	}
-	if _, err := m.Public(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := m.Public(ctx, "nope"); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("Public(unknown): %v", err)
 	}
 }

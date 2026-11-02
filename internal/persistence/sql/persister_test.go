@@ -1,4 +1,4 @@
-package postgres_test
+package sql_test
 
 import (
 	"context"
@@ -13,8 +13,12 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/internal/budget"
+	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/grant"
+	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -23,14 +27,14 @@ import (
 // can arbitrate them. Point DOORWARD_TEST_POSTGRES_DSN at an empty database;
 // without it the tests skip. Every package that uses the database truncates
 // it first, so `make test` runs packages one at a time (-p 1).
-func open(t *testing.T) *postgres.Store {
+func open(t *testing.T) *sql.Persister {
 	t.Helper()
 	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	s, err := postgres.Open(ctx, dsn)
+	s, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
@@ -58,14 +62,14 @@ func example[T any](t *testing.T, rel string) T {
 
 func TestMigrateIsIdempotent(t *testing.T) {
 	s := open(t)
-	if err := postgres.Migrate(context.Background(), s.Pool()); err != nil {
+	if err := sql.Migrate(context.Background(), s.Pool()); err != nil {
 		t.Fatalf("second migrate: %v", err)
 	}
 	var n int
 	if err := s.Pool().QueryRow(context.Background(), "SELECT count(*) FROM schema_migrations").Scan(&n); err != nil {
 		t.Fatal(err)
 	}
-	if want := len(postgres.Migrations()); n != want {
+	if want := len(sql.Migrations()); n != want {
 		t.Errorf("%d migrations recorded, want %d", n, want)
 	}
 }
@@ -103,7 +107,7 @@ func TestDocumentsAreVersioned(t *testing.T) {
 	if hist, err := docs.History(ctx, "Mandate", "invoices"); err != nil || len(hist) != 2 || hist[0].Version != 1 {
 		t.Errorf("History: %+v %v", hist, err)
 	}
-	if _, err := docs.Current(ctx, "Mandate", "nothing"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := docs.Current(ctx, "Mandate", "nothing"); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("missing document: %v", err)
 	}
 
@@ -163,7 +167,7 @@ func TestConsentsAndGrants(t *testing.T) {
 	if err := s.Consents().Create(ctx, c); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Consents().Create(ctx, c); !errors.Is(err, store.ErrConflict) {
+	if err := s.Consents().Create(ctx, c); !errors.Is(err, x.ErrConflict) {
 		t.Errorf("duplicate consent: %v", err)
 	}
 	got, err := s.Consents().Get(ctx, c.ID)
@@ -176,7 +180,7 @@ func TestConsentsAndGrants(t *testing.T) {
 	}
 
 	g := example[v0.Grant](t, "grant/pay-invoice.json")
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "invoice-assistant"}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "invoice-assistant"}); err != nil {
 		t.Fatal(err)
 	}
 	rec, err := s.Grants().Get(ctx, g.ID)
@@ -191,7 +195,7 @@ func TestConsentsAndGrants(t *testing.T) {
 	if err != nil || revoked.Status != v0.ConsentRevoked || revoked.RevokedAt == nil {
 		t.Fatalf("Revoke: %+v %v", revoked, err)
 	}
-	if _, err := s.Consents().Revoke(ctx, c.ID, v0.RevokedByUser, at); !errors.Is(err, store.ErrState) {
+	if _, err := s.Consents().Revoke(ctx, c.ID, v0.RevokedByUser, at); !errors.Is(err, x.ErrState) {
 		t.Errorf("second revoke: %v", err)
 	}
 	ids, err := s.Grants().RevokeByConsent(ctx, c.ID, at)
@@ -212,16 +216,16 @@ func TestSingleUseGrantIsSpentOnce(t *testing.T) {
 	ctx := context.Background()
 	g := example[v0.Grant](t, "grant/reconcile.json")
 	g.ID = "grt_single_use_0001"
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: v0.Digest([]byte("call"))}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: v0.Digest([]byte("call"))}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Grants().Spend(ctx, g.ID, time.Now()); err != nil {
 		t.Fatalf("first spend: %v", err)
 	}
-	if err := s.Grants().Spend(ctx, g.ID, time.Now()); !errors.Is(err, store.ErrState) {
+	if err := s.Grants().Spend(ctx, g.ID, time.Now()); !errors.Is(err, x.ErrState) {
 		t.Errorf("second spend: %v", err)
 	}
-	if err := s.Grants().Spend(ctx, "grt_does_not_exist", time.Now()); !errors.Is(err, store.ErrNotFound) {
+	if err := s.Grants().Spend(ctx, "grt_does_not_exist", time.Now()); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("unknown grant: %v", err)
 	}
 }
@@ -229,7 +233,7 @@ func TestSingleUseGrantIsSpentOnce(t *testing.T) {
 func TestDecisionsChain(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	if _, err := s.Decisions().Head(ctx); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Decisions().Head(ctx); !errors.Is(err, x.ErrNotFound) {
 		t.Fatalf("empty journal head: %v", err)
 	}
 	var stored []v0.Decision
@@ -320,7 +324,7 @@ func TestApprovalsLifecycle(t *testing.T) {
 	if err != nil || closed.Status != v0.ApprovalApproved || closed.SingleUseGrant == "" {
 		t.Fatalf("Close: %+v %v", closed, err)
 	}
-	if _, err := s.Approvals().Vote(ctx, a.ID, votes[0]); !errors.Is(err, store.ErrState) {
+	if _, err := s.Approvals().Vote(ctx, a.ID, votes[0]); !errors.Is(err, x.ErrState) {
 		t.Errorf("vote after close: %v", err)
 	}
 	if pending, _ := s.Approvals().Pending(ctx); len(pending) != 0 {
@@ -331,16 +335,16 @@ func TestApprovalsLifecycle(t *testing.T) {
 func TestKeysAndSecrets(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
-	if _, err := s.Keys().Active(ctx); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Keys().Active(ctx); !errors.Is(err, x.ErrNotFound) {
 		t.Fatalf("empty: %v", err)
 	}
 	for _, kid := range []string{"k1", "k2"} {
-		if err := s.Keys().Create(ctx, store.SigningKey{KID: kid, Alg: "ES256", PublicJWK: []byte(`{"kid":"` + kid + `"}`), PrivateEnc: []byte("sealed")}); err != nil {
+		if err := s.Keys().Create(ctx, jwk.SigningKey{KID: kid, Alg: "ES256", PublicJWK: []byte(`{"kid":"` + kid + `"}`), PrivateEnc: []byte("sealed")}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(2 * time.Millisecond) // created_at orders them
 	}
-	if err := s.Keys().Create(ctx, store.SigningKey{KID: "k1", Alg: "ES256", PublicJWK: []byte(`{}`), PrivateEnc: []byte("x")}); !errors.Is(err, store.ErrConflict) {
+	if err := s.Keys().Create(ctx, jwk.SigningKey{KID: "k1", Alg: "ES256", PublicJWK: []byte(`{}`), PrivateEnc: []byte("x")}); !errors.Is(err, x.ErrConflict) {
 		t.Errorf("duplicate kid: %v", err)
 	}
 	if a, err := s.Keys().Active(ctx); err != nil || a.KID != "k2" {
@@ -371,7 +375,7 @@ func TestKeysAndSecrets(t *testing.T) {
 	if err := s.Secrets().Delete(ctx, "ledger-mcp-api-key"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Secrets().Get(ctx, "ledger-mcp-api-key"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Secrets().Get(ctx, "ledger-mcp-api-key"); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("after delete: %v", err)
 	}
 }
@@ -382,7 +386,7 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 	s := open(t)
 	ctx := context.Background()
 	now := time.Now()
-	draw := func(key, amount, max string) store.Draw { return store.Draw{Key: key, Amount: amount, Max: max} }
+	draw := func(key, amount, max string) budget.Draw { return budget.Draw{Key: key, Amount: amount, Max: max} }
 	consumed := func(key string) string {
 		t.Helper()
 		v, err := s.Counters().Consumed(ctx, key)
@@ -393,9 +397,9 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 	}
 
 	// Decimal amounts add up exactly: three draws of 0.10 fill 0.30.
-	cents := store.ConsentKey("c", "payout", "2026-10")
+	cents := budget.ConsentKey("c", "payout", "2026-10")
 	for i := 0; i < 3; i++ {
-		d, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
+		d, err := s.Allow(ctx, budget.Allowance{Draws: []budget.Draw{draw(cents, "0.1", "0.3")}, At: now})
 		if err != nil {
 			t.Fatalf("draw %d: %v", i, err)
 		}
@@ -403,9 +407,9 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 			t.Errorf("draw %d left %s, want %s", i, d[0].Remaining, want)
 		}
 	}
-	_, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
-	var ex *store.ExhaustedError
-	if !errors.As(err, &ex) || !errors.Is(err, store.ErrExhausted) || ex.Remaining != "0" {
+	_, err := s.Allow(ctx, budget.Allowance{Draws: []budget.Draw{draw(cents, "0.1", "0.3")}, At: now})
+	var ex *budget.ExhaustedError
+	if !errors.As(err, &ex) || !errors.Is(err, budget.ErrExhausted) || ex.Remaining != "0" {
 		t.Fatalf("fourth draw: %v", err)
 	}
 	if v := consumed(cents); v != "0.3" {
@@ -413,8 +417,8 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 	}
 
 	// A first draw larger than the budget creates nothing.
-	big := store.ConsentKey("c", "payout", "2026-11")
-	if _, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(big, "7000", "5000")}, At: now}); !errors.Is(err, store.ErrExhausted) {
+	big := budget.ConsentKey("c", "payout", "2026-11")
+	if _, err := s.Allow(ctx, budget.Allowance{Draws: []budget.Draw{draw(big, "7000", "5000")}, At: now}); !errors.Is(err, budget.ErrExhausted) {
 		t.Errorf("first draw over max: %v", err)
 	}
 	if v := consumed(big); v != "0" {
@@ -423,8 +427,8 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 
 	// All or nothing: the calls budget has room, the payout budget does not,
 	// so neither is drawn.
-	calls := store.GrantKey("grt_a", "calls")
-	_, err = s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(calls, "1", "50"), draw(cents, "0.1", "0.3")}, At: now})
+	calls := budget.GrantKey("grt_a", "calls")
+	_, err = s.Allow(ctx, budget.Allowance{Draws: []budget.Draw{draw(calls, "1", "50"), draw(cents, "0.1", "0.3")}, At: now})
 	if !errors.As(err, &ex) || ex.Key != cents {
 		t.Fatalf("mixed draw: %v", err)
 	}
@@ -436,20 +440,20 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 	// when a budget refuses.
 	g := example[v0.Grant](t, "grant/reconcile.json")
 	g.ID = "grt_single_use_000000000001"
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(cents, "0.1", "0.3")}, At: now})
-	if !errors.Is(err, store.ErrExhausted) {
+	_, err = s.Allow(ctx, budget.Allowance{SingleUse: g.ID, Draws: []budget.Draw{draw(cents, "0.1", "0.3")}, At: now})
+	if !errors.Is(err, budget.ErrExhausted) {
 		t.Fatalf("single-use with an exhausted budget: %v", err)
 	}
 	if rec, _ := s.Grants().Get(ctx, g.ID); rec.UsedAt != nil {
 		t.Error("the single-use grant was spent although its budget refused the call")
 	}
-	if _, err := s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(calls, "1", "50")}, At: now}); err != nil {
+	if _, err := s.Allow(ctx, budget.Allowance{SingleUse: g.ID, Draws: []budget.Draw{draw(calls, "1", "50")}, At: now}); err != nil {
 		t.Fatalf("single-use: %v", err)
 	}
-	if _, err := s.Allow(ctx, store.Allowance{SingleUse: g.ID, Draws: []store.Draw{draw(calls, "1", "50")}, At: now}); !errors.Is(err, store.ErrState) {
+	if _, err := s.Allow(ctx, budget.Allowance{SingleUse: g.ID, Draws: []budget.Draw{draw(calls, "1", "50")}, At: now}); !errors.Is(err, x.ErrState) {
 		t.Errorf("single-use spent twice: %v", err)
 	}
 	if v := consumed(calls); v != "1" {
@@ -464,7 +468,7 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if _, err := s.Allow(ctx, store.Allowance{Draws: []store.Draw{draw(store.GrantKey("grt_y", "calls"), "1", "50")}, At: now}); err == nil {
+			if _, err := s.Allow(ctx, budget.Allowance{Draws: []budget.Draw{draw(budget.GrantKey("grt_y", "calls"), "1", "50")}, At: now}); err == nil {
 				mu.Lock()
 				ok++
 				mu.Unlock()
@@ -478,16 +482,16 @@ func TestAllowIsExactAndAtomic(t *testing.T) {
 
 	// Calls drawing the same two budgets, listed in opposite orders, do
 	// not deadlock: budgets are always drawn in key order.
-	k1, k2 := store.GrantKey("grt_z", "a"), store.GrantKey("grt_z", "b")
+	k1, k2 := budget.GrantKey("grt_z", "a"), budget.GrantKey("grt_z", "b")
 	for i := 0; i < 40; i++ {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ds := []store.Draw{draw(k1, "1", "1000"), draw(k2, "1", "1000")}
+			ds := []budget.Draw{draw(k1, "1", "1000"), draw(k2, "1", "1000")}
 			if i%2 == 1 {
 				ds[0], ds[1] = ds[1], ds[0]
 			}
-			if _, err := s.Allow(ctx, store.Allowance{Draws: ds, At: now}); err != nil {
+			if _, err := s.Allow(ctx, budget.Allowance{Draws: ds, At: now}); err != nil {
 				t.Errorf("draw %d: %v", i, err)
 			}
 		}(i)
@@ -505,8 +509,8 @@ func TestSettle(t *testing.T) {
 	now := time.Now()
 	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	base.Chain = nil
-	key := store.GrantKey("grt_settle", "calls")
-	budget := &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "1"}}, At: now}
+	key := budget.GrantKey("grt_settle", "calls")
+	allowance := &budget.Allowance{Draws: []budget.Draw{{Key: key, Amount: "1", Max: "1"}}, At: now}
 	record := func(id string, outcome v0.Outcome) v0.Decision {
 		d := base
 		d.ID, d.Outcome = id, outcome
@@ -514,7 +518,7 @@ func TestSettle(t *testing.T) {
 	}
 
 	// Allowed: drawn and recorded.
-	got, err := s.Settle(ctx, budget, func(drawn []store.Drawn, err error) (v0.Decision, error) {
+	got, err := s.Settle(ctx, allowance, func(drawn []budget.Drawn, err error) (v0.Decision, error) {
 		if err != nil || len(drawn) != 1 || drawn[0].Remaining != "0" {
 			t.Errorf("first call: %v %v", drawn, err)
 		}
@@ -524,8 +528,8 @@ func TestSettle(t *testing.T) {
 		t.Fatalf("allowed: %+v %v", got.Chain, err)
 	}
 	// Refused by the budget: nothing drawn, the refusal recorded.
-	got, err = s.Settle(ctx, budget, func(drawn []store.Drawn, err error) (v0.Decision, error) {
-		if !errors.Is(err, store.ErrExhausted) || drawn != nil {
+	got, err = s.Settle(ctx, allowance, func(drawn []budget.Drawn, err error) (v0.Decision, error) {
+		if !errors.Is(err, budget.ErrExhausted) || drawn != nil {
 			t.Errorf("second call: %v %v", drawn, err)
 		}
 		return record("dec_settle_refused_000001", v0.OutcomeDeny), nil
@@ -537,9 +541,9 @@ func TestSettle(t *testing.T) {
 		t.Errorf("the refused call drew: %s", v)
 	}
 	// A failure while deciding writes nothing at all.
-	other := store.GrantKey("grt_settle", "other")
-	if _, err := s.Settle(ctx, &store.Allowance{Draws: []store.Draw{{Key: other, Amount: "1", Max: "5"}}, At: now},
-		func([]store.Drawn, error) (v0.Decision, error) { return v0.Decision{}, errors.New("boom") }); err == nil {
+	other := budget.GrantKey("grt_settle", "other")
+	if _, err := s.Settle(ctx, &budget.Allowance{Draws: []budget.Draw{{Key: other, Amount: "1", Max: "5"}}, At: now},
+		func([]budget.Drawn, error) (v0.Decision, error) { return v0.Decision{}, errors.New("boom") }); err == nil {
 		t.Fatal("decide's error was swallowed")
 	}
 	if v, _ := s.Counters().Consumed(ctx, other); v != "0" {
@@ -551,14 +555,14 @@ func TestSettle(t *testing.T) {
 	// A spent single-use grant comes to decide as a refusal.
 	g := example[v0.Grant](t, "grant/reconcile.json")
 	g.ID = "grt_single_use_settle_0001"
-	if err := s.Grants().Create(ctx, store.GrantRecord{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
+	if err := s.Grants().Create(ctx, grant.Record{Grant: g, Agent: "reconciler", SingleUse: true, ActionHash: "sha-256:x"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Grants().Spend(ctx, g.ID, now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Settle(ctx, &store.Allowance{SingleUse: g.ID, At: now}, func(_ []store.Drawn, err error) (v0.Decision, error) {
-		if !errors.Is(err, store.ErrState) {
+	if _, err := s.Settle(ctx, &budget.Allowance{SingleUse: g.ID, At: now}, func(_ []budget.Drawn, err error) (v0.Decision, error) {
+		if !errors.Is(err, x.ErrState) {
 			t.Errorf("spent single-use grant: %v", err)
 		}
 		return record("dec_settle_spent_00000001", v0.OutcomeDeny), nil
@@ -594,7 +598,7 @@ func TestPendingFor(t *testing.T) {
 	// Q3: a second open request for the same call is refused by the store.
 	dup := a
 	dup.ID = "apr_duplicate_000000000001"
-	if err := s.Approvals().Create(ctx, dup); !errors.Is(err, store.ErrConflict) {
+	if err := s.Approvals().Create(ctx, dup); !errors.Is(err, x.ErrConflict) {
 		t.Errorf("a second pending request for one call: %v", err)
 	}
 	// A different call, or a closed request, does not collide.
@@ -603,33 +607,33 @@ func TestPendingFor(t *testing.T) {
 	if err := s.Approvals().Create(ctx, other); err != nil {
 		t.Errorf("another call: %v", err)
 	}
-	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, "sha-256:other"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, "sha-256:other"); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("another call: %v", err)
 	}
 	if _, err := s.Approvals().Close(ctx, a.ID, v0.ApprovalExpired, time.Now(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Approvals().PendingFor(ctx, a.Agent, a.Mandate, a.Consent, a.ActionHash); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("a closed request still matches: %v", err)
 	}
 }
 
 // holdChainLock takes the journal lock on a connection of its own and
 // returns a function that releases it.
-func holdChainLock(t testing.TB, s *postgres.Store) func() {
+func holdChainLock(t testing.TB, s *sql.Persister) func() {
 	t.Helper()
 	ctx := context.Background()
 	conn, err := s.Pool().Acquire(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", postgres.ChainLock); err != nil {
+	if _, err := conn.Exec(ctx, "SELECT pg_advisory_lock($1)", sql.ChainLock); err != nil {
 		t.Fatal(err)
 	}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", postgres.ChainLock)
+			_, _ = conn.Exec(ctx, "SELECT pg_advisory_unlock($1)", sql.ChainLock)
 			conn.Release()
 		})
 	}
@@ -641,16 +645,16 @@ func TestSettleHonoursTheDeadline(t *testing.T) {
 	s := open(t)
 	release := holdChainLock(t, s)
 	defer release()
-	key := store.GrantKey("grt_deadline", "calls")
+	key := budget.GrantKey("grt_deadline", "calls")
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	base := example[v0.Decision](t, "decision/1-allow-get-invoice.json")
 	base.Chain = nil
 	start := time.Now()
-	_, err := s.Settle(ctx, &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
-		func([]store.Drawn, error) (v0.Decision, error) { return base, nil })
+	_, err := s.Settle(ctx, &budget.Allowance{Draws: []budget.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]budget.Drawn, error) (v0.Decision, error) { return base, nil })
 	took := time.Since(start)
-	if !errors.Is(err, store.ErrTimeout) {
+	if !errors.Is(err, x.ErrTimeout) {
 		t.Fatalf("got %v after %s, want ErrTimeout", err, took)
 	}
 	if took > 2*time.Second {
@@ -660,12 +664,12 @@ func TestSettleHonoursTheDeadline(t *testing.T) {
 	if v, _ := s.Counters().Consumed(context.Background(), key); v != "0" {
 		t.Errorf("the timed-out settlement drew %s", v)
 	}
-	if _, err := s.Decisions().Head(context.Background()); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Decisions().Head(context.Background()); !errors.Is(err, x.ErrNotFound) {
 		t.Errorf("the timed-out settlement was recorded: %v", err)
 	}
 	// With the lock free, the same settlement goes through.
-	if _, err := s.Settle(context.Background(), &store.Allowance{Draws: []store.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
-		func([]store.Drawn, error) (v0.Decision, error) { return base, nil }); err != nil {
+	if _, err := s.Settle(context.Background(), &budget.Allowance{Draws: []budget.Draw{{Key: key, Amount: "1", Max: "10"}}, At: time.Now()},
+		func([]budget.Drawn, error) (v0.Decision, error) { return base, nil }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -699,7 +703,7 @@ func TestConfigVersionBumps(t *testing.T) {
 		{"put a secret", func() error { return s.Secrets().Put(ctx, "k", []byte("sealed"), "t") }},
 		{"delete the secret", func() error { return s.Secrets().Delete(ctx, "k") }},
 		{"a change under the configuration lock", func() error {
-			return s.LockConfig(ctx, func(c store.Config) error {
+			return s.LockConfig(ctx, func(c configuration.Store) error {
 				_, err := c.Documents().Put(ctx, v0.KindMandate, "invoices", doc, "t")
 				return err
 			})
@@ -715,7 +719,7 @@ func TestConfigVersionBumps(t *testing.T) {
 			t.Errorf("after %s: version %d, want %d", st.name, v, want)
 		}
 	}
-	if _, err := s.Grants().Get(ctx, "grt_none"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.Grants().Get(ctx, "grt_none"); !errors.Is(err, x.ErrNotFound) {
 		t.Fatal(err)
 	}
 	if v, _ := s.ConfigVersion(ctx); v != want {
@@ -744,16 +748,16 @@ func TestSettleBatches(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			var a *store.Allowance
+			var a *budget.Allowance
 			switch i % 4 {
 			case 0: // a budget with room
-				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey(fmt.Sprintf("grt_b%d", i), "calls"), Amount: "1", Max: "5"}}, At: now}
+				a = &budget.Allowance{Draws: []budget.Draw{{Key: budget.GrantKey(fmt.Sprintf("grt_b%d", i), "calls"), Amount: "1", Max: "5"}}, At: now}
 			case 1: // a shared budget of 10, drawn by 50 settlements
-				a = &store.Allowance{Draws: []store.Draw{{Key: store.GrantKey("grt_shared", "calls"), Amount: "1", Max: "10"}}, At: now}
+				a = &budget.Allowance{Draws: []budget.Draw{{Key: budget.GrantKey("grt_shared", "calls"), Amount: "1", Max: "10"}}, At: now}
 			case 2: // no allowance
 			case 3: // decide fails: this settlement alone is dropped
 			}
-			d, err := s.Settle(ctx, a, func(drawn []store.Drawn, refused error) (v0.Decision, error) {
+			d, err := s.Settle(ctx, a, func(drawn []budget.Drawn, refused error) (v0.Decision, error) {
 				if i%4 == 3 {
 					return v0.Decision{}, errors.New("decide failed")
 				}
@@ -791,7 +795,7 @@ func TestSettleBatches(t *testing.T) {
 	if allowed != 110 || denied != 40 || failed != 50 {
 		t.Errorf("allowed %d denied %d failed %d, want 110 40 50", allowed, denied, failed)
 	}
-	if v, _ := s.Counters().Consumed(ctx, store.GrantKey("grt_shared", "calls")); v != "10" {
+	if v, _ := s.Counters().Consumed(ctx, budget.GrantKey("grt_shared", "calls")); v != "10" {
 		t.Errorf("shared budget drew %s, want 10", v)
 	}
 	all, err := s.Decisions().Range(ctx, 0, 1000)

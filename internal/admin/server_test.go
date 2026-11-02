@@ -15,9 +15,9 @@ import (
 	"testing"
 
 	"github.com/vladmsnk/doorward/internal/admin"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -30,7 +30,7 @@ func newServer(t *testing.T) *httptest.Server {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	st, err := postgres.Open(ctx, dsn)
+	st, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +44,7 @@ func newServer(t *testing.T) *httptest.Server {
 	}
 	master, _ := sealer.Generate()
 	sl, _ := sealer.Parse(master)
-	km := keys.New(st.Keys(), sl)
+	km := jwk.NewKeyRing(st.Keys(), sl)
 	if _, err := km.Ensure(ctx); err != nil {
 		t.Fatal(err)
 	}

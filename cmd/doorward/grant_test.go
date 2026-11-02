@@ -10,21 +10,21 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/schema"
 )
 
 // grantEnv gives a database holding the example configuration, and a
 // master key.
-func grantEnv(t *testing.T) (dsn, masterKey string, st *postgres.Store) {
+func grantEnv(t *testing.T) (dsn, masterKey string, st *sql.Persister) {
 	t.Helper()
 	dsn = os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
 	}
 	ctx := context.Background()
-	st, err := postgres.Open(ctx, dsn)
+	st, err := sql.Open(ctx, dsn)
 	if err != nil {
 		t.Fatal(err)
 	}

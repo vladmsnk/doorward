@@ -19,16 +19,16 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/admin"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/internal/pdp"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
 	"github.com/vladmsnk/doorward/internal/telemetry"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -115,7 +115,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	st, err := postgres.Open(ctx, *dsn)
+	st, err := sql.Open(ctx, *dsn)
 	if err != nil {
 		fmt.Fprintf(stderr, "doorward serve: %v\n", err)
 		return 1
@@ -128,7 +128,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	km := keys.New(st.Keys(), sl)
+	km := jwk.NewKeyRing(st.Keys(), sl)
 	signer, err := km.Ensure(ctx)
 	if err != nil {
 		fmt.Fprintf(stderr, "doorward serve: signing key: %v\n", err)
@@ -183,7 +183,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 			out = journalFile
 		} else if head, err := st.Decisions().Head(ctx); err == nil {
 			from = head.Chain.Seq + 1
-		} else if !errors.Is(err, store.ErrNotFound) {
+		} else if !errors.Is(err, x.ErrNotFound) {
 			fmt.Fprintf(stderr, "doorward serve: %v\n", err)
 			return 1
 		}
@@ -192,7 +192,7 @@ func runServe(args []string, stdout, stderr io.Writer) int {
 		log.Info("journal follower started", "from_seq", from, "to", *journalPath)
 	}
 
-	cfg := &config.Cache{Store: st, Validator: v, Log: log}
+	cfg := &configuration.Cache{Store: st, Validator: v, Log: log}
 	decisions := &pdp.PDP{
 		Store:  st,
 		Config: cfg,

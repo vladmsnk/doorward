@@ -1,12 +1,9 @@
-package postgres
+package sql
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"slices"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,17 +11,30 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/budget"
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
 // Every record joins one chain, so appends are serialized by one lock. One
 // transaction per decision made that lock, with its commit to disk, the
 // ceiling: about 550 decisions a second on a small machine, whatever the
-// concurrency. The writer below groups the settlements that arrive within a
-// short window into one transaction: one lock, one read of the head, one
-// commit, with each settlement in its own savepoint so one failure does not
-// fail the others. Under light load the window costs each decision at most
-// its length; under heavy load batches fill at once.
+// concurrency. Instead, the writer below takes the settlements that arrived
+// while the previous batch was committing (up to BatchMax) and settles them
+// in one transaction: one lock, one read of the head, every allowance in one
+// pipelined round trip, every record in another, one commit. A lone
+// settlement goes at once; batches grow with the arrival rate. Each
+// allowance is one statement that writes all of its spending or none of it
+// (spendSQL), so no item leaves partial state whatever happens to the
+// others.
+
+// Settle hands the settlement to the store's writer, which groups
+// settlements arriving together into one transaction (see settle.go), and
+// waits for the outcome. A caller whose context ends before its turn gets
+// ErrTimeout and nothing is done for it; once its turn has started, the
+// outcome is reported whatever happens to the context.
+func (s *Persister) Settle(ctx context.Context, a *budget.Allowance, decide func([]budget.Drawn, error) (v0.Decision, error)) (v0.Decision, error) {
+	return s.settler().settle(ctx, a, decide)
+}
 
 // Batching parameters.
 const (
@@ -39,8 +49,8 @@ const (
 
 type settlement struct {
 	ctx    context.Context
-	a      *store.Allowance
-	decide func([]store.Drawn, error) (v0.Decision, error)
+	a      *budget.Allowance
+	decide func([]budget.Drawn, error) (v0.Decision, error)
 	done   chan outcome
 }
 
@@ -74,7 +84,7 @@ type beginner interface {
 }
 
 // settler returns the store's writer, starting it on first use.
-func (s *Store) settler() *settler {
+func (s *Persister) settler() *settler {
 	s.settleOnce.Do(func() {
 		s.writer = &settler{pool: s.pool, queue: make(chan settlement, BatchMax*4), stop: make(chan struct{}), stopped: make(chan struct{})}
 		go s.writer.run()
@@ -83,17 +93,17 @@ func (s *Store) settler() *settler {
 }
 
 // Batches reports what the writer has done so far.
-func (s *Store) Batches() BatchStats {
+func (s *Persister) Batches() BatchStats {
 	w := s.settler()
 	return BatchStats{Batches: w.batches.Load(), Settlements: w.settlements.Load(), Largest: w.largest.Load()}
 }
 
-func (w *settler) settle(ctx context.Context, a *store.Allowance, decide func([]store.Drawn, error) (v0.Decision, error)) (v0.Decision, error) {
+func (w *settler) settle(ctx context.Context, a *budget.Allowance, decide func([]budget.Drawn, error) (v0.Decision, error)) (v0.Decision, error) {
 	item := settlement{ctx: ctx, a: a, decide: decide, done: make(chan outcome, 1)}
 	select {
 	case w.queue <- item:
 	case <-ctx.Done():
-		return v0.Decision{}, fmt.Errorf("%w: %w", store.ErrTimeout, ctx.Err())
+		return v0.Decision{}, fmt.Errorf("%w: %w", x.ErrTimeout, ctx.Err())
 	case <-w.stop:
 		return v0.Decision{}, errors.New("store closed")
 	}
@@ -160,7 +170,7 @@ func (w *settler) execute(batch []settlement) {
 	longest := batchFloor
 	for _, it := range batch {
 		if it.ctx.Err() != nil {
-			it.done <- outcome{err: fmt.Errorf("%w: %w", store.ErrTimeout, it.ctx.Err())}
+			it.done <- outcome{err: fmt.Errorf("%w: %w", x.ErrTimeout, it.ctx.Err())}
 			continue
 		}
 		if dl, ok := it.ctx.Deadline(); ok {
@@ -211,12 +221,12 @@ func (w *settler) execute(batch []settlement) {
 	var owners []int
 	for i, it := range live {
 		if it.ctx.Err() != nil {
-			results[i] = outcome{err: fmt.Errorf("%w: %w", store.ErrTimeout, it.ctx.Err())}
+			results[i] = outcome{err: fmt.Errorf("%w: %w", x.ErrTimeout, it.ctx.Err())}
 			continue
 		}
 		if spent[i].refused == nil && it.a != nil && spent[i].drawn == nil {
 			// Its allowance was never sent: the caller gave up before.
-			results[i] = outcome{err: fmt.Errorf("%w: %w", store.ErrTimeout, context.DeadlineExceeded)}
+			results[i] = outcome{err: fmt.Errorf("%w: %w", x.ErrTimeout, context.DeadlineExceeded)}
 			continue
 		}
 		d, err := it.decide(spent[i].drawn, spent[i].refused)
@@ -290,7 +300,7 @@ func (w *settler) deliver(items []settlement, results []outcome) {
 
 // spending is what one item's allowance did.
 type spending struct {
-	drawn   []store.Drawn
+	drawn   []budget.Drawn
 	refused error
 }
 
@@ -326,128 +336,13 @@ func spendPipelined(ctx context.Context, tx pgx.Tx, items []settlement) ([]spend
 		switch {
 		case err == nil:
 			out[i].drawn = drawn
-		case errors.Is(err, store.ErrExhausted), errors.Is(err, store.ErrState):
+		case errors.Is(err, budget.ErrExhausted), errors.Is(err, x.ErrState):
 			out[i].refused = err
 		default:
 			return nil, err
 		}
 	}
 	return out, nil
-}
-
-// spendSQL spends one allowance in one statement. Every budget row is
-// locked in key order (two allowances sharing budgets lock them in the same
-// order and cannot deadlock); the single-use grant row, if any, is locked
-// too. Then, all or nothing: every budget has room and the grant is
-// unspent, or no row changes. Best effort ($6) instead draws each budget
-// that has room on its own, and still spends the grant. The statement
-// never raises for a refusal: the gate columns say what happened.
-//
-// $1 keys, $2 amounts, $3 maxes (parallel arrays, sorted by key);
-// $4 single-use jti or ”; $5 time; $6 best effort.
-const spendSQL = `
-WITH want AS (
-    SELECT key, amount, max, ord
-    FROM unnest($1::text[], $2::numeric[], $3::numeric[]) WITH ORDINALITY AS w(key, amount, max, ord)
-), locked AS (
-    SELECT c.key, c.consumed, w.amount, w.max, w.ord
-    FROM want w JOIN counters c ON c.key = w.key
-    ORDER BY w.key
-    FOR UPDATE OF c
-), single AS (
-    SELECT count(*) AS n FROM (
-        SELECT 1 FROM grants WHERE $4 <> '' AND jti = $4 AND single_use AND used_at IS NULL FOR UPDATE
-    ) g
-), gate AS (
-    SELECT ($4 = '' OR (SELECT n FROM single) = 1) AS single_ok,
-           coalesce(bool_and(consumed + amount <= max), true) AS all_fit
-    FROM locked
-), upd AS (
-    UPDATE counters c SET consumed = c.consumed + l.amount
-    FROM locked l, gate g
-    WHERE c.key = l.key AND g.single_ok AND (g.all_fit OR ($6 AND l.consumed + l.amount <= l.max))
-    RETURNING c.key
-), spend AS (
-    UPDATE grants SET used_at = $5
-    FROM gate g
-    WHERE $4 <> '' AND jti = $4 AND single_use AND used_at IS NULL AND g.single_ok AND (g.all_fit OR $6)
-    RETURNING 1
-)
-SELECT g.single_ok, g.all_fit, l.ord, l.key,
-       trim_scale(l.max - l.consumed)::text            AS before,
-       (u.key IS NOT NULL)                              AS drawn,
-       trim_scale(l.max - l.consumed - l.amount)::text AS after
-FROM gate g
-LEFT JOIN locked l ON true
-LEFT JOIN upd u ON u.key = l.key
-ORDER BY l.ord`
-
-// queueSpend adds an allowance's two statements to a batch: make sure every
-// budget row exists (so it can be locked), then spend.
-func queueSpend(b *pgx.Batch, a store.Allowance) {
-	draws := sortedDraws(a.Draws)
-	keys := make([]string, len(draws))
-	amounts := make([]string, len(draws))
-	maxes := make([]string, len(draws))
-	for i, d := range draws {
-		keys[i], amounts[i], maxes[i] = d.Key, d.Amount, d.Max
-	}
-	b.Queue("INSERT INTO counters (key, consumed) SELECT unnest($1::text[]), 0 ON CONFLICT (key) DO NOTHING", keys)
-	b.Queue(spendSQL, keys, amounts, maxes, a.SingleUse, a.At, a.BestEffort)
-}
-
-// readSpend turns spendSQL's rows into what was drawn, or the refusal.
-func readSpend(rows pgx.Rows, a store.Allowance) ([]store.Drawn, error) {
-	defer rows.Close()
-	byKey := make(map[string]store.Drawn, len(a.Draws))
-	var refused error
-	singleOK, allFit, seen := true, true, false
-	for rows.Next() {
-		var ord *int64
-		var key, before, after *string
-		var drawn *bool
-		if err := rows.Scan(&singleOK, &allFit, &ord, &key, &before, &drawn, &after); err != nil {
-			return nil, err
-		}
-		seen = true
-		if key == nil {
-			continue // no budgets: the single-use gate alone
-		}
-		switch {
-		case drawn != nil && *drawn:
-			byKey[*key] = store.Drawn{Key: *key, Amount: amountOf(a, *key), Remaining: *after}
-		case a.BestEffort && singleOK:
-			byKey[*key] = store.Drawn{Key: *key, Amount: amountOf(a, *key), Remaining: *before, Exhausted: true}
-		case refused == nil && singleOK:
-			refused = &store.ExhaustedError{Key: *key, Amount: amountOf(a, *key), Remaining: *before}
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if !seen {
-		return nil, errors.New("spend returned no row")
-	}
-	if !singleOK {
-		return nil, fmt.Errorf("single-use grant %s: already spent or not single-use: %w", a.SingleUse, store.ErrState)
-	}
-	if refused != nil {
-		return nil, refused
-	}
-	out := make([]store.Drawn, len(a.Draws))
-	for i, d := range a.Draws {
-		out[i] = byKey[d.Key]
-	}
-	return out, nil
-}
-
-func amountOf(a store.Allowance, key string) string {
-	for _, d := range a.Draws {
-		if d.Key == key {
-			return d.Amount
-		}
-	}
-	return ""
 }
 
 // recordPipelined inserts every record in one round trip. The caller holds
@@ -458,22 +353,11 @@ func recordPipelined(ctx context.Context, tx pgx.Tx, records []v0.Decision) erro
 	}
 	var b pgx.Batch
 	for _, linked := range records {
-		doc, err := json.Marshal(linked)
+		args, err := decisionRow(linked)
 		if err != nil {
 			return err
 		}
-		var user, owner, grantID, mandate, consent, agent *string
-		if p := linked.Principal; p != nil {
-			user, owner, agent = nilIfEmpty(p.User), nilIfEmpty(p.Owner), &p.Agent
-		}
-		if g := linked.Grant; g != nil {
-			grantID, mandate, consent = &g.ID, &g.Mandate, nilIfEmpty(g.Consent)
-		}
-		b.Queue(`
-			INSERT INTO decisions (seq, id, at, agent, "user", owner, grant_id, mandate, consent, outcome, prev, hash, doc)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, nullif($11, ''), $12, $13)`,
-			linked.Chain.Seq, linked.ID, linked.Time.Time, agent, user, owner, grantID, mandate, consent,
-			linked.Outcome, linked.Chain.Prev, linked.Chain.Hash, doc)
+		b.Queue(insertDecisionSQL, args...)
 	}
 	br := tx.SendBatch(ctx, &b)
 	defer func() { _ = br.Close() }()
@@ -483,12 +367,4 @@ func recordPipelined(ctx context.Context, tx pgx.Tx, records []v0.Decision) erro
 		}
 	}
 	return nil
-}
-
-// sortedDraws orders draws by key, so two allowances drawing the same
-// budgets lock them in the same order and cannot deadlock.
-func sortedDraws(draws []store.Draw) []store.Draw {
-	out := slices.Clone(draws)
-	slices.SortFunc(out, func(x, y store.Draw) int { return strings.Compare(x.Key, y.Key) })
-	return out
 }

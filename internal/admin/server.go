@@ -18,22 +18,24 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/persistence"
 	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
 // Server serves the Admin API.
 type Server struct {
-	Store     store.Store
+	Store     persistence.Persister
 	Validator *schema.Validator
 	// Token is the bootstrap bearer token. Requests without it are refused.
 	Token string
 	// Sealer seals secret values before they reach the store.
 	Sealer *sealer.Sealer
 	// Keys manages the signing keys; nil disables the key routes.
-	Keys *keys.Manager
+	Keys *jwk.KeyRing
 	Log  *slog.Logger
 	Now  func() time.Time
 }
@@ -151,8 +153,8 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	err = s.change(r.Context(),
-		func(after *snapshot, _ store.Config) error { after.secrets[name] = true; return nil },
-		func(c store.Config) error { return c.Secrets().Put(r.Context(), name, sealed, s.actor(r)) })
+		func(after *snapshot, _ configuration.Store) error { after.secrets[name] = true; return nil },
+		func(c configuration.Store) error { return c.Secrets().Put(r.Context(), name, sealed, s.actor(r)) })
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -165,14 +167,14 @@ func (s *Server) putSecret(w http.ResponseWriter, r *http.Request) {
 func (s *Server) deleteSecret(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	err := s.change(r.Context(),
-		func(after *snapshot, _ store.Config) error {
+		func(after *snapshot, _ configuration.Store) error {
 			if users := after.secretUsers(name); len(users) > 0 {
 				return inUse(fmt.Sprintf("secret %s is named by enabled manifests: %s", name, strings.Join(users, ", ")))
 			}
 			delete(after.secrets, name)
 			return nil
 		},
-		func(c store.Config) error { return c.Secrets().Delete(r.Context(), name) })
+		func(c configuration.Store) error { return c.Secrets().Delete(r.Context(), name) })
 	if err != nil {
 		s.fail(w, err)
 		return
@@ -222,7 +224,7 @@ func (s *Server) rotateKey(w http.ResponseWriter, r *http.Request) {
 func (s *Server) retireKey(w http.ResponseWriter, r *http.Request) {
 	kid := r.PathValue("kid")
 	if err := s.Keys.Retire(r.Context(), kid, s.now()); err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, x.ErrNotFound) {
 			s.fail(w, err)
 			return
 		}
@@ -253,7 +255,7 @@ type ErrorResponse struct {
 	Problems []string `json:"problems,omitempty"`
 }
 
-func toResponse(d store.Document) Response {
+func toResponse(d configuration.Document) Response {
 	return Response{Kind: d.Kind, Name: d.Name, Version: d.Version, Digest: d.Digest, Disabled: d.Disabled,
 		CreatedAt: d.CreatedAt, CreatedBy: d.CreatedBy, Document: d.Doc}
 }
@@ -367,10 +369,10 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 			fmt.Sprintf("the URL names %q but metadata.name is %q", name, meta.Metadata.Name), nil)
 		return
 	}
-	var stored store.Document
+	var stored configuration.Document
 	err = s.change(r.Context(),
-		func(after *snapshot, _ store.Config) error { return after.put(string(kind), doc) },
-		func(c store.Config) (err error) {
+		func(after *snapshot, _ configuration.Store) error { return after.put(string(kind), doc) },
+		func(c configuration.Store) (err error) {
 			stored, err = c.Documents().Put(r.Context(), string(kind), name, doc, s.actor(r))
 			return err
 		})
@@ -387,8 +389,8 @@ func (s *Server) put(w http.ResponseWriter, r *http.Request) {
 // change to a copy, refuses the change if the copy breaks a rule the
 // original did not, and otherwise lets commit write it. Nothing is written
 // unless the whole change is accepted.
-func (s *Server) change(ctx context.Context, try func(after *snapshot, c store.Config) error, commit func(c store.Config) error) error {
-	return s.Store.LockConfig(ctx, func(c store.Config) error {
+func (s *Server) change(ctx context.Context, try func(after *snapshot, c configuration.Store) error, commit func(c configuration.Store) error) error {
+	return s.Store.LockConfig(ctx, func(c configuration.Store) error {
 		before, err := load(ctx, c)
 		if err != nil {
 			return err
@@ -415,9 +417,9 @@ func (s *Server) setDisabled(disabled bool) http.HandlerFunc {
 			return
 		}
 		name := r.PathValue("name")
-		var d store.Document
+		var d configuration.Document
 		err := s.change(r.Context(),
-			func(after *snapshot, c store.Config) error {
+			func(after *snapshot, c configuration.Store) error {
 				cur, err := c.Documents().Current(r.Context(), string(kind), name)
 				if err != nil {
 					return err
@@ -439,7 +441,7 @@ func (s *Server) setDisabled(disabled bool) http.HandlerFunc {
 				after.disable(string(kind), name)
 				return nil
 			},
-			func(c store.Config) (err error) {
+			func(c configuration.Store) (err error) {
 				d, err = c.Documents().SetDisabled(r.Context(), string(kind), name, disabled, s.actor(r))
 				return err
 			})
@@ -482,9 +484,9 @@ func (s *Server) changeAgent(w http.ResponseWriter, r *http.Request, change func
 	name := r.PathValue("name")
 	var doc []byte
 	var status v0.AgentStatus
-	var stored store.Document
+	var stored configuration.Document
 	err := s.change(r.Context(),
-		func(after *snapshot, c store.Config) error {
+		func(after *snapshot, c configuration.Store) error {
 			cur, err := c.Documents().Current(r.Context(), v0.KindAgent, name)
 			if err != nil {
 				return err
@@ -505,7 +507,7 @@ func (s *Server) changeAgent(w http.ResponseWriter, r *http.Request, change func
 			}
 			return after.put(v0.KindAgent, doc)
 		},
-		func(c store.Config) (err error) {
+		func(c configuration.Store) (err error) {
 			stored, err = c.Documents().Put(r.Context(), v0.KindAgent, name, doc, s.actor(r))
 			return err
 		})
@@ -560,9 +562,9 @@ func (s *Server) kind(w http.ResponseWriter, r *http.Request) (schema.Kind, bool
 
 func (s *Server) fail(w http.ResponseWriter, err error) {
 	switch {
-	case errors.Is(err, store.ErrNotFound):
+	case errors.Is(err, x.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not_found", "no such document", nil)
-	case errors.Is(err, store.ErrConflict):
+	case errors.Is(err, x.ErrConflict):
 		writeError(w, http.StatusConflict, "conflict", err.Error(), nil)
 	case errors.As(err, new(inUse)):
 		writeError(w, http.StatusConflict, "in_use", err.Error(), nil)
