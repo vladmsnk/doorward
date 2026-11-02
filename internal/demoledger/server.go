@@ -46,6 +46,9 @@ type Seen struct {
 	Method     string
 	Credential string // "api key", "other bearer", "none"
 	Tool       string
+	// Extra holds headers the gateway should never forward, so a test can
+	// confirm they were stripped. Empty when none arrived.
+	Extra map[string]string
 }
 
 // Entries returns what was posted so far.
@@ -108,6 +111,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			cred = "other bearer"
 		}
 	}
+	// Headers a gateway in front of this server should strip. If any reach
+	// here, the gateway let a client header through.
+	var extra map[string]string
+	for _, h := range []string{"X-Forwarded-User", "Cookie", "X-Real-Ip"} {
+		if v := r.Header.Get(h); v != "" {
+			if extra == nil {
+				extra = map[string]string{}
+			}
+			extra[h] = v
+		}
+	}
 	if r.Method != http.MethodPost {
 		s.note(Seen{Method: r.Method, Credential: cred})
 		if r.Method == http.MethodGet || r.Method == http.MethodDelete {
@@ -133,7 +147,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, nil, &rpcError{-32700, "parse error"})
 		return
 	}
-	seen := Seen{Method: msg.Method, Credential: cred}
+	seen := Seen{Method: msg.Method, Credential: cred, Extra: extra}
 	if len(msg.ID) == 0 { // a notification or a response: accepted
 		s.note(seen)
 		w.WriteHeader(http.StatusAccepted)

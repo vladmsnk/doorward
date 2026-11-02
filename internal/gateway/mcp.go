@@ -129,12 +129,22 @@ func (g *Gateway) post(w http.ResponseWriter, r *http.Request, snap *config.Snap
 		http.Error(w, "message too large", http.StatusRequestEntityTooLarge)
 		return
 	}
+	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("[")) {
+		writeRPCError(w, http.StatusBadRequest, nil, -32600, "the gateway takes one JSON-RPC message per request, not a batch")
+		return
+	}
+	// The gateway decides on its own reading of the message and forwards
+	// the same bytes to the server. Go's JSON decoder matches member names
+	// case-insensitively and keeps the last of any duplicates, so a message
+	// that carries, say, both "method" and "Method", or "arguments" and
+	// "Arguments", could be read one way here and another by the server.
+	// Any such message is refused, so the two readings cannot diverge.
+	if err := ensureUnambiguous(body); err != nil {
+		writeRPCError(w, http.StatusBadRequest, nil, -32600, "the message is ambiguous: "+err.Error())
+		return
+	}
 	var msg rpcMessage
 	if err := json.Unmarshal(body, &msg); err != nil || msg.JSONRPC != "2.0" {
-		if bytes.HasPrefix(bytes.TrimSpace(body), []byte("[")) {
-			writeRPCError(w, http.StatusBadRequest, nil, -32600, "the gateway takes one JSON-RPC message per request, not a batch")
-			return
-		}
 		writeRPCError(w, http.StatusBadRequest, nil, -32700, "the body is not a JSON-RPC message")
 		return
 	}
@@ -155,8 +165,20 @@ func (g *Gateway) post(w http.ResponseWriter, r *http.Request, snap *config.Snap
 		}
 		g.proxy(w, r, man, &rewrite{id: msg.ID, filter: allowed, body: body})
 	default:
-		// initialize, ping, notifications, responses, resources, prompts:
-		// the grant must be good, and the message is the server's.
+		// The manifest describes tools, nothing else, so the gateway can
+		// decide only on tools. It passes through the protocol's own
+		// housekeeping (initialize, ping, notifications, and a client's
+		// response to a server-initiated request) and refuses everything
+		// else it cannot reason about, rather than forward it undecided:
+		// resources, prompts, logging, sampling, completion.
+		if !passthrough(msg.Method) {
+			if len(msg.ID) == 0 {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+			writeRPCError(w, http.StatusOK, msg.ID, -32601, fmt.Sprintf("doorward exposes only the tools this manifest describes; %q is not available through the gateway", msg.Method))
+			return
+		}
 		res, err := g.Verifier.Verify(r.Context(), token, man.Spec.Audience)
 		if err != nil {
 			g.log().Error("gateway: verifying a grant", "err", err)
@@ -167,6 +189,68 @@ func (g *Gateway) post(w http.ResponseWriter, r *http.Request, snap *config.Snap
 		}
 		g.proxy(w, r, man, &rewrite{body: body})
 	}
+}
+
+// passthrough is the set of methods that carry no decision of their own
+// and may be forwarded once the grant verifies: the protocol's lifecycle
+// and a client's response (no method) to a server-initiated request.
+func passthrough(method string) bool {
+	switch method {
+	case "initialize", "ping", "":
+		return true
+	default:
+		return strings.HasPrefix(method, "notifications/")
+	}
+}
+
+// ensureUnambiguous refuses a JSON message in which any object has two
+// member names that are equal ignoring case, since the decoder here would
+// silently collapse them while a case-sensitive server would not.
+func ensureUnambiguous(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	return walkUnambiguous(dec)
+}
+
+func walkUnambiguous(dec *json.Decoder) error {
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil // a scalar
+	}
+	switch delim {
+	case '{':
+		seen := map[string]bool{}
+		for dec.More() {
+			key, err := dec.Token()
+			if err != nil {
+				return err
+			}
+			name, _ := key.(string)
+			folded := strings.ToLower(name)
+			if seen[folded] {
+				return fmt.Errorf("member %q appears more than once", name)
+			}
+			seen[folded] = true
+			if err := walkUnambiguous(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token() // the closing brace
+		return err
+	case '[':
+		for dec.More() {
+			if err := walkUnambiguous(dec); err != nil {
+				return err
+			}
+		}
+		_, err := dec.Token() // the closing bracket
+		return err
+	}
+	return nil
 }
 
 // toolsCall has the decision point decide the call, then forwards it or
@@ -252,8 +336,12 @@ func (g *Gateway) proxy(w http.ResponseWriter, r *http.Request, man config.Manif
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.Out.URL = target
 			pr.Out.Host = target.Host
-			pr.Out.Header.Del("Authorization")
-			pr.Out.Header.Del("Cookie")
+			// Forward only the protocol's own transport and tracing
+			// headers, never the client's. The agent's grant, cookies and
+			// anything a server might mistake for an identity signal (an
+			// X-Forwarded-* header, say) are dropped; the upstream
+			// credential is set in their place.
+			pr.Out.Header = forwardHeaders(pr.In.Header)
 			if header != "" {
 				pr.Out.Header.Set(header, value)
 			}
@@ -335,6 +423,30 @@ func (g *Gateway) challenge(w http.ResponseWriter, status int, errCode, desc str
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{"error": firstNonEmpty(errCode, "unauthorized"), "error_description": desc})
+}
+
+// forwardHeaders keeps only the headers the MCP transport defines and the
+// tracing headers, dropping everything else the client sent. The upstream
+// credential is added by the caller.
+func forwardHeaders(in http.Header) http.Header {
+	out := make(http.Header, len(in))
+	for name, values := range in {
+		if ck := http.CanonicalHeaderKey(name); forwardable(ck) {
+			out[ck] = values
+		}
+	}
+	return out
+}
+
+func forwardable(canonical string) bool {
+	switch canonical {
+	case "Accept", "Content-Type", "Traceparent", "Tracestate", "Baggage", "Last-Event-Id":
+		return true
+	default:
+		// MCP-Protocol-Version, Mcp-Session-Id, Mcp-Method, Mcp-Name and
+		// the Mcp-Param-* request-metadata headers.
+		return strings.HasPrefix(canonical, "Mcp-")
+	}
 }
 
 func (g *Gateway) originAllowed(r *http.Request) bool {
