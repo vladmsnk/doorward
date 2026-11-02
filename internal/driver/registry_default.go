@@ -132,8 +132,6 @@ func (r *RegistryDefault) Close() error {
 	return r.persister.Close()
 }
 
-// ---------------------------------------------------------------- basics
-
 func (r *RegistryDefault) Config() *config.DefaultProvider  { return r.conf }
 func (r *RegistryDefault) Persister() persistence.Persister { return r.persister }
 func (r *RegistryDefault) Validator() *schema.Validator     { return r.validator }
@@ -161,8 +159,6 @@ func (r *RegistryDefault) Now() time.Time {
 	return r.now()
 }
 
-// ---------------------------------------------------------------- managers
-
 func (r *RegistryDefault) ConfigurationManager() configuration.Manager {
 	return r.persister.Documents()
 }
@@ -189,8 +185,6 @@ func (r *RegistryDefault) ConfigurationLocker() configuration.Locker { return r.
 
 // GrantRevoker revokes a suspended agent's grants.
 func (r *RegistryDefault) GrantRevoker() configuration.GrantRevoker { return r.persister.Grants() }
-
-// ---------------------------------------------------------------- components
 
 // KeyRing is the box's signing keys.
 func (r *RegistryDefault) KeyRing() *jwk.KeyRing {
@@ -227,8 +221,6 @@ func (r *RegistryDefault) Evaluator() *pdp.Evaluator {
 func (r *RegistryDefault) GatewayHandler() *gateway.Handler {
 	return r.gateway.get(func() *gateway.Handler { return gateway.NewHandler(r) })
 }
-
-// ---------------------------------------------------------------- routes
 
 // RegisterPublicRoutes serves the JWK Set, the evaluation endpoint and the
 // MCP gateway on the public listener.

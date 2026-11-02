@@ -308,8 +308,6 @@ func Satisfies(c v0.Constraint, value any) error {
 	return nil
 }
 
-// ---------------------------------------------------------------- scalars
-
 // Scalars arrive from JSON as float64, string or bool. Integers that came
 // through other decoders are accepted too.
 func number(v any) (float64, bool) {

@@ -107,7 +107,11 @@ Tests that need the database use `testhelpers.NewRegistry`. It returns an
 open registry on the empty database `DOORWARD_TEST_POSTGRES_DSN` names, with
 a fresh master key and signing key, and skips the test without one. A test
 adjusts the settings or the registry (clock, journal, tracer) before it
-opens, then mounts the handlers it tests as `serve` would.
+opens, then mounts the handlers it tests as `serve` would. A storage test
+takes the store alone with `OpenPersister`. `Example` reads an example
+document as the box reads one, `PutExampleConfig` stores the example
+configuration, and `Record` appends a record the way the decision point
+does, by settling it.
 
 ## Adding a component
 

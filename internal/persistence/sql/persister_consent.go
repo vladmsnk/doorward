@@ -70,10 +70,3 @@ func (s consents) Revoke(ctx context.Context, id string, by v0.Revoker, at time.
 	})
 	return out, mapErr(err)
 }
-
-func (s consents) Expire(ctx context.Context, now time.Time) (int, error) {
-	tag, err := s.pool.Exec(ctx, `
-		UPDATE consents SET status = 'expired', doc = jsonb_set(doc, '{status}', '"expired"')
-		WHERE status = 'active' AND expires_at <= $1`, now)
-	return int(tag.RowsAffected()), err
-}

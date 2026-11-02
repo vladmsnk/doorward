@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,28 +74,12 @@ func newBox(t testing.TB) *box {
 
 	// The example configuration, with the ledger manifest pointed at the
 	// demo server.
-	for _, f := range []string{"manifest-payments-api.yaml", "manifest-ledger-mcp.yaml", "mandate-invoices.yaml", "mandate-reconcile.yaml",
-		"agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
-		data, err := os.ReadFile(filepath.Join("../../examples/v0/config", f))
-		if err != nil {
-			t.Fatal(err)
+	testhelpers.PutExampleConfig(t, st.Documents(), func(file string, doc []byte) []byte {
+		if file == "manifest-ledger-mcp.yaml" {
+			return retarget(t, doc, upstream.URL+"/mcp")
 		}
-		src, err := schema.Read(f, data, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		doc := src[0].JSON
-		if f == "manifest-ledger-mcp.yaml" {
-			doc = retarget(t, doc, upstream.URL+"/mcp")
-		}
-		var meta struct {
-			Metadata struct{ Name string } `json:"metadata"`
-		}
-		_ = json.Unmarshal(doc, &meta)
-		if _, err := st.Documents().Put(ctx, string(src[0].Kind), meta.Metadata.Name, doc, "test"); err != nil {
-			t.Fatal(err)
-		}
-	}
+		return doc
+	})
 
 	sealed, err := reg.Sealer().Seal([]byte(apiKey), configuration.SecretPurpose(keyRef))
 	if err != nil {

@@ -84,26 +84,26 @@ func (s *Snapshot) MandatesWhere(keep func(v0.Mandate) bool) []string {
 
 // Mandate returns a mandate by name; x.ErrNotFound when there is none.
 func (s *Snapshot) Mandate(name string) (Mandate, error) {
-	if err := s.broken[v0.KindMandate+"/"+name]; err != nil {
-		return Mandate{}, err
-	}
-	m, ok := s.mandates[name]
-	if !ok {
-		return Mandate{}, x.ErrNotFound
-	}
-	return m, nil
+	return byName(s, v0.KindMandate, s.mandates, name)
 }
 
 // Agent returns an agent by name; x.ErrNotFound when there is none.
 func (s *Snapshot) Agent(name string) (Agent, error) {
-	if err := s.broken[v0.KindAgent+"/"+name]; err != nil {
-		return Agent{}, err
+	return byName(s, v0.KindAgent, s.agents, name)
+}
+
+// byName looks a document up by name, failing closed when this version of
+// doorward could not read it.
+func byName[T any](s *Snapshot, kind string, docs map[string]T, name string) (T, error) {
+	var zero T
+	if err := s.broken[kind+"/"+name]; err != nil {
+		return zero, err
 	}
-	a, ok := s.agents[name]
+	d, ok := docs[name]
 	if !ok {
-		return Agent{}, x.ErrNotFound
+		return zero, x.ErrNotFound
 	}
-	return a, nil
+	return d, nil
 }
 
 // brokenFor finds a broken manifest by its audience, which only the raw

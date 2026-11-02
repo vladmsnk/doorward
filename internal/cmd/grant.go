@@ -29,19 +29,10 @@ const grantUsage = `usage:
 `
 
 func runGrant(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprint(stderr, grantUsage)
-		return 2
-	}
-	switch args[0] {
-	case "mint":
-		return runGrantMint(args[1:], stdout, stderr)
-	case "verify":
-		return runGrantVerify(args[1:], stdin, stdout, stderr)
-	default:
-		fmt.Fprintf(stderr, "doorward grant: unknown command %q\n\n%s", args[0], grantUsage)
-		return 2
-	}
+	return dispatch("grant", grantUsage, args, stderr, map[string]func([]string) int{
+		"mint":   func(a []string) int { return runGrantMint(a, stdout, stderr) },
+		"verify": func(a []string) int { return runGrantVerify(a, stdin, stdout, stderr) },
+	})
 }
 
 // runGrantMint does what the token service will do once it exists: take a

@@ -5,13 +5,15 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/budget"
 	"github.com/vladmsnk/doorward/internal/core"
 )
 
 func TestBudgets(t *testing.T) {
-	alice := load[v0.Grant](t, "grant/pay-invoice.json")
+	alice := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
 	now := time.Date(2026, 10, 31, 23, 59, 0, 0, time.FixedZone("CET", 3600))
 	pay := func(amount any) core.Call {
 		args := map[string]any{"invoice_id": "inv_1", "currency": "EUR"}
@@ -72,7 +74,7 @@ func TestBudgets(t *testing.T) {
 }
 
 func TestLimitsCheck(t *testing.T) {
-	alice := load[v0.Grant](t, "grant/pay-invoice.json")
+	alice := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
 	budgets, _ := core.Budgets(alice, core.Call{Resource: payments, Action: "pay_invoice",
 		Arguments: map[string]any{"invoice_id": "i", "amount": 1200.0, "currency": "EUR"}}, time.Now())
 
@@ -98,7 +100,7 @@ func TestLimitsCheck(t *testing.T) {
 // After a best-effort draw (observe mode), the first exhausted budget
 // fails the check and the others are listed as drawn.
 func TestLimitsCheckBestEffort(t *testing.T) {
-	alice := load[v0.Grant](t, "grant/pay-invoice.json")
+	alice := testhelpers.Example[v0.Grant](t, "grant/pay-invoice.json")
 	budgets, _ := core.Budgets(alice, core.Call{Resource: payments, Action: "pay_invoice",
 		Arguments: map[string]any{"invoice_id": "i", "amount": 1200.0, "currency": "EUR"}}, time.Now())
 	check, reason, uses := core.LimitsCheck(budgets, []budget.Drawn{

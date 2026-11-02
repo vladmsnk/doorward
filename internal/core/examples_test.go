@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vladmsnk/doorward/internal/testhelpers"
+
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/core"
 )
@@ -18,7 +20,7 @@ func TestExampleDecisions(t *testing.T) {
 	w := newWorld(t)
 	grants := map[string]v0.Grant{}
 	for _, f := range []string{"grant/pay-invoice.json", "grant/reconcile.json"} {
-		g := load[v0.Grant](t, f)
+		g := testhelpers.Example[v0.Grant](t, f)
 		grants[g.ID] = g
 	}
 	files, _ := filepath.Glob("../../examples/v0/decision/*.json")
@@ -26,7 +28,7 @@ func TestExampleDecisions(t *testing.T) {
 		t.Fatalf("%d example decisions", len(files))
 	}
 	for _, f := range files {
-		d := load[v0.Decision](t, strings.TrimPrefix(f, "../../examples/v0/"))
+		d := testhelpers.Example[v0.Decision](t, strings.TrimPrefix(f, "../../examples/v0/"))
 		t.Run(filepath.Base(f), func(t *testing.T) {
 			g, ok := grants[d.Grant.ID]
 			if !ok {
@@ -90,7 +92,7 @@ func TestExampleDecisions(t *testing.T) {
 func TestExampleApprovals(t *testing.T) {
 	files, _ := filepath.Glob("../../examples/v0/approval/*.json")
 	for _, f := range files {
-		a := load[v0.Approval](t, strings.TrimPrefix(f, "../../examples/v0/"))
+		a := testhelpers.Example[v0.Approval](t, strings.TrimPrefix(f, "../../examples/v0/"))
 		if h, err := a.Action.Hash(); err != nil || h != a.ActionHash {
 			t.Errorf("%s: action hashes to %s, the record says %s", filepath.Base(f), h, a.ActionHash)
 		}

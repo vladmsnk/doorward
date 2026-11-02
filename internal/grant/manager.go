@@ -29,9 +29,6 @@ type Manager interface {
 	RevokeByConsent(ctx context.Context, consent string, at time.Time) ([]string, error)
 	// RevokeByAgent revokes every live grant of an agent and returns their IDs.
 	RevokeByAgent(ctx context.Context, agent string, at time.Time) ([]string, error)
-	// Spend marks a single-use grant used, once. x.ErrState if it is not
-	// single-use or was already spent.
-	Spend(ctx context.Context, jti string, at time.Time) error
 }
 
 // ManagerProvider gives access to the grants.

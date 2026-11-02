@@ -96,7 +96,7 @@ internal/x/              storage errors, HTTP helpers, provider interfaces, the 
 internal/sealer/         AES-256-GCM sealing under the master key
 internal/telemetry/      OpenTelemetry tracing, when an endpoint is configured
 internal/ids/            record IDs: prefix_ULID
-internal/testhelpers/    a registry on the test database, for tests
+internal/testhelpers/    for tests: a registry and a store on the test database, the examples
 internal/demoledger/     the demo MCP server
 schema/                  the embedded schemas, the validator, strict YAML/JSON reading
 schema/v0/               the JSON Schemas

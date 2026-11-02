@@ -14,35 +14,6 @@ func runCLI(args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errb.String()
 }
 
-func TestValidateExamples(t *testing.T) {
-	glob := func(pattern string) []string {
-		files, _ := filepath.Glob("../../examples/v0/" + pattern)
-		return files
-	}
-	for _, tc := range []struct {
-		args  []string
-		files []string
-	}{
-		{nil, glob("config/*.yaml")},
-		{[]string{"--kind", "consent"}, glob("consent/*.json")},
-		{[]string{"--kind", "grant"}, glob("grant/*.json")},
-		{[]string{"--kind", "decision"}, glob("decision/*.json")},
-		{[]string{"--kind", "approval"}, glob("approval/*.json")},
-	} {
-		if len(tc.files) == 0 {
-			t.Fatal("no example files found")
-		}
-		args := append(append([]string{"validate"}, tc.args...), tc.files...)
-		code, out, errOut := runCLI(args...)
-		if code != 0 {
-			t.Fatalf("exit %d\n%s", code, errOut)
-		}
-		if n := strings.Count(out, "ok   "); n != len(tc.files) {
-			t.Errorf("%d ok lines for %d files:\n%s", n, len(tc.files), out)
-		}
-	}
-}
-
 func TestValidateReportsEveryFailure(t *testing.T) {
 	dir := t.TempDir()
 	bad := filepath.Join(dir, "bad.yaml")

@@ -19,24 +19,6 @@ type decisions struct{ pool *pgxpool.Pool }
 // can find waits on it in pg_locks, and tests can hold it.
 const ChainLock = 0x444543495349 // "DECISI"
 
-func (s decisions) Append(ctx context.Context, d v0.Decision) (v0.Decision, error) {
-	var out v0.Decision
-	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) (err error) {
-		out, err = appendTx(ctx, tx, d)
-		return err
-	})
-	return out, mapErr(err)
-}
-
-// appendTx appends d as the next link, under the chain lock, inside tx.
-func appendTx(ctx context.Context, tx pgx.Tx, d v0.Decision) (v0.Decision, error) {
-	prev, err := lockChain(ctx, tx)
-	if err != nil {
-		return d, err
-	}
-	return linkAndInsert(ctx, tx, d, prev)
-}
-
 // lockChain takes the chain lock for tx and returns the head record, nil
 // on an empty journal.
 func lockChain(ctx context.Context, tx pgx.Tx) (*v0.Decision, error) {
@@ -53,21 +35,6 @@ func lockChain(ctx context.Context, tx pgx.Tx) (*v0.Decision, error) {
 	default:
 		return nil, err
 	}
-}
-
-// linkAndInsert chains d after prev and stores it. The caller holds the
-// chain lock.
-func linkAndInsert(ctx context.Context, tx pgx.Tx, d v0.Decision, prev *v0.Decision) (v0.Decision, error) {
-	linked, err := v0.Link(d, prev)
-	if err != nil {
-		return d, err
-	}
-	args, err := decisionRow(linked)
-	if err != nil {
-		return d, err
-	}
-	_, err = tx.Exec(ctx, insertDecisionSQL, args...)
-	return linked, err
 }
 
 // insertDecisionSQL stores one linked record; decisionRow gives its

@@ -25,6 +25,10 @@ linters:
       - path: _test\.go
         linters: [gosec]
         text: G304|G204
+      # The test helpers read the example documents the same way.
+      - path: internal/testhelpers/
+        linters: [gosec]
+        text: G304
 
 formatters:
   enable:

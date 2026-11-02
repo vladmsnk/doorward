@@ -7,12 +7,10 @@ import (
 	"context"
 	"io"
 	"log/slog"
-	"os"
 	"testing"
 
 	"github.com/vladmsnk/doorward/internal/driver"
 	"github.com/vladmsnk/doorward/internal/driver/config"
-	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/sealer"
 )
 
@@ -30,24 +28,14 @@ const Tables = "documents, consents, grants, decisions, approvals, counters, sig
 // the With methods.
 func NewRegistry(t testing.TB, edit func(*config.DefaultProvider), before ...func(*driver.RegistryDefault)) *driver.RegistryDefault {
 	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
+	st := OpenPersister(t)
 	ctx := context.Background()
-	st, err := sql.Open(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE "+Tables); err != nil {
-		t.Fatal(err)
-	}
 	master, err := sealer.Generate()
 	if err != nil {
 		t.Fatal(err)
 	}
 	conf := &config.DefaultProvider{
-		DSN: dsn, MasterKey: master, AdminToken: AdminToken,
+		MasterKey: master, AdminToken: AdminToken,
 		PDPID: "doorward", GatewayID: "gateway", Version: "test",
 		DecisionTimeout: config.DefaultDecisionTimeout,
 	}
@@ -61,7 +49,6 @@ func NewRegistry(t testing.TB, edit func(*config.DefaultProvider), before ...fun
 	if err := reg.Open(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = reg.Close() })
 	if _, err := reg.KeyRing().Ensure(ctx); err != nil {
 		t.Fatal(err)
 	}
