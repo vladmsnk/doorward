@@ -108,7 +108,7 @@ func (p *DefaultProvider) Validate() error {
 		return errors.New("--db or DOORWARD_DB is required")
 	}
 	if p.DecisionTimeout <= 0 || p.DecisionTimeout > MaxDecisionTimeout {
-		return errors.New("--decision-timeout must be between 1ms and 20s, under the 30s HTTP write timeout")
+		return errors.New("--decision-timeout must be between 1ms and 20s, the longest a decision's settlement may run")
 	}
 	if len(p.AdminToken) < 16 {
 		return errors.New("--admin-token or DOORWARD_ADMIN_TOKEN must be at least 16 characters")
