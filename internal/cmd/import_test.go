@@ -52,7 +52,7 @@ func TestImportMCP(t *testing.T) {
 		t.Fatalf("exit %d, stdout %q\n%s", code, stdout, stderr)
 	}
 	for _, want := range []string{
-		"ledger-mcp from demo-ledger 0.1 (MCP 2025-11-25): 4 tools listed, 4 operations",
+		"ledger-mcp from demo-ledger 0.1 (MCP 2026-07-28): 4 tools listed, 4 operations",
 		"+ list_unmatched (read)\n+ post_entry (write)\n+ write_off (critical)\n+ export_everything (write)\n",
 		"note: post_entry: it does not say whether it is destructive; drafted as write",
 	} {
@@ -124,7 +124,7 @@ func TestImportMCPErrors(t *testing.T) {
 		want string
 	}{
 		{"no credential", []string{"--name", "l", "--audience", "https://a.example/mcp", url}, 1, "give it with --header"},
-		{"no server", []string{"--name", "l", "--audience", "https://a.example/mcp", "http://127.0.0.1:1/mcp"}, 1, "initialize:"},
+		{"no server", []string{"--name", "l", "--audience", "https://a.example/mcp", "http://127.0.0.1:1/mcp"}, 1, "server/discover:"},
 		{"no name", []string{"--audience", "https://a.example/mcp", url}, 2, "usage:"},
 		{"bad name", []string{"--name", "Ledger", "--audience", "https://a.example/mcp", url}, 2, "not a name"},
 		{"bad audience", []string{"--name", "l", "--audience", "ledger", "--header", ledgerKey, url}, 1, "not a valid manifest"},

@@ -1,5 +1,6 @@
 // Package mcp is the client side of the Model Context Protocol over
-// Streamable HTTP, as much of it as reading a server's tools takes: the
+// Streamable HTTP, as much of it as reading a server's tools takes:
+// server/discover, or for a server of an earlier revision the initialize
 // handshake, then tools/list page by page. Package gateway is the server
 // side.
 //
@@ -17,6 +18,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -26,11 +28,33 @@ import (
 	"github.com/vladmsnk/doorward/internal/x"
 )
 
-// ProtocolVersion is the revision the client asks for.
-const ProtocolVersion = "2025-11-25"
+// ProtocolVersion is the revision the client asks for first: every request
+// carries it, and there is no handshake.
+const ProtocolVersion = "2026-07-28"
 
-// versions are the revisions the client accepts, newest first.
-var versions = []string{ProtocolVersion, "2025-06-18", "2025-03-26"}
+// legacy are the earlier revisions the client also reads, newest first,
+// spoken through the initialize handshake.
+var legacy = []string{"2025-11-25", "2025-06-18", "2025-03-26"}
+
+// versions are all the revisions the client reads, newest first.
+var versions = append([]string{ProtocolVersion}, legacy...)
+
+// Keys a 2026-07-28 request names itself under in its params' _meta.
+const (
+	metaVersion      = "io.modelcontextprotocol/protocolVersion"
+	metaClientInfo   = "io.modelcontextprotocol/clientInfo"
+	metaCapabilities = "io.modelcontextprotocol/clientCapabilities"
+	metaServerInfo   = "io.modelcontextprotocol/serverInfo"
+)
+
+// JSON-RPC errors only a server of 2026-07-28 or later answers with.
+const (
+	codeHeaderMismatch     = -32020
+	codeMissingCapability  = -32021
+	codeUnsupportedVersion = -32022
+)
+
+var clientInfo = map[string]any{"name": "doorward", "version": "import"}
 
 // Bounds on what a server may send.
 const (
@@ -103,15 +127,22 @@ var client = &http.Client{
 	CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 }
 
-// ListTools connects to the MCP server at url, introduces itself, and reads
-// every page of the server's tool list. header goes with every request, for
-// the server's credential. ctx bounds the whole exchange.
+// ListTools connects to the MCP server at url and reads every page of its
+// tool list: in revision 2026-07-28 when the server speaks it, otherwise
+// through the handshake of the earlier revisions. header goes with every
+// request, for the server's credential. ctx bounds the whole exchange.
 func ListTools(ctx context.Context, url string, header http.Header) (Listing, error) {
 	s := &session{url: url, header: header}
 	defer s.close(ctx)
-	server, err := s.initialize(ctx)
+	server, modern, err := s.discover(ctx)
 	if err != nil {
 		return Listing{}, err
+	}
+	if !modern {
+		s.modern, s.version = false, ""
+		if server, err = s.initialize(ctx); err != nil {
+			return Listing{}, err
+		}
 	}
 	tools, err := s.listTools(ctx)
 	if err != nil {
@@ -124,17 +155,97 @@ func ListTools(ctx context.Context, url string, header http.Header) (Listing, er
 type session struct {
 	url    string
 	header http.Header
+	// modern: the server speaks 2026-07-28, so every request names its
+	// version and mirrors its method in a header, and there is no session.
+	modern bool
 	// id is the MCP-Session-Id the server gave, if any; version is the
 	// revision agreed on. Both go with every request after the handshake.
 	id, version string
 	lastID      int
 }
 
+// discover asks the server who it is in revision 2026-07-28, and reports
+// false, without an error, for a server of an earlier revision, to be
+// spoken to through the handshake. As the revision's backward
+// compatibility describes, a 4xx answer that is not a modern JSON-RPC
+// error, or a JSON-RPC error that is not one, marks an earlier revision; a
+// modern error is answered, never fallen back from. A refused credential,
+// a redirect or a server error ends the import whatever the revision.
+func (s *session) discover(ctx context.Context) (Server, bool, error) {
+	s.modern, s.version = true, ProtocolVersion
+	s.lastID++
+	id := strconv.Itoa(s.lastID)
+	res, err := s.post(ctx, "server/discover", s.message("server/discover", s.lastID, nil))
+	if err != nil {
+		return Server{}, false, err
+	}
+	defer func() { _ = res.Body.Close() }()
+	switch {
+	case res.StatusCode == http.StatusUnauthorized || res.StatusCode == http.StatusForbidden,
+		res.StatusCode/100 == 3, res.StatusCode/100 == 5:
+		return Server{}, false, statusError("server/discover", res)
+	case res.StatusCode != http.StatusOK && res.StatusCode != http.StatusBadRequest:
+		return Server{}, false, nil
+	}
+	reply, err := readResponse(res, id)
+	if err != nil {
+		if res.StatusCode == http.StatusBadRequest {
+			return Server{}, false, nil
+		}
+		return Server{}, false, fmt.Errorf("server/discover: %w", err)
+	}
+	if e := reply.Error; e != nil {
+		switch e.Code {
+		case codeUnsupportedVersion:
+			var data struct {
+				Supported []string `json:"supported"`
+			}
+			_ = json.Unmarshal(e.Data, &data)
+			return Server{}, false, unsupported(data.Supported)
+		case codeHeaderMismatch, codeMissingCapability:
+			return Server{}, false, fmt.Errorf("server/discover: the server answered %d %s", e.Code, strconv.Quote(clean(e.Message, 200)))
+		}
+		return Server{}, false, nil
+	}
+	var result struct {
+		SupportedVersions []string                   `json:"supportedVersions"`
+		Meta              map[string]json.RawMessage `json:"_meta"`
+	}
+	if err := json.Unmarshal(reply.Result, &result); err != nil {
+		return Server{}, false, fmt.Errorf("server/discover: the result is not a discovery: %w", err)
+	}
+	if !slices.Contains(result.SupportedVersions, ProtocolVersion) {
+		return Server{}, false, unsupported(result.SupportedVersions)
+	}
+	var info struct {
+		Name    string `json:"name"`
+		Version string `json:"version"`
+	}
+	_ = json.Unmarshal(result.Meta[metaServerInfo], &info)
+	return Server{Name: clean(info.Name, 128), Version: clean(info.Version, 64), Protocol: ProtocolVersion}, true, nil
+}
+
+// unsupported is nil when a modern server also offers an earlier revision
+// the client reads, which the handshake then speaks, and otherwise says
+// what the server speaks.
+func unsupported(supported []string) error {
+	for _, v := range supported {
+		if slices.Contains(legacy, v) {
+			return nil
+		}
+	}
+	shown := make([]string, 0, len(supported))
+	for _, v := range supported {
+		shown = append(shown, strconv.Quote(clean(v, 32)))
+	}
+	return fmt.Errorf("server/discover: the server speaks MCP %s; doorward reads %s", strings.Join(shown, ", "), strings.Join(versions, ", "))
+}
+
 func (s *session) initialize(ctx context.Context) (Server, error) {
 	raw, err := s.call(ctx, "initialize", map[string]any{
-		"protocolVersion": ProtocolVersion,
+		"protocolVersion": legacy[0],
 		"capabilities":    map[string]any{},
-		"clientInfo":      map[string]any{"name": "doorward", "version": "import"},
+		"clientInfo":      clientInfo,
 	})
 	if err != nil {
 		return Server{}, err
@@ -149,11 +260,7 @@ func (s *session) initialize(ctx context.Context) (Server, error) {
 	if err := json.Unmarshal(raw, &res); err != nil {
 		return Server{}, fmt.Errorf("initialize: the result is not a handshake: %w", err)
 	}
-	known := false
-	for _, v := range versions {
-		known = known || v == res.ProtocolVersion
-	}
-	if !known {
+	if !slices.Contains(legacy, res.ProtocolVersion) {
 		return Server{}, fmt.Errorf("initialize: the server speaks MCP %s; doorward reads %s",
 			strconv.Quote(clean(res.ProtocolVersion, 32)), strings.Join(versions, ", "))
 	}
@@ -174,9 +281,9 @@ func (s *session) listTools(ctx context.Context) ([]Tool, error) {
 		if page > MaxPages {
 			return nil, fmt.Errorf("tools/list: the list runs past %d pages", MaxPages)
 		}
-		var params any
+		var params map[string]any
 		if cursor != nil {
-			params = map[string]string{"cursor": *cursor}
+			params = map[string]any{"cursor": *cursor}
 		}
 		raw, err := s.call(ctx, "tools/list", params)
 		if err != nil {
@@ -185,9 +292,13 @@ func (s *session) listTools(ctx context.Context) ([]Tool, error) {
 		var res struct {
 			Tools      []Tool  `json:"tools"`
 			NextCursor *string `json:"nextCursor"`
+			ResultType string  `json:"resultType"`
 		}
 		if err := json.Unmarshal(raw, &res); err != nil {
 			return nil, fmt.Errorf("tools/list: the result is not a tool list: %w", err)
+		}
+		if res.ResultType != "" && res.ResultType != "complete" {
+			return nil, fmt.Errorf("tools/list: the server asks for more input (%s), which listing tools does not take", strconv.Quote(clean(res.ResultType, 32)))
 		}
 		for _, t := range res.Tools {
 			if names[t.Name] {
@@ -216,20 +327,36 @@ type rpcResponse struct {
 	Method string          `json:"method"`
 	Result json.RawMessage `json:"result"`
 	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
+		Code    int             `json:"code"`
+		Message string          `json:"message"`
+		Data    json.RawMessage `json:"data"`
 	} `json:"error"`
 }
 
-// call sends one request and returns its result.
-func (s *session) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	s.lastID++
-	id := strconv.Itoa(s.lastID)
-	msg := map[string]any{"jsonrpc": "2.0", "id": s.lastID, "method": method}
+// message is one JSON-RPC message, a notification when id is 0. Under
+// 2026-07-28 its params name the version and who is asking.
+func (s *session) message(method string, id int, params map[string]any) map[string]any {
+	msg := map[string]any{"jsonrpc": "2.0", "method": method}
+	if id != 0 {
+		msg["id"] = id
+	}
+	if s.modern {
+		if params == nil {
+			params = map[string]any{}
+		}
+		params["_meta"] = map[string]any{metaVersion: ProtocolVersion, metaClientInfo: clientInfo, metaCapabilities: map[string]any{}}
+	}
 	if params != nil {
 		msg["params"] = params
 	}
-	res, err := s.post(ctx, method, msg)
+	return msg
+}
+
+// call sends one request and returns its result.
+func (s *session) call(ctx context.Context, method string, params map[string]any) (json.RawMessage, error) {
+	s.lastID++
+	id := strconv.Itoa(s.lastID)
+	res, err := s.post(ctx, method, s.message(method, s.lastID, params))
 	if err != nil {
 		return nil, err
 	}
@@ -255,7 +382,7 @@ func (s *session) call(ctx context.Context, method string, params any) (json.Raw
 
 // notify sends a notification, which the server accepts without an answer.
 func (s *session) notify(ctx context.Context, method string) error {
-	res, err := s.post(ctx, method, map[string]any{"jsonrpc": "2.0", "method": method})
+	res, err := s.post(ctx, method, s.message(method, 0, nil))
 	if err != nil {
 		return err
 	}
@@ -278,6 +405,9 @@ func (s *session) post(ctx context.Context, method string, msg any) (*http.Respo
 	s.setHeaders(req)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
+	if s.modern {
+		req.Header.Set("Mcp-Method", method)
+	}
 	res, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", method, err)

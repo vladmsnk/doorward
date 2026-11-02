@@ -48,12 +48,14 @@ func TestListToolsFromTheDemoLedger(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
 		ledger *demoledger.Server
-		posts  int // initialize, initialized, then one tools/list per page
+		pages  int
 	}{
-		{"json", &demoledger.Server{APIKey: apiKey}, 3},
-		{"event stream", &demoledger.Server{APIKey: apiKey, SSE: true}, 3},
-		{"pages", &demoledger.Server{APIKey: apiKey, PageSize: 1}, 6},
-		{"pages as event streams", &demoledger.Server{APIKey: apiKey, SSE: true, PageSize: 3}, 4},
+		{"json", &demoledger.Server{APIKey: apiKey}, 1},
+		{"event stream", &demoledger.Server{APIKey: apiKey, SSE: true}, 1},
+		{"pages", &demoledger.Server{APIKey: apiKey, PageSize: 1}, 4},
+		{"pages as event streams", &demoledger.Server{APIKey: apiKey, SSE: true, PageSize: 3}, 2},
+		{"an earlier revision", &demoledger.Server{APIKey: apiKey, Legacy: true}, 1},
+		{"an earlier revision, pages as event streams", &demoledger.Server{APIKey: apiKey, Legacy: true, SSE: true, PageSize: 3}, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rec := &headers{h: tc.ledger}
@@ -66,7 +68,11 @@ func TestListToolsFromTheDemoLedger(t *testing.T) {
 			if got := names(l.Tools); got != "list_unmatched,post_entry,write_off,export_everything" {
 				t.Errorf("tools: %s", got)
 			}
-			if l.Server != (mcp.Server{Name: "demo-ledger", Version: "0.1", Protocol: mcp.ProtocolVersion}) {
+			protocol := mcp.ProtocolVersion
+			if tc.ledger.Legacy {
+				protocol = "2025-11-25"
+			}
+			if l.Server != (mcp.Server{Name: "demo-ledger", Version: "0.1", Protocol: protocol}) {
 				t.Errorf("server: %+v", l.Server)
 			}
 			ro := l.Tools[0].Annotations
@@ -90,14 +96,34 @@ func TestListToolsFromTheDemoLedger(t *testing.T) {
 					t.Errorf("%s carried %s", s.Method, s.Credential)
 				}
 			}
-			if len(methods) != tc.posts+1 || methods[0] != "initialize" || methods[1] != "notifications/initialized" || methods[len(methods)-1] != "DELETE" {
-				t.Errorf("requests: %v", methods)
+			want := []string{"server/discover"}
+			if tc.ledger.Legacy {
+				want = append(want, "initialize", "notifications/initialized")
 			}
-			// After the handshake every request names the session and the
-			// revision agreed on.
-			for i, h := range rec.seen[1:] {
-				if h.Get("Mcp-Session-Id") == "" || h.Get("Mcp-Protocol-Version") != mcp.ProtocolVersion {
-					t.Errorf("request %d: session %q, version %q", i+2, h.Get("Mcp-Session-Id"), h.Get("Mcp-Protocol-Version"))
+			for range tc.pages {
+				want = append(want, "tools/list")
+			}
+			if tc.ledger.Legacy {
+				want = append(want, "DELETE")
+			}
+			if strings.Join(methods, " ") != strings.Join(want, " ") {
+				t.Errorf("requests: %v, want %v", methods, want)
+			}
+			if tc.ledger.Legacy {
+				// After the handshake every request names the session and
+				// the revision agreed on.
+				for i, h := range rec.seen[2:] {
+					if h.Get("Mcp-Session-Id") == "" || h.Get("Mcp-Protocol-Version") != protocol {
+						t.Errorf("request %d: session %q, version %q", i+3, h.Get("Mcp-Session-Id"), h.Get("Mcp-Protocol-Version"))
+					}
+				}
+				return
+			}
+			// 2026-07-28: no session, and every request names its version
+			// and mirrors its method.
+			for i, h := range rec.seen {
+				if h.Get("Mcp-Session-Id") != "" || h.Get("Mcp-Protocol-Version") != protocol || h.Get("Mcp-Method") != want[i] {
+					t.Errorf("request %d: session %q, version %q, method %q", i+1, h.Get("Mcp-Session-Id"), h.Get("Mcp-Protocol-Version"), h.Get("Mcp-Method"))
 				}
 			}
 		})
@@ -109,7 +135,7 @@ func TestListToolsWithoutTheCredential(t *testing.T) {
 	defer srv.Close()
 	_, err := mcp.ListTools(context.Background(), srv.URL, nil)
 	var se *mcp.StatusError
-	if !errors.As(err, &se) || !se.Unauthorized() || se.Method != "initialize" {
+	if !errors.As(err, &se) || !se.Unauthorized() || se.Method != "server/discover" {
 		t.Fatalf("err = %v", err)
 	}
 	if !strings.Contains(err.Error(), "401") || !strings.Contains(err.Error(), "wants its API key") {
@@ -260,12 +286,94 @@ func TestListToolsRefusesARedirect(t *testing.T) {
 
 func TestListToolsRefusesAnUnknownRevision(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Mcp-Method") == "server/discover" {
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05","capabilities":{}}}`)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":2,"result":{"protocolVersion":"2024-11-05","capabilities":{}}}`)
 	}))
 	defer srv.Close()
 	_, err := mcp.ListTools(context.Background(), srv.URL, nil)
 	if err == nil || !strings.Contains(err.Error(), `speaks MCP "2024-11-05"`) {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// modernServer answers server/discover with discover, and initialize and
+// tools/list as a server of the earlier revisions would, so a fallback can
+// be told apart from a modern listing by the protocol it reports.
+func modernServer(t *testing.T, discover func(w http.ResponseWriter, id json.RawMessage), list func(w http.ResponseWriter, id json.RawMessage)) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&msg)
+		switch msg.Method {
+		case "server/discover":
+			discover(w, msg.ID)
+		case "initialize":
+			page(w, msg.ID, `{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"serverInfo":{"name":"old","version":"1"}}`)
+		case "tools/list":
+			list(w, msg.ID)
+		default:
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestListToolsFromAModernServer(t *testing.T) {
+	discovered := func(versions string) func(w http.ResponseWriter, id json.RawMessage) {
+		return func(w http.ResponseWriter, id json.RawMessage) {
+			page(w, id, `{"resultType":"complete","supportedVersions":`+versions+`,"capabilities":{"tools":{}},"_meta":{"io.modelcontextprotocol/serverInfo":{"name":"new","version":"2"},"other":"x"}}`)
+		}
+	}
+	rpcError := func(status int, body string) func(w http.ResponseWriter, id json.RawMessage) {
+		return func(w http.ResponseWriter, id json.RawMessage) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,"error":%s}`, id, body)
+		}
+	}
+	oneTool := func(w http.ResponseWriter, id json.RawMessage) {
+		page(w, id, `{"resultType":"complete","tools":[{"name":"a"}],"ttlMs":1000,"cacheScope":"public"}`)
+	}
+	for _, tc := range []struct {
+		name     string
+		discover func(w http.ResponseWriter, id json.RawMessage)
+		list     func(w http.ResponseWriter, id json.RawMessage)
+		protocol string // the revision spoken, or "" for an error
+		want     string
+	}{
+		{"modern", discovered(`["2026-07-28","2025-11-25"]`), oneTool, "2026-07-28", ""},
+		{"modern without our revision, but an earlier one", discovered(`["2025-06-18"]`), oneTool, "2025-11-25", ""},
+		{"only a later revision", rpcError(400, `{"code":-32022,"message":"Unsupported protocol version","data":{"supported":["2027-01-01"],"requested":"2026-07-28"}}`),
+			oneTool, "", `speaks MCP "2027-01-01"`},
+		{"unsupported, but an earlier revision offered", rpcError(400, `{"code":-32022,"message":"Unsupported","data":{"supported":["2025-11-25"]}}`), oneTool, "2025-11-25", ""},
+		{"headers refused", rpcError(400, `{"code":-32020,"message":"Header mismatch"}`), oneTool, "", "answered -32020"},
+		{"an earlier revision's 400", rpcError(400, `{"code":-32600,"message":"no session"}`), oneTool, "2025-11-25", ""},
+		{"an earlier revision's method not found", rpcError(200, `{"code":-32601,"message":"no such method"}`), oneTool, "2025-11-25", ""},
+		{"a server error", rpcError(500, `{"code":-32603,"message":"boom"}`), oneTool, "", "500 Internal Server Error"},
+		{"a list asking for input", discovered(`["2026-07-28"]`), func(w http.ResponseWriter, id json.RawMessage) {
+			page(w, id, `{"resultType":"input_required","inputRequests":{}}`)
+		}, "", `asks for more input ("input_required")`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			l, err := mcp.ListTools(context.Background(), modernServer(t, tc.discover, tc.list).URL, nil)
+			switch {
+			case tc.protocol == "":
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Errorf("err = %v, want %q", err, tc.want)
+				}
+			case err != nil:
+				t.Errorf("err = %v", err)
+			case l.Server.Protocol != tc.protocol || names(l.Tools) != "a":
+				t.Errorf("listed %s over %+v", names(l.Tools), l.Server)
+			}
+		})
 	}
 }
