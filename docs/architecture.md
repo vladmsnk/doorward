@@ -19,7 +19,7 @@ Dependencies point down this list and never up:
 | Domains | `internal/configuration`, `grant`, `consent`, `approval`, `journal`, `jwk`, `budget` | each one's records, storage interface, handlers and rules |
 | Pure logic | `internal/core`, `internal/policy` | the three call checks (subset, sensitivity, budgets) and the permission algebra |
 | Storage | `internal/persistence`, `internal/persistence/sql` | the Persister, and its PostgreSQL implementation with the migrations |
-| Shared | `internal/x`, `sealer`, `ids`, `telemetry` | storage errors, HTTP helpers and provider interfaces; sealing; record IDs; tracing |
+| Shared | `internal/x`, `mcp`, `sealer`, `ids`, `telemetry` | storage errors, HTTP helpers and provider interfaces; the MCP client the import reads tools with; sealing; record IDs; tracing |
 | Contract | `api/v0`, `schema` | the v0 documents as Go types, and their schemas; the only public packages |
 
 No domain or service package imports `persistence` or `driver`. Only the
@@ -34,9 +34,10 @@ secrets they name:
 |---|---|
 | `manager.go` | `Document`, `Manager` (the storage interface for documents), `SecretManager`, and their `ManagerProvider` interfaces |
 | `registry.go` | `Registry`: what the package offers others; `InternalRegistry`: what its handlers need |
-| `handler.go`, `handler_agent.go`, `handler_secret.go` | `Handler`, `NewHandler(r InternalRegistry)` and `SetAdminRoutes`, which registers the Admin API routes the package serves |
+| `handler.go`, `handler_agent.go`, `handler_secret.go`, `handler_draft.go` | `Handler`, `NewHandler(r InternalRegistry)` and `SetAdminRoutes`, which registers the Admin API routes the package serves |
 | `rules.go` | the rules that span documents, and the transaction a change runs in |
 | `cache.go`, `snapshot.go` | the decision point's decoded copy of the configuration |
+| `draft.go`, `starter.go` | a manifest drafted from an MCP server's tools and merged into the stored one, and a starter mandate for it: pure functions the import command and the draft route share |
 
 The other domains have the same shape where they need it. `jwk` publishes
 the JWK Set (`SetPublicRoutes`) and serves the key routes. `journal` serves

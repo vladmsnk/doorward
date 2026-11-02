@@ -1,13 +1,14 @@
 package gateway
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/vladmsnk/doorward/internal/x"
 )
 
 // filterTools rewrites a tools/list response, plain JSON or an event
@@ -84,51 +85,26 @@ func rewriteToolList(data []byte, rw *rewrite) []byte {
 }
 
 // rewriteEvents copies an SSE stream, applying fn to each event's data and
-// flushing event by event. Field lines other than data pass unchanged.
+// writing event by event. Field lines other than data pass unchanged.
 func rewriteEvents(r io.Reader, w io.Writer, fn func([]byte) []byte) error {
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64<<10), MaxBody)
-	var data [][]byte
-	var other []string
-	flush := func() error {
-		if len(data) == 0 && len(other) == 0 {
-			return nil
+	return x.ReadEvents(r, MaxBody, func(e x.Event) error {
+		var out bytes.Buffer
+		for _, l := range e.Fields {
+			out.WriteString(l + "\n")
 		}
-		for _, l := range other {
-			if _, err := io.WriteString(w, l+"\n"); err != nil {
-				return err
+		if e.Data != nil {
+			data := e.Data
+			if len(bytes.TrimSpace(data)) > 0 {
+				data = fn(data)
+			}
+			for _, line := range bytes.Split(data, []byte("\n")) {
+				out.WriteString("data: ")
+				out.Write(line)
+				out.WriteByte('\n')
 			}
 		}
-		if len(data) > 0 {
-			joined := bytes.Join(data, []byte("\n"))
-			if len(bytes.TrimSpace(joined)) > 0 {
-				joined = fn(joined)
-			}
-			for _, line := range bytes.Split(joined, []byte("\n")) {
-				if _, err := w.Write(append(append([]byte("data: "), line...), '\n')); err != nil {
-					return err
-				}
-			}
-		}
-		_, err := io.WriteString(w, "\n")
-		data, other = nil, nil
+		out.WriteByte('\n')
+		_, err := w.Write(out.Bytes())
 		return err
-	}
-	for sc.Scan() {
-		line := sc.Text()
-		switch {
-		case line == "":
-			if err := flush(); err != nil {
-				return err
-			}
-		case strings.HasPrefix(line, "data:"):
-			data = append(data, []byte(strings.TrimPrefix(strings.TrimPrefix(line, "data:"), " ")))
-		default:
-			other = append(other, line)
-		}
-	}
-	if err := flush(); err != nil {
-		return err
-	}
-	return sc.Err()
+	})
 }

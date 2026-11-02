@@ -17,6 +17,7 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8090", "address to listen on")
 	sse := flag.Bool("sse", false, "answer as event streams instead of plain JSON")
+	pageSize := flag.Int("page-size", 0, "list this many tools a page (default: all on one)")
 	flag.Parse()
 	key := os.Getenv("DEMO_LEDGER_API_KEY")
 	if key == "" {
@@ -24,7 +25,7 @@ func main() {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	srv := &http.Server{
-		Addr: *addr, Handler: &demoledger.Server{APIKey: key, SSE: *sse, Log: log},
+		Addr: *addr, Handler: &demoledger.Server{APIKey: key, SSE: *sse, PageSize: *pageSize, Log: log},
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	log.Info("demo-ledger serving", "addr", *addr, "endpoint", "/mcp", "sse", *sse)

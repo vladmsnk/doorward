@@ -14,6 +14,7 @@ import (
 const usage = `usage:
   doorward validate [--kind KIND] FILE...   validate documents against the v0 schemas
   doorward serve --db DSN --admin-token T   run the box: public listener on :8080, Admin API on 127.0.0.1:8081
+  doorward import mcp [flags] URL           draft a manifest from an MCP server's tools
   doorward grant mint|verify ...            sign and record a grant; run a grant's checks
   doorward journal export|verify ...        print decision records; check records and their chain
   doorward master-key                       print a new master key for DOORWARD_MASTER_KEY
@@ -35,6 +36,8 @@ func Run(args []string, stdin io.Reader, stdout, stderr io.Writer, version strin
 		return runValidate(args[1:], stdout, stderr)
 	case "serve":
 		return server.Serve(args[1:], stdout, stderr, version)
+	case "import":
+		return runImport(args[1:], stdout, stderr)
 	case "grant":
 		return runGrant(args[1:], stdin, stdout, stderr)
 	case "journal":

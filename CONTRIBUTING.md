@@ -77,7 +77,7 @@ change in any way.
 cmd/doorward/            main: names the build and runs internal/cmd
 cmd/demo-ledger/         a small MCP server to try the gateway against
 api/v0/                  Go types of the v0 documents
-internal/cmd/            the CLI: validate, grant mint|verify, journal export|verify, master-key, version
+internal/cmd/            the CLI: validate, import mcp, grant mint|verify, journal export|verify, master-key, version
 internal/cmd/server/     doorward serve: the listeners, the journal follower, shutdown
 internal/driver/         the registry that builds the box; config/ holds serve's settings
 internal/configuration/  manifests, agents, mandates, secrets: storage, cache, rules, Admin API routes
@@ -91,6 +91,7 @@ internal/core/           the decision core: subset, sensitivity and budget check
 internal/policy/         comparing permissions: tiers, constraints, "within"
 internal/pdp/            the decision point and its AuthZEN evaluation endpoint
 internal/gateway/        the thin MCP gateway
+internal/mcp/            the MCP client: the handshake and tools/list, for import
 internal/persistence/    the Persister; sql/ implements it on PostgreSQL, with migrations
 internal/x/              storage errors, HTTP helpers, provider interfaces, the Admin API router
 internal/sealer/         AES-256-GCM sealing under the master key

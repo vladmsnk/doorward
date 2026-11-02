@@ -36,6 +36,7 @@ curl -sS -X POST -H "$H" -d '{"owner":{"team":"support-tools"}}' \
 | `GET …/{name}`, `GET …` | the current version; all current documents of a kind |
 | `GET …/{name}/versions`, `…/versions/{n}` | the history; one version |
 | `POST …/{name}/disable`, `/enable` | manifests and mandates; a manifest that enabled mandates name cannot be disabled |
+| `POST /admin/v0/manifests/{name}/draft` `{"skip": […]}` | an MCP manifest drafted again from its server's `tools/list`, with the stored secret: the draft, its changes and notes; nothing is stored ([gateway](gateway.md#importing-again)) |
 | `POST /admin/v0/agents/{name}/verify`, `/suspend` | an agent's status; suspending revokes its live grants |
 | `PUT /admin/v0/secrets/{name}` `{"value": …}`, `GET …`, `DELETE …/{name}` | upstream credentials a manifest's `secret_ref` names; values are never returned, and a secret an enabled manifest uses cannot be deleted |
 | `GET /admin/v0/keys`, `POST …/rotate`, `POST …/{kid}/retire` | the box's signing keys; a rotated-out key stays published until retired |

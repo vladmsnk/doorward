@@ -192,8 +192,9 @@ OIDC provider), and not a general policy language.
 
 ### How do I add authorization to an MCP server?
 
-Put Doorward in front of it. Its [gateway](docs/gateway.md) serves the
-server at `/mcp/{name}`, requires a grant, shows each client only the tools
+Put Doorward in front of it. `doorward import mcp` drafts the server's
+manifest from its own tool list, for you to review and apply, and the
+[gateway](docs/gateway.md) serves the server at `/mcp/{name}`, requires a grant, shows each client only the tools
 its grant allows and checks every `tools/call`, answering refusals and holds
 inside the protocol. It works today with grants minted from the command
 line; the protected resource metadata, OAuth flow and consent page MCP
@@ -252,7 +253,7 @@ measurements are in [docs/decision-point.md](docs/decision-point.md).
 
 - [Concepts](docs/concepts.md): the seven documents, how an agent gets authority, conventions
 - [Grants and the decision point](docs/decision-point.md): checks, refusal codes, the evaluation API, the journal
-- [The MCP gateway](docs/gateway.md): addresses, what happens to each message, trying it with the demo ledger
+- [The MCP gateway](docs/gateway.md): addresses, what happens to each message, drafting a manifest from a server's tools, trying it with the demo ledger
 - [Operating Doorward](docs/operations.md): Admin API, keys and secrets, storage, verifying a release
 - [How the code is organized](docs/architecture.md): layers, domain packages, the registry, adding a component
 - [Roadmap](docs/ROADMAP.md): what is built next, in order, and why

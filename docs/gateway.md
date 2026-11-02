@@ -103,6 +103,99 @@ with the gateway named as the point of enforcement (`--gateway-id`,
 default `gateway`). A decision that cannot be made or recorded in time
 answers the call with a JSON-RPC error and HTTP 503; the call is not made.
 
+## Drafting a manifest from the server's tools
+
+A manifest names every tool the gateway lets through, with its tier and the
+arguments constraints can refer to. `doorward import mcp` drafts one from
+what the server itself lists:
+
+```sh
+bin/doorward import mcp --name ledger-mcp --audience https://ledger.example.internal/mcp \
+  --secret-ref ledger-mcp-api-key --header "Authorization: Bearer lk_live_example" \
+  http://127.0.0.1:8090/mcp > ledger-mcp.yaml
+```
+
+It shakes hands with the server (MCP 2025-11-25, accepting 2025-06-18 and
+2025-03-26), reads `tools/list` to its last page, writes the draft to
+standard output, and says on standard error what it made of each tool:
+
+```
+ledger-mcp from demo-ledger 0.1 (MCP 2025-11-25): 4 tools listed, 4 operations
++ list_unmatched (read)
++ post_entry (write)
++ write_off (critical)
++ export_everything (write)
+note: post_entry: it does not say whether it is destructive; drafted as write, though the protocol takes such a tool to be destructive: decide whether it is critical
+note: export_everything: it does not say whether it is destructive; …
+```
+
+| From the tool | Into the operation |
+|---|---|
+| `name` | its name. A name the contract cannot hold (1 to 128 letters, digits, `_`, `.` and `-`) is left out with a note, and the gateway hides that tool. |
+| `description`, else `title` | its description, cut to 1,024 characters |
+| `inputSchema` | its params: every property of one scalar type, in nested objects too, keyed by JSON Pointer (`/payee/iban`). A type given with `null`, by `enum` or `const`, through a local `$ref`, or by alternatives of one type counts as that type. Arrays, values of several types and references outside the schema are left out, each with a note. |
+| `annotations` | its tier: `readOnlyHint` gives read, `destructiveHint` critical, anything else write |
+
+The annotations are the server's own say-so; the protocol calls them
+untrusted, and nothing checks them. A tool that does not say it only reads
+is never drafted as read, and one that does not say whether it is
+destructive gets a note, since the protocol's default takes it to be. A
+read operation runs on any valid grant, so check every tier before applying
+the draft, and raise one when in doubt.
+
+The import never touches the box. The draft is applied like any manifest,
+through the Admin API, which checks it against the contract and the other
+documents first:
+
+```sh
+curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" --data-binary @ledger-mcp.yaml "$A/manifests/ledger-mcp"
+```
+
+`--header` carries the server's credential for the import and is never
+written to the draft; `--secret-ref` names the stored secret the gateway
+sends in its place, as `Authorization: Bearer` (edit the draft for another
+header). `--skip TOOL` leaves out a tool the manifest leaves out on purpose.
+
+### Importing again
+
+When the server changes, `--against` merges its tools into the manifest as
+it stands; the URL defaults to the manifest's upstream:
+
+```sh
+bin/doorward import mcp --header "Authorization: Bearer lk_live_example" \
+  --against ledger-mcp.yaml > ledger-mcp.next.yaml
+```
+
+Every operation keeps its tier and description and takes the server's
+params as they are now; a new tool is added with the tier its hints
+suggest; an operation whose tool is gone is removed. Tiers are never
+changed: when the server marks a tool destructive that the manifest keeps
+lower, a note says so. The changes are listed (`+` added, `-` removed, `~`
+params), and the exit code is 3 when there are any and 0 when the server
+still matches, so the same command can watch for drift. Comments in the
+file are not carried into the draft.
+
+The Admin API does the same for a stored manifest, with its stored secret
+as the credential, and stores nothing:
+
+```sh
+curl -sS -X POST -H "$H" -d '{"skip":["export_everything"]}' "$A/manifests/ledger-mcp/draft"
+```
+
+The answer names the version the draft was merged into and holds the draft
+under `document`, with its `changes` and `notes`. PUT the document once it
+has been reviewed.
+
+### A starter mandate
+
+`--mandate FILE` also writes a mandate to start from, named like the
+manifest: an agent acting for a user may run the read operations, and each
+critical call once the user has approved that exact call. Write operations
+would run on a standing grant without asking, so the starter leaves them
+out and its comment names them; making a write ask first needs approval
+thresholds (C10). Put its consent text in words the user will understand
+before applying it.
+
 ## Trying it with the demo ledger
 
 `cmd/demo-ledger` is a small MCP server over Streamable HTTP: a ledger with
@@ -118,11 +211,17 @@ With doorward running and the examples loaded as in the
 
 ```sh
 go run ./cmd/demo-ledger &                       # listens on 127.0.0.1:8090, key lk_live_example
-sed 's#url: .*#url: http://127.0.0.1:8090/mcp#' examples/v0/config/manifest-ledger-mcp.yaml \
-  | curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" --data-binary @- "$A/manifests/ledger-mcp"
 curl -sS -X PUT -H "$H" -d '{"value":"lk_live_example"}' "$A/secrets/ledger-mcp-api-key"
+bin/doorward import mcp --name ledger-mcp --audience https://ledger.example.internal/mcp \
+  --secret-ref ledger-mcp-api-key --header "Authorization: Bearer lk_live_example" \
+  --skip export_everything http://127.0.0.1:8090/mcp > ledger-mcp.yaml
+curl -sS -X PUT -H "$H" -H "Content-Type: application/yaml" --data-binary @ledger-mcp.yaml "$A/manifests/ledger-mcp"
 bin/doorward grant mint examples/v0/grant/reconcile.json > reconcile.jwt
 ```
+
+The import drafts the same three operations, with the same tiers and
+params, as the example manifest declares by hand, and leaves out
+`export_everything` as the example does.
 
 Then, with [MCP Inspector](https://github.com/modelcontextprotocol/inspector):
 
@@ -153,9 +252,11 @@ curl -si localhost:8080/mcp/ledger-mcp -d '{"jsonrpc":"2.0","id":1,"method":"too
 The gateway takes grants minted from the command line. Protected resource
 metadata (RFC 9728), so that a client finds the authorization server from
 the 401 (C3), the authorization server and consent page themselves (C4,
-C6), and the approval page a held call waits on (C7, C8) follow on the
-[roadmap](ROADMAP.md). `doorward import mcp` (C2) will draft a manifest
-from a server's `tools/list`.
+C6), and the approval page a held call waits on (C9) follow on the
+[roadmap](ROADMAP.md).
+
+The import reads tools only: a server's resources and prompts pass through
+the gateway undecided, as they do now.
 
 Two hardening steps also wait on later work. The `Origin` check still
 trusts the request's `Host` header, so a browser request whose `Host` and

@@ -21,6 +21,7 @@ import (
 	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/mcp"
 	"github.com/vladmsnk/doorward/internal/persistence/sql"
 	"github.com/vladmsnk/doorward/internal/testhelpers"
 	"github.com/vladmsnk/doorward/schema"
@@ -461,5 +462,56 @@ func TestGatewayHardening(t *testing.T) {
 		if seen.Credential != "api key" {
 			t.Errorf("the server saw credential %q, not the upstream key", seen.Credential)
 		}
+	}
+}
+
+// A manifest imported from the ledger's own tool list serves as the
+// hand-written one does: the granted tools are listed, a write runs and a
+// critical call is held.
+func TestGatewayServesAnImportedManifest(t *testing.T) {
+	b := newBox(t)
+	ctx := context.Background()
+	snap, err := b.reg.ConfigurationCache().Current(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	man, ok := snap.ManifestByName("ledger-mcp")
+	if !ok {
+		t.Fatal("no ledger manifest")
+	}
+	listing, err := mcp.ListTools(ctx, man.Spec.Upstream.URL, http.Header{"Authorization": {"Bearer " + apiKey}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := man.Manifest
+	base.Spec.Operations = nil
+	d := configuration.DraftManifest(base, listing.Tools, nil)
+	doc, err := json.Marshal(d.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := b.v.Check(schema.Manifest, doc); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := b.st.Documents().Put(ctx, v0.KindManifest, "ledger-mcp", doc, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rec := b.mint("grt_reconciler_000000000009")
+	// export_everything is declared now, as write, but not granted.
+	r := b.rpc(rec, 2, "tools/list", nil, nil)
+	if got := strings.Join(r.tools(), " "); r.status != 200 || got != "list_unmatched post_entry write_off" {
+		t.Fatalf("tools/list: %d %q %s", r.status, got, r.body)
+	}
+	if text, _, isErr := b.tool(rec, "post_entry", entry(240.5)).toolError(); isErr || !strings.HasPrefix(text, "posted ent_") {
+		t.Errorf("post_entry: %s", text)
+	}
+	r = b.tool(rec, "write_off", map[string]any{"payment_id": "pmt_8K2", "amount": 100.0, "reason": "duplicate"})
+	if _, meta, isErr := r.toolError(); !isErr || meta["outcome"] != "approval_required" {
+		t.Errorf("write_off: %s", r.body)
+	}
+	if v := b.head().Versions; v == nil || v.Manifest != stored.Digest {
+		t.Errorf("the record names manifest %+v, not the imported %s", v, stored.Digest)
 	}
 }
