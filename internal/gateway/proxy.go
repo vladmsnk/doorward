@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httputil"
@@ -84,13 +83,9 @@ func (h *Handler) credential(ctx context.Context, snap *configuration.Snapshot, 
 	if ok {
 		return c.header, c.value, nil
 	}
-	sealed, err := h.r.SecretManager().Get(ctx, auth.SecretRef)
+	plain, err := configuration.OpenSecret(ctx, h.r.SecretManager(), h.r.Sealer(), auth.SecretRef)
 	if err != nil {
-		return "", "", fmt.Errorf("secret %s: %w", auth.SecretRef, err)
-	}
-	plain, err := h.r.Sealer().Open(sealed, configuration.SecretPurpose(auth.SecretRef))
-	if err != nil {
-		return "", "", fmt.Errorf("secret %s: %w", auth.SecretRef, err)
+		return "", "", err
 	}
 	c = cachedCred{header: auth.Header, value: auth.Prefix + string(plain)}
 	h.mu.Lock()

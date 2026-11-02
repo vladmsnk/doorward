@@ -42,6 +42,7 @@ func (h *Handler) SetAdminRoutes(a *x.AdminRouter) {
 	a.HandleFunc("GET /admin/v0/{collection}/{name}/versions/{version}", h.version)
 	a.HandleFunc("POST /admin/v0/{collection}/{name}/disable", h.setDisabled(true))
 	a.HandleFunc("POST /admin/v0/{collection}/{name}/enable", h.setDisabled(false))
+	a.HandleFunc("POST /admin/v0/manifests/{name}/draft", h.draftManifest)
 	a.HandleFunc("POST /admin/v0/agents/{name}/verify", h.verifyAgent)
 	a.HandleFunc("POST /admin/v0/agents/{name}/suspend", h.suspendAgent)
 	a.HandleFunc("GET /admin/v0/secrets", h.listSecrets)
