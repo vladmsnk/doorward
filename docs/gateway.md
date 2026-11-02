@@ -137,12 +137,15 @@ bin/doorward import mcp --name ledger-mcp --audience https://ledger.example.inte
   http://127.0.0.1:8090/mcp > ledger-mcp.yaml
 ```
 
-It shakes hands with the server (MCP 2025-11-25, accepting 2025-06-18 and
-2025-03-26), reads `tools/list` to its last page, writes the draft to
-standard output, and says on standard error what it made of each tool:
+It asks the server who it is in MCP 2026-07-28 (`server/discover`), or,
+for a server of an earlier revision, shakes hands with it (2025-11-25,
+accepting 2025-06-18 and 2025-03-26), as the revision's backward
+compatibility describes. Then it reads `tools/list` to its last page, writes
+the draft to standard output, and says on standard error what it made of
+each tool:
 
 ```
-ledger-mcp from demo-ledger 0.1 (MCP 2025-11-25): 4 tools listed, 4 operations
+ledger-mcp from demo-ledger 0.1 (MCP 2026-07-28): 4 tools listed, 4 operations
 + list_unmatched (read)
 + post_entry (write)
 + write_off (critical)

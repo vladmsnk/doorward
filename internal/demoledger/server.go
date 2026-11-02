@@ -34,7 +34,10 @@ type Server struct {
 	// PageSize, when set, has tools/list answer that many tools a page,
 	// with a cursor to the next page.
 	PageSize int
-	Log      *slog.Logger
+	// Legacy answers as a server of the revisions before 2026-07-28 only:
+	// it knows no server/discover and speaks only through the handshake.
+	Legacy bool
+	Log    *slog.Logger
 
 	mu      sync.Mutex
 	entries []Entry
@@ -159,7 +162,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	seen := Seen{Method: msg.Method, Credential: cred, Extra: extra, Version: r.Header.Get("MCP-Protocol-Version")}
-	isModern := seen.Version >= modern
+	isModern := seen.Version >= modern && !s.Legacy
 	if len(msg.ID) == 0 { // a notification or a response: accepted
 		s.note(seen)
 		w.WriteHeader(http.StatusAccepted)
@@ -187,6 +190,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}, nil)
 	case "server/discover":
 		s.note(seen)
+		if s.Legacy {
+			s.respond(w, msg.ID, nil, &rpcError{-32601, "method not found: " + msg.Method})
+			return
+		}
 		s.respond(w, msg.ID, complete(map[string]any{
 			"supportedVersions": versions,
 			"capabilities":      map[string]any{"tools": map[string]any{}},

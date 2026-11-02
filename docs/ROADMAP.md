@@ -70,6 +70,7 @@ vocabulary:
 | P1–P7 | fail-open paths from the first review closed, each with a negative test | done |
 | C1 | thin MCP gateway: Streamable HTTP (2025-11-25), tool list filtered to the grant, every call decided, refusals and holds as tool errors, upstream credential from the secret store; demo ledger server | done |
 | C2 | `doorward import mcp`: a manifest drafted from a server's `tools/list`, merged into the stored one, with its changes and a drift exit code; the same as an Admin API dry run; a starter mandate | done |
+| | MCP 2026-07-28 in the gateway and the import: no handshake, `server/discover`, mirrored headers checked against the body (`Mcp-Method`, `Mcp-Name`, and `Mcp-Param-*` through the manifest's `header`), private tool lists | done |
 | | commits authored and signed off by a person, checked in CI | done |
 
 **Phases B and Q are complete; C1 and C2 are done. Next: C3, protected resource metadata.**
