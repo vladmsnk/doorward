@@ -1,0 +1,42 @@
+name: Dependencies
+
+# Known vulnerabilities in the code's call graph, and the direct
+# dependencies with a newer release, every week and whenever the modules
+# change. Updates are made by a person, who signs them off like any other
+# commit (see CONTRIBUTING.md); a bot's commits could not pass the DCO
+# check.
+
+on:
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+  pull_request:
+    paths: [go.mod, go.sum]
+  push:
+    branches: [main]
+    paths: [go.mod, go.sum]
+
+permissions:
+  contents: read
+
+jobs:
+  vulnerabilities:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Known vulnerabilities in code doorward calls
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+      - name: Direct dependencies with a newer release
+        if: always()
+        run: |
+          {
+            echo "## Direct dependencies with a newer release"
+            echo
+            go list -m -u -f '{{if and (not .Indirect) (not .Main) .Update}}- {{.Path}} {{.Version}} → {{.Update.Version}}{{end}}' all
+          } >> "$GITHUB_STEP_SUMMARY"

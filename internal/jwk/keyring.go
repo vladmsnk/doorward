@@ -81,7 +81,10 @@ func (kr *KeyRing) Rotate(ctx context.Context) (JWK, error) {
 	if err != nil {
 		return JWK{}, err
 	}
-	key := publicJWK(&priv.PublicKey)
+	key, err := publicJWK(&priv.PublicKey)
+	if err != nil {
+		return JWK{}, err
+	}
 	der, err := x509.MarshalPKCS8PrivateKey(priv)
 	if err != nil {
 		return JWK{}, err

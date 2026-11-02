@@ -422,7 +422,7 @@ func TestEvaluationSpan(t *testing.T) {
 	}
 	attrs := map[string]string{}
 	for _, kv := range sp.Attributes {
-		attrs[string(kv.Key)] = kv.Value.Emit()
+		attrs[string(kv.Key)] = kv.Value.String()
 	}
 	if attrs["doorward.outcome"] != "deny" || attrs["doorward.reason"] != "constraint_violated" || attrs["doorward.agent"] != "invoice-assistant" || attrs["doorward.decision.id"] != a.resp.Context.ID {
 		t.Errorf("attributes: %v", attrs)
