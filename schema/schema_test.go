@@ -242,6 +242,8 @@ func TestInvalidDocuments(t *testing.T) {
 		{"unknown protocol", manifest, schema.Manifest, []edit{{set: "/spec/protocol", value: "grpc"}}, "enum"},
 		{"mcp operation with a route", mcp, schema.Manifest, []edit{{set: "/spec/operations/0/http", value: map[string]any{"method": "GET", "path": "/"}}}, "false schema"},
 		{"mcp param with a location", mcp, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1day/in", value: "body"}}, "false schema"},
+		{"http param mirrored in a header", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1invoice_id/header", value: "Invoice"}}, "false schema"},
+		{"header name with a space", mcp, schema.Manifest, []edit{{set: "/spec/operations/1/params/~1account_id/header", value: "Account Id"}}, "pattern"},
 
 		// Consent.
 		{"consent without user", consent, schema.Consent, []edit{{del: "/user"}}, "required"},
@@ -372,6 +374,8 @@ func TestRuleChecks(t *testing.T) {
 		{"path segment without a param", manifest, schema.Manifest, []edit{{del: "/spec/operations/0/params"}}, "path segment {invoice_id} has no param"},
 		{"path param not in the path", manifest, schema.Manifest, []edit{{set: "/spec/operations/0/params/~1extra", value: map[string]any{"type": "string", "in": "path"}}}, "param /extra is in the path"},
 		{"operation declared twice", manifest, schema.Manifest, []edit{{set: "/spec/operations/1/name", value: "get_invoice"}}, `operation "get_invoice" is declared twice`},
+		{"number mirrored in a header", mcp, schema.Manifest, []edit{{set: "/spec/operations/1/params/~1amount/header", value: "Amount"}}, "not a number"},
+		{"two params in one header", mcp, schema.Manifest, []edit{{set: "/spec/operations/1/params/~1memo/header", value: "account"}}, "both mirrored in header account"},
 		{"identity listed twice", agent, schema.Agent, []edit{{set: "/spec/identities", value: []any{
 			map[string]any{"type": "oauth_client", "client_id": "acme-invoice-assistant"},
 			map[string]any{"type": "oauth_client", "client_id": "acme-invoice-assistant"}}}}, "listed twice"},

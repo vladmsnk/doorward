@@ -675,21 +675,25 @@ func TestGatewayModernRevision(t *testing.T) {
 		t.Fatalf("tools/list: %d %s", r.status, r.body)
 	}
 
-	if text, _, isErr := b.modern(rec, "tools/call", call("post_entry", entry(240.5)), nil).toolError(); isErr || !strings.HasPrefix(text, "posted ent_") {
+	// post_entry mirrors its account in Mcp-Param-Account, which a modern
+	// client sends and the manifest declares.
+	account := map[string]string{"Mcp-Param-Account": "acc_EU_448120"}
+	if text, _, isErr := b.modern(rec, "tools/call", call("post_entry", entry(240.5)), account).toolError(); isErr || !strings.HasPrefix(text, "posted ent_") {
 		t.Fatalf("post_entry: %s", text)
 	}
 	if seen := b.ledger.Requests(); seen[len(seen)-1].Version != "2026-07-28" {
 		t.Errorf("the ledger saw version %q", seen[len(seen)-1].Version)
 	}
 	// The gateway's own answers carry the revision's resultType.
-	r = b.modern(rec, "tools/call", call("post_entry", entry(5000)), nil)
+	r = b.modern(rec, "tools/call", call("post_entry", entry(5000)), account)
 	if _, meta, isErr := r.toolError(); !isErr || meta["outcome"] != "deny" || r.result()["resultType"] != "complete" {
 		t.Errorf("refusal: %s", r.body)
 	}
-	// A name in base64, as a client must send one that is not plain ASCII.
-	r = b.modern(rec, "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Name": "=?base64?cG9zdF9lbnRyeQ==?="})
+	// Values in base64, as a client must send ones that are not plain ASCII.
+	r = b.modern(rec, "tools/call", call("post_entry", entry(1)), map[string]string{
+		"Mcp-Name": "=?base64?cG9zdF9lbnRyeQ==?=", "Mcp-Param-Account": "=?base64?YWNjX0VVXzQ0ODEyMA==?="})
 	if _, _, isErr := r.toolError(); r.status != 200 || isErr {
-		t.Errorf("encoded name: %d %s", r.status, r.body)
+		t.Errorf("encoded name and account: %d %s", r.status, r.body)
 	}
 
 	before := len(b.ledger.Requests())
@@ -707,6 +711,11 @@ func TestGatewayModernRevision(t *testing.T) {
 		{"no method header", "tools/list", nil, map[string]string{"Mcp-Method": ""}, "the Mcp-Method header is missing"},
 		{"another version in the header", "tools/list", nil, map[string]string{"MCP-Protocol-Version": "2025-11-25"}, "MCP-Protocol-Version header value"},
 		{"no version header", "tools/list", nil, map[string]string{"MCP-Protocol-Version": ""}, "the MCP-Protocol-Version header is missing"},
+		{"no account header", "tools/call", call("post_entry", entry(1)), nil, "the Mcp-Param-Account header is missing; the arguments give /account_id"},
+		{"another account in the header", "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Param-Account": "acc_ELSEWHERE"},
+			`Mcp-Param-Account header value "acc_ELSEWHERE" does not match argument /account_id`},
+		{"a header the manifest does not declare", "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Param-Account": "acc_EU_448120", "Mcp-Param-Amount": "1"},
+			"Mcp-Param-Amount is not declared for post_entry in the manifest"},
 	} {
 		r := b.modern(rec, tc.method, tc.params, tc.header)
 		if r.status != 400 || rpcErrorCode(r) != -32020 || !strings.Contains(rpcErrorMessage(r), tc.want) {
@@ -718,6 +727,10 @@ func TestGatewayModernRevision(t *testing.T) {
 	r = b.rpc(rec, 9, "tools/call", call("write_off", map[string]any{"payment_id": "p", "amount": 1.0, "reason": "x"}), map[string]string{"Mcp-Name": "list_unmatched"})
 	if r.status != 400 || rpcErrorCode(r) != -32020 {
 		t.Errorf("older client, mismatched header: %d %s", r.status, r.body)
+	}
+	r = b.rpc(rec, 9, "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Param-Account": "acc_ELSEWHERE"})
+	if r.status != 400 || rpcErrorCode(r) != -32020 {
+		t.Errorf("older client, mismatched account: %d %s", r.status, r.body)
 	}
 	if len(b.ledger.Requests()) != before {
 		t.Error("a request whose headers disagree with its body reached the ledger")

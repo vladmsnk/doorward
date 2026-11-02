@@ -92,6 +92,14 @@ one the revision requires, is refused with HTTP `400` and `-32020`
 (`HeaderMismatch`) before anything is decided; an older client that sends
 the headers is held to the same.
 
+A tool's schema may also have arguments mirrored, as `Mcp-Param-{name}`
+headers (`x-mcp-header`). The manifest records which argument each one
+mirrors (a param's `header`), and the gateway compares every such header
+with its argument: a string as it is, an integer as a number, a boolean as
+`true` or `false`. A header the manifest does not declare cannot be checked,
+so it is refused rather than forwarded, and under 2026-07-28 a declared
+argument given without its header is refused too, as the revision requires.
+
 For the same reason the gateway decides only on what the manifest
 describes, which is tools. It passes through the protocol's own lifecycle
 (`initialize` or `server/discover`, `ping`, the `subscriptions/listen`
@@ -147,7 +155,7 @@ note: export_everything: it does not say whether it is destructive; …
 |---|---|
 | `name` | its name. A name the contract cannot hold (1 to 128 letters, digits, `_`, `.` and `-`) is left out with a note, and the gateway hides that tool. |
 | `description`, else `title` | its description, cut to 1,024 characters |
-| `inputSchema` | its params: every property of one scalar type, in nested objects too, keyed by JSON Pointer (`/payee/iban`). A type given with `null`, by `enum` or `const`, through a local `$ref`, or by alternatives of one type counts as that type. Arrays, values of several types and references outside the schema are left out, each with a note. |
+| `inputSchema` | its params: every property of one scalar type, in nested objects too, keyed by JSON Pointer (`/payee/iban`). A type given with `null`, by `enum` or `const`, through a local `$ref`, or by alternatives of one type counts as that type. Arrays, values of several types and references outside the schema are left out, each with a note. A property's `x-mcp-header` becomes its param's `header`; one the protocol calls invalid, so that clients drop the tool, is left out with a note. |
 | `annotations` | its tier: `readOnlyHint` gives read, `destructiveHint` critical, anything else write |
 
 The annotations are the server's own say-so; the protocol calls them
@@ -272,12 +280,9 @@ C6), and the approval page a held call waits on (C9) follow on the
 The import reads tools only; resources and prompts stay refused at the
 gateway.
 
-Two parts of revision 2026-07-28 wait. Headers a tool's schema has mirrored
-from its arguments (`Mcp-Param-*`, from `x-mcp-header`) are forwarded
-without being checked against the arguments; checking them needs the
-manifest to record which argument each one mirrors, the next step. And a
-call that a server answers with a request for more input (multi round-trip
-requests) is decided, and counted against budgets, at each round.
+One part of revision 2026-07-28 waits: a call that a server answers with a
+request for more input (multi round-trip requests) is decided, and counted
+against budgets, at each round.
 
 Two hardening steps also wait on later work. The `Origin` check still
 trusts the request's `Host` header, so a browser request whose `Host` and

@@ -5,9 +5,9 @@ import (
 	"strings"
 )
 
-// lookup resolves a JSON Pointer (RFC 6901) in decoded JSON. ok is false
+// Lookup resolves a JSON Pointer (RFC 6901) in decoded JSON. ok is false
 // when the pointer leads nowhere.
-func lookup(doc any, ptr string) (any, bool) {
+func Lookup(doc any, ptr string) (any, bool) {
 	if ptr == "" {
 		return doc, true
 	}

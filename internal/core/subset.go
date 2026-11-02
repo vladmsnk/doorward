@@ -48,7 +48,7 @@ func Subset(g v0.Grant, op *v0.Operation, call Call) (v0.Check, *v0.Reason) {
 	sort.Strings(fields)
 	for _, field := range fields {
 		param, declared := op.Params[field]
-		value, present := lookup(call.Arguments, field)
+		value, present := Lookup(call.Arguments, field)
 		if !present || value == nil {
 			if !declared {
 				continue

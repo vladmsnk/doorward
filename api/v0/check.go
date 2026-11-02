@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 )
 
 // The schemas check each document's shape. The Check methods add the rules
@@ -170,6 +171,20 @@ func (m Manifest) Check() error {
 			p.add("operation %q is declared twice", op.Name)
 		}
 		names[op.Name] = true
+		headers := make(map[string]string)
+		for _, ptr := range sortedKeys(op.Params) {
+			h := op.Params[ptr].Header
+			if h == "" {
+				continue
+			}
+			if t := op.Params[ptr].Type; t != ParamString && t != ParamInteger && t != ParamBoolean {
+				p.add("%s: param %s is mirrored in a header, which takes a string, an integer or a boolean, not a %s", op.Name, ptr, t)
+			}
+			if other, dup := headers[strings.ToLower(h)]; dup {
+				p.add("%s: params %s and %s are both mirrored in header %s", op.Name, other, ptr, h)
+			}
+			headers[strings.ToLower(h)] = ptr
+		}
 		if op.HTTP == nil {
 			continue
 		}

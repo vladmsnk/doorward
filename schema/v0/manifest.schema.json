@@ -62,7 +62,7 @@
             "items": {
               "required": ["http"],
               "properties": {
-                "params": { "additionalProperties": { "required": ["in"] } }
+                "params": { "additionalProperties": { "required": ["in"], "properties": { "header": false } } }
               }
             }
           }
@@ -121,6 +121,12 @@
         "in": {
           "description": "Where an HTTP argument comes from. MCP arguments have no location.",
           "enum": ["path", "query", "body"]
+        },
+        "header": {
+          "description": "For an MCP tool: the name in the Mcp-Param-{header} header that a client of revision 2026-07-28 mirrors this argument in, as the tool's x-mcp-header says. The gateway refuses a call whose header and argument disagree. Strings, integers and booleans only, unique within an operation ignoring case.",
+          "type": "string",
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+          "maxLength": 64
         }
       },
       "additionalProperties": false

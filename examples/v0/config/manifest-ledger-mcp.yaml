@@ -20,10 +20,12 @@ spec:
       params:
         /day: { type: string }
 
+    # A client of MCP 2026-07-28 mirrors the account in the Mcp-Param-Account
+    # header, as the tool's x-mcp-header says; the gateway checks the two agree.
     - name: post_entry
       sensitivity: write
       params:
-        /account_id: { type: string }
+        /account_id: { type: string, header: Account }
         /amount: { type: number }
         /memo: { type: string }
 

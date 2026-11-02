@@ -41,7 +41,7 @@
   },
   "versions": {
     "mandate": "sha-256:XlUJXDhGwmmSD2LaxIwRFGQMNZsaEOkGehTTOg-2gAM",
-    "manifest": "sha-256:o2qxvUyo5ZP8ND0KjOSRS1kYGnklbfSMQ6y8CW8p6j4"
+    "manifest": "sha-256:fwiQzMWsjQD8WAKoiuzP7VKmkQAzrSnn1VgN4ksXXLw"
   },
   "pep": { "id": "mcp-gateway-1", "kind": "gateway" },
   "trace_id": "a3ce929d0e0e47364bf92f3577b34da6",

@@ -249,4 +249,7 @@ type Param struct {
 	Type ParamType `json:"type"`
 	// In is set for HTTP operations only.
 	In ParamIn `json:"in,omitempty"`
+	// Header, for an MCP tool, is the name in the Mcp-Param-{Header}
+	// header a 2026-07-28 client mirrors the argument in (x-mcp-header).
+	Header string `json:"header,omitempty"`
 }
