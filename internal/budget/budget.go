@@ -24,11 +24,6 @@ type Manager interface {
 	Consumed(ctx context.Context, key string) (string, error)
 }
 
-// ManagerProvider gives access to the budgets.
-type ManagerProvider interface {
-	BudgetManager() Manager
-}
-
 // Allower spends an allowance on its own, outside a decision: the command
 // line's grant verify --spend does.
 type Allower interface {

@@ -46,37 +46,37 @@ func NewKeyRing(s Manager, sl *sealer.Sealer) *KeyRing {
 }
 
 // Ensure loads the active key, creating the first one on a fresh box.
-func (m *KeyRing) Ensure(ctx context.Context) (*Signer, error) {
-	k, err := m.store.Active(ctx)
+func (kr *KeyRing) Ensure(ctx context.Context) (*Signer, error) {
+	k, err := kr.store.Active(ctx)
 	if errors.Is(err, x.ErrNotFound) {
-		if _, err := m.Rotate(ctx); err != nil {
+		if _, err := kr.Rotate(ctx); err != nil {
 			return nil, err
 		}
-		return m.Signer(), nil
+		return kr.Signer(), nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	signer, err := m.open(k)
+	signer, err := kr.open(k)
 	if err != nil {
 		return nil, err
 	}
-	m.mu.Lock()
-	m.active = signer
-	m.mu.Unlock()
+	kr.mu.Lock()
+	kr.active = signer
+	kr.mu.Unlock()
 	return signer, nil
 }
 
 // Signer returns the active key, or nil before Ensure.
-func (m *KeyRing) Signer() *Signer {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.active
+func (kr *KeyRing) Signer() *Signer {
+	kr.mu.RLock()
+	defer kr.mu.RUnlock()
+	return kr.active
 }
 
 // Rotate creates a new key and makes it the active one. Older keys stay
 // published until retired, so grants they signed keep verifying.
-func (m *KeyRing) Rotate(ctx context.Context) (JWK, error) {
+func (kr *KeyRing) Rotate(ctx context.Context) (JWK, error) {
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return JWK{}, err
@@ -86,7 +86,7 @@ func (m *KeyRing) Rotate(ctx context.Context) (JWK, error) {
 	if err != nil {
 		return JWK{}, err
 	}
-	sealed, err := m.sealer.Seal(der, purpose+key.Kid)
+	sealed, err := kr.sealer.Seal(der, purpose+key.Kid)
 	if err != nil {
 		return JWK{}, err
 	}
@@ -94,27 +94,27 @@ func (m *KeyRing) Rotate(ctx context.Context) (JWK, error) {
 	if err != nil {
 		return JWK{}, err
 	}
-	if err := m.store.Create(ctx, SigningKey{KID: key.Kid, Alg: Alg, PublicJWK: pub, PrivateEnc: sealed}); err != nil {
+	if err := kr.store.Create(ctx, SigningKey{KID: key.Kid, Alg: Alg, PublicJWK: pub, PrivateEnc: sealed}); err != nil {
 		return JWK{}, err
 	}
-	m.mu.Lock()
-	m.active = &Signer{KID: key.Kid, Private: priv}
-	m.mu.Unlock()
+	kr.mu.Lock()
+	kr.active = &Signer{KID: key.Kid, Private: priv}
+	kr.mu.Unlock()
 	return key, nil
 }
 
 // Retire stops publishing a key. The active key cannot be retired; rotate
 // first.
-func (m *KeyRing) Retire(ctx context.Context, kid string, at time.Time) error {
-	if s := m.Signer(); s != nil && s.KID == kid {
+func (kr *KeyRing) Retire(ctx context.Context, kid string, at time.Time) error {
+	if s := kr.Signer(); s != nil && s.KID == kid {
 		return fmt.Errorf("key %s is the active key; rotate before retiring it", kid)
 	}
-	return m.store.Retire(ctx, kid, at)
+	return kr.store.Retire(ctx, kid, at)
 }
 
 // JWKS returns every key that is not retired, newest first.
-func (m *KeyRing) JWKS(ctx context.Context) (Set, error) {
-	keys, err := m.store.List(ctx)
+func (kr *KeyRing) JWKS(ctx context.Context) (Set, error) {
+	keys, err := kr.store.List(ctx)
 	if err != nil {
 		return Set{}, err
 	}
@@ -134,11 +134,11 @@ func (m *KeyRing) JWKS(ctx context.Context) (Set, error) {
 
 // Public returns the public key for a kid, retired or not, so a grant
 // signed before a retirement can still be checked against the record.
-func (m *KeyRing) Public(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
-	if pub, ok := m.public.Load(kid); ok {
+func (kr *KeyRing) Public(ctx context.Context, kid string) (*ecdsa.PublicKey, error) {
+	if pub, ok := kr.public.Load(kid); ok {
 		return pub.(*ecdsa.PublicKey), nil
 	}
-	keys, err := m.store.List(ctx)
+	keys, err := kr.store.List(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -154,14 +154,14 @@ func (m *KeyRing) Public(ctx context.Context, kid string) (*ecdsa.PublicKey, err
 		if err != nil {
 			return nil, err
 		}
-		m.public.Store(kid, pub)
+		kr.public.Store(kid, pub)
 		return pub, nil
 	}
 	return nil, x.ErrNotFound
 }
 
-func (m *KeyRing) open(k SigningKey) (*Signer, error) {
-	der, err := m.sealer.Open(k.PrivateEnc, purpose+k.KID)
+func (kr *KeyRing) open(k SigningKey) (*Signer, error) {
+	der, err := kr.sealer.Open(k.PrivateEnc, purpose+k.KID)
 	if err != nil {
 		return nil, fmt.Errorf("signing key %s: %w", k.KID, err)
 	}

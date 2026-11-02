@@ -21,7 +21,7 @@ type Budget struct {
 
 // Budgets works out which of a grant's budgets a call draws on (B4). It
 // changes nothing: budgets are drawn only for a call that passed every other
-// check, all at once, through store.Allow.
+// check, all at once, as the store settles the decision.
 //
 // A count budget draws 1. A sum budget draws the value of its field, which
 // must be present, a number and not negative: a call that cannot be
@@ -71,8 +71,9 @@ func Draws(budgets []Budget) []budget.Draw {
 	return out
 }
 
-// LimitsCheck turns the outcome of store.Allow into the limits check and
-// what the decision record lists as drawn. err is Allow's error.
+// LimitsCheck turns the outcome of drawing the budgets into the limits
+// check and what the decision record lists as drawn. err is the store's
+// refusal, if it refused.
 //
 // After a best-effort draw (observe mode), budgets without room are marked
 // exhausted in drawn: the check fails for the first of them, and the uses

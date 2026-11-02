@@ -57,7 +57,8 @@ holds them in clear and a value cannot be moved from one slot to another.
 ## Storage
 
 Everything the box keeps lives in one PostgreSQL database, behind the
-`store.Store` interface in [`internal/store`](../internal/store): configuration
+`persistence.Persister` interface in [`internal/persistence`](../internal/persistence),
+which [`internal/persistence/sql`](../internal/persistence/sql) implements: configuration
 (manifests, agents, mandates), versioned so nothing is ever overwritten and
 a consent can name the exact mandate the user saw; and the records
 (consents, grants, decisions, approvals) plus the budget counters. Decision

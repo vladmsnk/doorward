@@ -74,20 +74,35 @@ change in any way.
 ## Repository layout
 
 ```
-cmd/doorward/      the CLI: validate, serve, grant mint|verify, journal export|verify, master-key, version
-api/v0/            Go types of the v0 documents
-internal/store/    the Store interface; postgres/ implements it, with migrations
-internal/admin/    the Admin API and the rules across documents
-internal/policy/   comparing permissions: tiers, constraints, "within"
-internal/keys/     signing keys: create, rotate, retire, JWK Set
-internal/sealer/   AES-256-GCM sealing under the master key
-internal/grant/    signing grants and verifying them (B1)
-internal/core/     the decision core: subset, sensitivity and budget checks
-internal/pdp/      the AuthZEN evaluation endpoint and the journal
-internal/telemetry/ OpenTelemetry tracing, when an endpoint is configured
-internal/ids/      record IDs: prefix_ULID
-schema/            the embedded schemas, the validator, strict YAML/JSON reading
-schema/v0/         the JSON Schemas
-examples/v0/       valid examples of every document
-scripts/           check-dco.sh, verify-journal.py (an independent journal verifier), hooks/
+cmd/doorward/            main: names the build and runs internal/cmd
+cmd/demo-ledger/         a small MCP server to try the gateway against
+api/v0/                  Go types of the v0 documents
+internal/cmd/            the CLI: validate, grant mint|verify, journal export|verify, master-key, version
+internal/cmd/server/     doorward serve: the listeners, the journal follower, shutdown
+internal/driver/         the registry that builds the box; config/ holds serve's settings
+internal/configuration/  manifests, agents, mandates, secrets: storage, cache, rules, Admin API routes
+internal/grant/          signing, verifying and issuing grants
+internal/consent/        consents users give
+internal/approval/       approval requests for held calls
+internal/journal/        the hash-chained journal: export, follower, Admin API route
+internal/jwk/            signing keys: create, rotate, retire, JWK Set
+internal/budget/         budgets: draws, allowances, exhaustion
+internal/core/           the decision core: subset, sensitivity and budget checks
+internal/policy/         comparing permissions: tiers, constraints, "within"
+internal/pdp/            the decision point and its AuthZEN evaluation endpoint
+internal/gateway/        the thin MCP gateway
+internal/persistence/    the Persister; sql/ implements it on PostgreSQL, with migrations
+internal/x/              storage errors, HTTP helpers, provider interfaces, the Admin API router
+internal/sealer/         AES-256-GCM sealing under the master key
+internal/telemetry/      OpenTelemetry tracing, when an endpoint is configured
+internal/ids/            record IDs: prefix_ULID
+internal/testhelpers/    a registry on the test database, for tests
+internal/demoledger/     the demo MCP server
+schema/                  the embedded schemas, the validator, strict YAML/JSON reading
+schema/v0/               the JSON Schemas
+examples/v0/             valid examples of every document
+scripts/                 check-dco.sh, verify-journal.py (an independent journal verifier), hooks/
 ```
+
+How the packages fit together, and how to add one, is in
+[docs/architecture.md](docs/architecture.md).
