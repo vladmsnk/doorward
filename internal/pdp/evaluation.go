@@ -61,6 +61,10 @@ func (ev *evaluation) checkRequest() bool {
 // checkGrant: signature, status, pop, audience and time, as the verifier
 // runs them. A good grant names who is asking: the agent, and the user it
 // acts for or the team that owns it.
+//
+// So does a grant refused after its signature held: revoked, sent to
+// another resource, expired. The box signed it, so the record can say
+// whose it was, and those are the attempts a review looks for.
 func (ev *evaluation) checkGrant(ctx context.Context) bool {
 	r, err := ev.e.r.GrantVerifier().Verify(ctx, ev.token, ev.call.Resource)
 	if err != nil {
@@ -69,19 +73,42 @@ func (ev *evaluation) checkGrant(ctx context.Context) bool {
 	ev.d.Checks = append(ev.d.Checks, r.Checks...)
 	if !r.OK() {
 		ev.d.Outcome, ev.d.Reasons = v0.OutcomeDeny, []v0.Reason{*r.Reason}
+		if g := r.Grant; g != nil {
+			ev.attribute(*g, ev.ownerOf(ctx, g.Actor.Subject))
+			if ev.d.Principal.User == "" && ev.d.Principal.Owner == "" {
+				// The record's contract wants a user or an owner; without
+				// either, it names the grant alone.
+				ev.d.Principal = nil
+			}
+		}
 		return false
 	}
-	g := *r.Grant
-	ev.grant, ev.standing = g, *r.Standing
+	ev.grant, ev.standing = *r.Grant, *r.Standing
+	ev.attribute(ev.grant, ev.standing.Owner)
+	return true
+}
+
+// attribute names the grant and the principal in the record: the agent,
+// and the user it acts for or, for a service agent, its owning team.
+func (ev *evaluation) attribute(g v0.Grant, owner string) {
 	ev.d.Request.Context[GrantKey] = g.ID
 	ev.d.Grant = &v0.GrantRef{ID: g.ID, Mandate: g.Mandate, Consent: g.Consent}
 	ev.d.Principal = &v0.Principal{Agent: g.Actor.Subject}
 	if g.Subject == g.ClientID {
-		ev.d.Principal.Owner = ev.standing.Owner
+		ev.d.Principal.Owner = owner
 	} else {
 		ev.d.Principal.User = g.Subject
 	}
-	return true
+}
+
+// ownerOf is the team that owns an agent, from the configuration, for a
+// grant whose status check did not establish it; "" when unknown.
+func (ev *evaluation) ownerOf(ctx context.Context, agent string) string {
+	a, err := ev.e.r.ConfigurationCache().Agent(ctx, agent)
+	if err != nil || a.Spec.Owner == nil {
+		return ""
+	}
+	return a.Spec.Owner.Team
 }
 
 // hashCall records the call's action hash, what an approval and a

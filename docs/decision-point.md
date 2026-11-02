@@ -217,7 +217,11 @@ up first cannot learn an answer that was committed a moment later.
 
 Every record names the user or the owning team, the agent, the grant (its
 ID; never the token), the versions of the mandate and the manifest in
-force, the W3C trace ID, and every check. Records are chained: each one's
+force, the W3C trace ID, and every check. A grant refused after its
+signature held (revoked, sent to another resource, expired) is named too,
+with its agent and their user or owner, so a suspended agent's next attempt
+is on record as that agent's; only a grant whose signature fails is
+recorded without them. Records are chained: each one's
 `chain.hash` is the SHA-256 of the record in RFC 8785 canonical JSON
 without `chain.hash`, and covers the previous record's hash.
 
