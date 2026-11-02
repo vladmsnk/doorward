@@ -57,9 +57,9 @@ func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *config
 			return
 		}
 		if len(d.Reasons) > 0 && d.Reasons[0].Code == v0.ReasonActionNotGranted {
-			// Another mandate may allow the tool: say which, so a client
-			// acting for a user can ask for it.
-			if scopes := scopesAllowing(snap, man.Spec.Audience, params.Name); len(scopes) > 0 {
+			// Another mandate may allow the tool: say which, so the client
+			// can ask for it.
+			if scopes := scopesAllowing(snap, man, params.Name, d.Principal); len(scopes) > 0 {
 				h.challenge(w, http.StatusForbidden, "insufficient_scope", reasonText(d), scopes)
 				return
 			}
