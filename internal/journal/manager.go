@@ -35,3 +35,19 @@ type Settler interface {
 	// appended, chain filled in.
 	Settle(ctx context.Context, a *budget.Allowance, decide func(drawn []budget.Drawn, err error) (v0.Decision, error)) (v0.Decision, error)
 }
+
+// SettlerProvider gives the settler.
+type SettlerProvider interface {
+	Settler() Settler
+}
+
+// Notifier is told about every record committed: the follower is one.
+type Notifier interface {
+	Notify()
+}
+
+// NotifierProvider gives the journal's notifier, nil when no follower
+// copies the journal out.
+type NotifierProvider interface {
+	JournalNotifier() Notifier
+}

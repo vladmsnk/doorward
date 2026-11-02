@@ -119,3 +119,26 @@ func audienceOf(doc []byte) string {
 	_ = json.Unmarshal(doc, &m)
 	return m.Spec.Audience
 }
+
+// Agent returns an agent from the current snapshot; x.ErrNotFound when
+// there is none. With Mandate, it lets a grant's status check (grant.Config)
+// read the decision point's snapshot instead of the store.
+func (c *Cache) Agent(ctx context.Context, name string) (v0.Agent, error) {
+	snap, err := c.Current(ctx)
+	if err != nil {
+		return v0.Agent{}, err
+	}
+	a, err := snap.Agent(name)
+	return a.Agent, err
+}
+
+// Mandate returns a mandate from the current snapshot and whether it is
+// disabled; x.ErrNotFound when there is none.
+func (c *Cache) Mandate(ctx context.Context, name string) (v0.Mandate, bool, error) {
+	snap, err := c.Current(ctx)
+	if err != nil {
+		return v0.Mandate{}, false, err
+	}
+	m, err := snap.Mandate(name)
+	return m.Mandate, m.Disabled, err
+}

@@ -2,15 +2,12 @@ package pdp
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -19,6 +16,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -28,9 +26,9 @@ const EvaluationPath = "/access/v1/evaluation"
 // MaxRequestSize bounds an evaluation request.
 const MaxRequestSize = 64 << 10
 
-// Client is a point of enforcement allowed to ask for decisions: the bearer
+// client is a point of enforcement allowed to ask for decisions: the bearer
 // token it presents, and who it is in the records.
-type Client struct {
+type client struct {
 	Token string
 	PEP   v0.PEP
 }
@@ -57,66 +55,90 @@ type ResponseContext struct {
 	Error       string          `json:"error,omitempty"`
 }
 
-// Handler serves the evaluation endpoint to the given clients. With no
-// client configured, it refuses every request and says why.
-func (p *PDP) Handler(clients []Client) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST "+EvaluationPath, func(w http.ResponseWriter, r *http.Request) {
-		if len(clients) == 0 {
-			writeJSON(w, http.StatusServiceUnavailable, Response{Context: ResponseContext{Error: "no point of enforcement is configured; start serve with --pep ID=TOKEN"}})
+// Handler serves the evaluation endpoint to the points of enforcement the
+// settings name.
+type Handler struct {
+	r InternalRegistry
+}
+
+// NewHandler returns the evaluation endpoint's handler.
+func NewHandler(r InternalRegistry) *Handler { return &Handler{r: r} }
+
+// SetPublicRoutes registers POST /access/v1/evaluation.
+func (h *Handler) SetPublicRoutes(mux *http.ServeMux) {
+	mux.HandleFunc("POST "+EvaluationPath, h.evaluate)
+}
+
+// clients are the configured points of enforcement.
+func (h *Handler) clients() []client {
+	peps := h.r.Config().PointsOfEnforcement
+	out := make([]client, len(peps))
+	for i, p := range peps {
+		out[i] = client{Token: p.Token, PEP: v0.PEP{ID: p.ID, Kind: v0.PEPGateway}}
+	}
+	return out
+}
+
+// evaluate answers one evaluation request. With no point of enforcement
+// configured, it refuses every request and says why.
+func (h *Handler) evaluate(w http.ResponseWriter, r *http.Request) {
+	clients := h.clients()
+	if len(clients) == 0 {
+		x.WriteJSON(w, http.StatusServiceUnavailable, Response{Context: ResponseContext{Error: "no point of enforcement is configured; start serve with --pep ID=TOKEN"}})
+		return
+	}
+	pep, ok := authenticate(r, clients)
+	if !ok {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="doorward-pdp"`)
+		x.WriteJSON(w, http.StatusUnauthorized, Response{Context: ResponseContext{Error: "a point of enforcement's token is required"}})
+		return
+	}
+	req, err := readRequest(r)
+	if err != nil {
+		x.WriteJSON(w, http.StatusBadRequest, Response{Context: ResponseContext{Error: err.Error()}})
+		return
+	}
+	// One span per evaluation, continuing the caller's trace; the record
+	// carries the same trace ID.
+	ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+	ctx, span := h.r.Tracer().Start(ctx, "doorward.evaluation", trace.WithSpanKind(trace.SpanKindServer))
+	defer span.End()
+	tid, ok := x.TraceParent(r)
+	if !ok {
+		tid = x.NewTraceID()
+	}
+	if sc := span.SpanContext(); sc.HasTraceID() {
+		tid = sc.TraceID().String()
+	}
+	d, err := h.r.Evaluator().Evaluate(ctx, req, pep, tid)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, "the decision could not be made")
+		if errors.Is(err, ErrTimeout) {
+			// Nothing was drawn or recorded; the point of enforcement
+			// refuses the call and may retry.
+			h.r.Logger().Warn("decision timed out", "pep", pep.ID, "action", req.Action.Name, "err", err)
+			w.Header().Set("Retry-After", "1")
+			x.WriteJSON(w, http.StatusServiceUnavailable, Response{Context: ResponseContext{Error: "the decision ran out of time; refuse the call"}})
 			return
 		}
-		pep, ok := authenticate(r, clients)
-		if !ok {
-			w.Header().Set("WWW-Authenticate", `Bearer realm="doorward-pdp"`)
-			writeJSON(w, http.StatusUnauthorized, Response{Context: ResponseContext{Error: "a point of enforcement's token is required"}})
-			return
-		}
-		req, err := readRequest(r)
-		if err != nil {
-			writeJSON(w, http.StatusBadRequest, Response{Context: ResponseContext{Error: err.Error()}})
-			return
-		}
-		// One span per evaluation, continuing the caller's trace; the record
-		// carries the same trace ID.
-		ctx := propagation.TraceContext{}.Extract(r.Context(), propagation.HeaderCarrier(r.Header))
-		ctx, span := p.tracer().Start(ctx, "doorward.evaluation", trace.WithSpanKind(trace.SpanKindServer))
-		defer span.End()
-		tid := traceID(r)
-		if sc := span.SpanContext(); sc.HasTraceID() {
-			tid = sc.TraceID().String()
-		}
-		d, err := p.Evaluate(ctx, req, pep, tid)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, "the decision could not be made")
-			if errors.Is(err, ErrTimeout) {
-				// Nothing was drawn or recorded; the point of enforcement
-				// refuses the call and may retry.
-				p.log().Warn("decision timed out", "pep", pep.ID, "action", req.Action.Name, "err", err)
-				w.Header().Set("Retry-After", "1")
-				writeJSON(w, http.StatusServiceUnavailable, Response{Context: ResponseContext{Error: "the decision ran out of time; refuse the call"}})
-				return
-			}
-			p.log().Error("evaluation failed", "pep", pep.ID, "err", err)
-			writeJSON(w, http.StatusInternalServerError, Response{Context: ResponseContext{Error: "the decision could not be made; refuse the call"}})
-			return
-		}
-		span.SetAttributes(spanAttributes(d)...)
-		writeJSON(w, http.StatusOK, Response{
-			Decision: d.Outcome == v0.OutcomeAllow,
-			Context: ResponseContext{
-				ID: d.ID, Outcome: d.Outcome, Enforcement: d.Enforcement, Observed: d.Observed, Reasons: d.Reasons, Approval: d.Approval,
-				ActionHash: d.ActionHash, Limits: d.Limits,
-			},
-		})
+		h.r.Logger().Error("evaluation failed", "pep", pep.ID, "err", err)
+		x.WriteJSON(w, http.StatusInternalServerError, Response{Context: ResponseContext{Error: "the decision could not be made; refuse the call"}})
+		return
+	}
+	span.SetAttributes(spanAttributes(d)...)
+	x.WriteJSON(w, http.StatusOK, Response{
+		Decision: d.Outcome == v0.OutcomeAllow,
+		Context: ResponseContext{
+			ID: d.ID, Outcome: d.Outcome, Enforcement: d.Enforcement, Observed: d.Observed, Reasons: d.Reasons, Approval: d.Approval,
+			ActionHash: d.ActionHash, Limits: d.Limits,
+		},
 	})
-	return mux
 }
 
 // authenticate finds the client whose token the request presents,
 // comparing every configured token in constant time.
-func authenticate(r *http.Request, clients []Client) (v0.PEP, bool) {
+func authenticate(r *http.Request, clients []client) (v0.PEP, bool) {
 	token, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if !ok || token == "" {
 		return v0.PEP{}, false
@@ -193,23 +215,4 @@ func spanAttributes(d v0.Decision) []attribute.KeyValue {
 		kv = append(kv, attribute.String("doorward.observed.reason", string(d.Observed.Reasons[0].Code)))
 	}
 	return kv
-}
-
-var traceparent = regexp.MustCompile(`^[0-9a-f]{2}-([0-9a-f]{32})-[0-9a-f]{16}-[0-9a-f]{2}$`)
-
-// traceID takes the trace ID from a W3C traceparent header, or starts a new
-// trace when there is none.
-func traceID(r *http.Request) string {
-	if m := traceparent.FindStringSubmatch(r.Header.Get("traceparent")); m != nil && m[1] != strings.Repeat("0", 32) {
-		return m[1]
-	}
-	b := make([]byte, 16)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
 }

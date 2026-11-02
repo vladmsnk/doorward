@@ -3,9 +3,11 @@ package driver
 import (
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/driver/config"
+	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/persistence"
 	"github.com/vladmsnk/doorward/internal/sealer"
 	"github.com/vladmsnk/doorward/internal/x"
@@ -27,6 +29,8 @@ type registry interface {
 	jwk.InternalRegistry
 	journal.InternalRegistry
 	grant.ManagerProvider
+	pdp.InternalRegistry
+	gateway.InternalRegistry
 }
 
 var _ registry = (*RegistryDefault)(nil)

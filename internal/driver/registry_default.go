@@ -17,7 +17,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/trace/noop"
 
-	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/approval"
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/gateway"
@@ -49,8 +49,8 @@ type RegistryDefault struct {
 	keyRing  lazy[*jwk.KeyRing]
 	cache    lazy[*configuration.Cache]
 	verifier lazy[*grant.Verifier]
-	pdp      lazy[*pdp.PDP]
-	gateway  lazy[*gateway.Gateway]
+	pdp      lazy[*pdp.Evaluator]
+	gateway  lazy[*gateway.Handler]
 }
 
 // New returns a registry for the settings.
@@ -161,6 +161,18 @@ func (r *RegistryDefault) SecretManager() configuration.SecretManager { return r
 func (r *RegistryDefault) GrantManager() grant.Manager                { return r.persister.Grants() }
 func (r *RegistryDefault) JournalManager() journal.Manager            { return r.persister.Decisions() }
 func (r *RegistryDefault) KeyManager() jwk.Manager                    { return r.persister.Keys() }
+func (r *RegistryDefault) ApprovalManager() approval.Manager          { return r.persister.Approvals() }
+
+// Settler spends what an allowed call spends and records it.
+func (r *RegistryDefault) Settler() journal.Settler { return r.persister }
+
+// JournalNotifier is the journal follower, or nil without one.
+func (r *RegistryDefault) JournalNotifier() journal.Notifier {
+	if r.follower == nil {
+		return nil
+	}
+	return r.follower
+}
 
 // ConfigurationLocker serializes configuration changes.
 func (r *RegistryDefault) ConfigurationLocker() configuration.Locker { return r.persister }
@@ -187,7 +199,7 @@ func (r *RegistryDefault) GrantVerifier() *grant.Verifier {
 	return r.verifier.get(func() *grant.Verifier {
 		return &grant.Verifier{
 			Keys:      r.KeyRing(),
-			Status:    grant.StoreStatus{Store: r.persister, Config: pdp.StatusConfig(r.ConfigurationCache()), Now: r.now},
+			Status:    grant.StoreStatus{Store: r.persister, Config: r.ConfigurationCache(), Now: r.now},
 			Validator: r.validator,
 			Issuer:    r.conf.Issuer,
 			Now:       r.now,
@@ -195,36 +207,15 @@ func (r *RegistryDefault) GrantVerifier() *grant.Verifier {
 	})
 }
 
-// PDP is the decision point.
-func (r *RegistryDefault) PDP() *pdp.PDP {
-	return r.pdp.get(func() *pdp.PDP {
-		p := &pdp.PDP{
-			Store:    r.persister,
-			Config:   r.ConfigurationCache(),
-			Verifier: r.GrantVerifier(),
-			ID:       r.conf.PDPID,
-			Version:  r.conf.Version,
-			Log:      r.log,
-			Tracer:   r.tracer,
-			Timeout:  r.conf.DecisionTimeout,
-			Now:      r.now,
-		}
-		if r.follower != nil {
-			p.Journal = r.follower
-		}
-		return p
-	})
+// Evaluator is the decision point.
+func (r *RegistryDefault) Evaluator() *pdp.Evaluator {
+	return r.pdp.get(func() *pdp.Evaluator { return pdp.NewEvaluator(r) })
 }
 
-// Gateway is the built-in MCP gateway.
-func (r *RegistryDefault) Gateway() *gateway.Gateway {
-	return r.gateway.get(func() *gateway.Gateway {
-		return &gateway.Gateway{
-			Config: r.ConfigurationCache(), PDP: r.PDP(), Verifier: r.GrantVerifier(),
-			Secrets: r.SecretManager(), Sealer: r.sealer,
-			ID: r.conf.GatewayID, Log: r.log, Origins: r.conf.Origins(),
-		}
-	})
+// GatewayHandler is the built-in MCP gateway. It is built once: it keeps
+// the upstream credentials it has opened.
+func (r *RegistryDefault) GatewayHandler() *gateway.Handler {
+	return r.gateway.get(func() *gateway.Handler { return gateway.NewHandler(r) })
 }
 
 // ---------------------------------------------------------------- routes
@@ -233,8 +224,8 @@ func (r *RegistryDefault) Gateway() *gateway.Gateway {
 // MCP gateway on the public listener.
 func (r *RegistryDefault) RegisterPublicRoutes(mux *http.ServeMux) {
 	jwk.NewHandler(r).SetPublicRoutes(mux)
-	mux.Handle("POST "+pdp.EvaluationPath, r.PDP().Handler(r.pdpClients()))
-	mux.Handle(gateway.Prefix, r.Gateway().Handler())
+	pdp.NewHandler(r).SetPublicRoutes(mux)
+	r.GatewayHandler().SetPublicRoutes(mux)
 }
 
 // RegisterAdminRoutes serves the Admin API on the admin listener: every
@@ -245,14 +236,6 @@ func (r *RegistryDefault) RegisterAdminRoutes(mux *http.ServeMux) {
 	jwk.NewHandler(r).SetAdminRoutes(a)
 	journal.NewHandler(r).SetAdminRoutes(a)
 	mux.Handle("/admin/", a)
-}
-
-func (r *RegistryDefault) pdpClients() []pdp.Client {
-	var out []pdp.Client
-	for _, p := range r.conf.PointsOfEnforcement {
-		out = append(out, pdp.Client{Token: p.Token, PEP: v0.PEP{ID: p.ID, Kind: v0.PEPGateway}})
-	}
-	return out
 }
 
 // lazy builds a value once, on first use, whichever goroutine asks first.

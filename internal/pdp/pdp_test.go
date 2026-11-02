@@ -20,13 +20,14 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/driver"
+	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/grant"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/persistence/sql"
-	"github.com/vladmsnk/doorward/internal/sealer"
+	"github.com/vladmsnk/doorward/internal/testhelpers"
 	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
@@ -44,13 +45,19 @@ var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 
 type box struct {
 	t        testing.TB
+	reg      *driver.RegistryDefault
 	st       *sql.Persister
 	v        *schema.Validator
 	signer   *jwk.Signer
 	srv      *httptest.Server
 	journal  *syncBuffer
 	follower *journal.Follower
-	pdp      *pdp.PDP
+}
+
+// option adjusts a box: its settings, or its registry before it opens.
+type option struct {
+	conf func(*config.DefaultProvider)
+	reg  func(*driver.RegistryDefault)
 }
 
 // exported drains the journal follower and returns the file so far.
@@ -79,25 +86,28 @@ func (s *syncBuffer) String() string {
 	return s.b.String()
 }
 
-func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
+func newBox(t testing.TB, opts ...option) *box {
 	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
 	ctx := context.Background()
-	st, err := sql.Open(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
-		t.Fatal(err)
-	}
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
+	clock := func() time.Time { return now }
+	reg := testhelpers.NewRegistry(t, func(c *config.DefaultProvider) {
+		c.PDPID = "doorward-test"
+		c.PointsOfEnforcement = []config.PointOfEnforcement{{ID: "gateway-1", Token: pepToken}}
+		for _, o := range opts {
+			if o.conf != nil {
+				o.conf(c)
+			}
+		}
+	}, func(r *driver.RegistryDefault) {
+		r.WithClock(clock)
+		for _, o := range opts {
+			if o.reg != nil {
+				o.reg(r)
+			}
+		}
+	})
+	st := reg.Persister().(*sql.Persister)
+	v := reg.Validator()
 	for _, f := range []string{"manifest-payments-api.yaml", "manifest-ledger-mcp.yaml", "mandate-invoices.yaml", "mandate-reconcile.yaml",
 		"agent-invoice-assistant.yaml", "agent-reconciler.yaml"} {
 		data, err := os.ReadFile(filepath.Join("../../examples/v0/config", f))
@@ -120,32 +130,15 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	if err := st.Consents().Create(ctx, consent); err != nil {
 		t.Fatal(err)
 	}
-	mk, _ := sealer.Generate()
-	sl, _ := sealer.Parse(mk)
-	km := jwk.NewKeyRing(st.Keys(), sl)
-	signer, err := km.Ensure(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clock := func() time.Time { return now }
-	b := &box{t: t, st: st, v: v, signer: signer, journal: &syncBuffer{}}
+	b := &box{t: t, reg: reg, st: st, v: v, signer: reg.KeyRing().Signer(), journal: &syncBuffer{}}
 	b.follower = journal.NewFollower(st.Decisions(), b.journal, 0, 10*time.Millisecond, nil)
 	fctx, fcancel := context.WithCancel(ctx)
 	go b.follower.Run(fctx)
 	t.Cleanup(fcancel)
-	cfg := &configuration.Cache{Store: st, Validator: v}
-	p := &pdp.PDP{
-		Store:    st,
-		Config:   cfg,
-		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg), Now: clock}, Validator: v, Now: clock},
-		ID:       "doorward-test", Version: "test",
-		Journal: b.follower, Now: clock,
-	}
-	for _, o := range opts {
-		o(p)
-	}
-	b.pdp = p
-	b.srv = httptest.NewServer(p.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-1", Kind: v0.PEPGateway}}}))
+	reg.WithJournal(b.follower)
+	mux := http.NewServeMux()
+	pdp.NewHandler(reg).SetPublicRoutes(mux)
+	b.srv = httptest.NewServer(mux)
 	t.Cleanup(b.srv.Close)
 	return b
 }
@@ -457,7 +450,7 @@ func TestEvaluateUnderLoad(t *testing.T) {
 func TestEvaluationSpan(t *testing.T) {
 	exp := tracetest.NewInMemoryExporter()
 	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp))
-	b := newBox(t, func(p *pdp.PDP) { p.Tracer = tp.Tracer("test") })
+	b := newBox(t, option{reg: func(r *driver.RegistryDefault) { r.WithTracer(tp.Tracer("test")) }})
 	alice := b.mint("grant/pay-invoice.json", "grt_alice_traced_000000001", nil)
 	a := b.ask(alice, pepToken, payments, "pay_invoice", pay(7500),
 		map[string]string{"traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01"})
@@ -639,7 +632,7 @@ func TestObserveMode(t *testing.T) {
 // Q1: while the journal is held, decisions are refused within the deadline
 // with 503, and nothing is drawn or recorded. Once it is free, they flow.
 func TestDecisionDeadline(t *testing.T) {
-	b := newBox(t, func(p *pdp.PDP) { p.Timeout = 300 * time.Millisecond })
+	b := newBox(t, option{conf: func(c *config.DefaultProvider) { c.DecisionTimeout = 300 * time.Millisecond }})
 	ctx := context.Background()
 	alice := b.mint("grant/pay-invoice.json", "grt_alice_deadline_000001", nil)
 	conn, err := b.st.Pool().Acquire(ctx)
@@ -682,8 +675,16 @@ func TestJournalFollowsEveryInstance(t *testing.T) {
 	b.ask(alice, pepToken, payments, "get_invoice", read, nil)
 
 	// A second instance on the same store, with no follower of its own.
-	other := &pdp.PDP{Store: b.st, Config: b.pdp.Config, Verifier: b.pdp.Verifier, ID: "doorward-other", Version: "test", Now: b.pdp.Now}
-	srv := httptest.NewServer(other.Handler([]pdp.Client{{Token: pepToken, PEP: v0.PEP{ID: "gateway-2", Kind: v0.PEPGateway}}}))
+	other := driver.New(&config.DefaultProvider{
+		PDPID: "doorward-other", Version: "test", DecisionTimeout: config.DefaultDecisionTimeout,
+		PointsOfEnforcement: []config.PointOfEnforcement{{ID: "gateway-2", Token: pepToken}},
+	}).WithPersister(b.st).WithClock(func() time.Time { return now })
+	if err := other.Open(ctx); err != nil {
+		t.Fatal(err)
+	}
+	otherMux := http.NewServeMux()
+	pdp.NewHandler(other).SetPublicRoutes(otherMux)
+	srv := httptest.NewServer(otherMux)
 	defer srv.Close()
 	for i := 0; i < 3; i++ {
 		body, _ := json.Marshal(map[string]any{
@@ -796,11 +797,11 @@ func TestConfigurationSnapshot(t *testing.T) {
 	read := map[string]any{"invoice_id": "i"}
 
 	v1, _ := b.st.ConfigVersion(ctx)
-	snap, err := b.pdp.Config.Current(ctx)
+	snap, err := b.reg.ConfigurationCache().Current(ctx)
 	if err != nil || snap.Version != v1 {
 		t.Fatalf("snapshot %v %v, version %d", snap, err, v1)
 	}
-	if again, _ := b.pdp.Config.Current(ctx); again != snap {
+	if again, _ := b.reg.ConfigurationCache().Current(ctx); again != snap {
 		t.Error("the snapshot was reloaded although nothing changed")
 	}
 	// A change bumps the version and takes effect on the next call.
@@ -811,7 +812,7 @@ func TestConfigurationSnapshot(t *testing.T) {
 	if a := b.ask(alice, pepToken, payments, "refund_payment", map[string]any{"payment_id": "p", "amount": 1.0}, nil); !a.resp.Decision {
 		t.Errorf("the change did not take effect: %s", a.raw)
 	}
-	if again, _ := b.pdp.Config.Current(ctx); again == snap {
+	if again, _ := b.reg.ConfigurationCache().Current(ctx); again == snap {
 		t.Error("the snapshot was not reloaded after a change")
 	}
 
