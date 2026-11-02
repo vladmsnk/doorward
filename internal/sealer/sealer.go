@@ -86,3 +86,8 @@ func (s *Sealer) Open(ciphertext []byte, purpose string) ([]byte, error) {
 	}
 	return plain, nil
 }
+
+// Provider gives the box's sealer.
+type Provider interface {
+	Sealer() *Sealer
+}

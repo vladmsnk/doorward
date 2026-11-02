@@ -254,6 +254,7 @@ measurements are in [docs/decision-point.md](docs/decision-point.md).
 - [Grants and the decision point](docs/decision-point.md): checks, refusal codes, the evaluation API, the journal
 - [The MCP gateway](docs/gateway.md): addresses, what happens to each message, trying it with the demo ledger
 - [Operating Doorward](docs/operations.md): Admin API, keys and secrets, storage, verifying a release
+- [How the code is organized](docs/architecture.md): layers, domain packages, the registry, adding a component
 - [Roadmap](docs/ROADMAP.md): what is built next, in order, and why
 - [Examples](examples/v0): every document, telling both stories (a user's assistant and a nightly service agent)
 

@@ -20,7 +20,7 @@ import (
 	"strings"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/keys"
+	"github.com/vladmsnk/doorward/internal/jwk"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -39,8 +39,8 @@ type header struct {
 var b64 = base64.RawURLEncoding.Strict()
 
 // Sign encodes g as a JWT signed by s.
-func Sign(s *keys.Signer, g v0.Grant) (string, error) {
-	h, err := json.Marshal(header{Alg: keys.Alg, Typ: v0.GrantJWTType, Kid: s.KID})
+func Sign(s *jwk.Signer, g v0.Grant) (string, error) {
+	h, err := json.Marshal(header{Alg: jwk.Alg, Typ: v0.GrantJWTType, Kid: s.KID})
 	if err != nil {
 		return "", err
 	}
@@ -110,8 +110,8 @@ func readHeader(raw []byte) (header, error) {
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
 		return h, errors.New("header: trailing data")
 	}
-	if h.Alg != keys.Alg {
-		return h, fmt.Errorf("header: alg is %q; grants are signed %s only", h.Alg, keys.Alg)
+	if h.Alg != jwk.Alg {
+		return h, fmt.Errorf("header: alg is %q; grants are signed %s only", h.Alg, jwk.Alg)
 	}
 	// RFC 9068 §2.1: typ is at+jwt; the media type form is equivalent and
 	// media types compare without regard to case.

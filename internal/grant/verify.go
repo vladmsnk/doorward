@@ -9,7 +9,7 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -17,7 +17,7 @@ import (
 const DefaultSkew = 30 * time.Second
 
 // Keys finds the public key a grant names, whether or not it is still
-// published. keys.Manager is one.
+// published. jwk.KeyRing is one.
 type Keys interface {
 	Public(ctx context.Context, kid string) (*ecdsa.PublicKey, error)
 }
@@ -109,7 +109,7 @@ func (v *Verifier) Verify(ctx context.Context, tok, audience string) (Result, er
 		return r.fail(v0.CheckSignature, v0.ReasonGrantMalformed, "%v", err), nil
 	}
 	pub, err := v.Keys.Public(ctx, t.header.Kid)
-	if errors.Is(err, store.ErrNotFound) {
+	if errors.Is(err, x.ErrNotFound) {
 		return r.fail(v0.CheckSignature, v0.ReasonGrantSignatureInvalid, "kid %s is not a key of this box", t.header.Kid), nil
 	}
 	if err != nil {

@@ -16,7 +16,6 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
 )
 
 // Batch is how many records one read takes.
@@ -31,7 +30,7 @@ const DefaultPoll = 250 * time.Millisecond
 // Notify and polls for the rest, so a file it writes is a complete copy of
 // the chain, and a restart continues where the file ended.
 type Follower struct {
-	src  store.Decisions
+	src  Manager
 	w    io.Writer
 	poll time.Duration
 	log  *slog.Logger
@@ -44,9 +43,9 @@ type Follower struct {
 	once sync.Once
 }
 
-// New returns a follower that writes records from seq `from` on to w. Run
-// starts it.
-func New(src store.Decisions, w io.Writer, from uint64, poll time.Duration, log *slog.Logger) *Follower {
+// NewFollower returns a follower that writes records from seq `from` on
+// to w. Run starts it.
+func NewFollower(src Manager, w io.Writer, from uint64, poll time.Duration, log *slog.Logger) *Follower {
 	if poll <= 0 {
 		poll = DefaultPoll
 	}

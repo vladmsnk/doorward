@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,16 +15,15 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/admin"
-	"github.com/vladmsnk/doorward/internal/config"
+	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/demoledger"
+	"github.com/vladmsnk/doorward/internal/driver"
+	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
-	"github.com/vladmsnk/doorward/internal/keys"
-	"github.com/vladmsnk/doorward/internal/pdp"
-	"github.com/vladmsnk/doorward/internal/sealer"
-	"github.com/vladmsnk/doorward/internal/store"
-	"github.com/vladmsnk/doorward/internal/store/postgres"
+	"github.com/vladmsnk/doorward/internal/jwk"
+	"github.com/vladmsnk/doorward/internal/persistence/sql"
+	"github.com/vladmsnk/doorward/internal/testhelpers"
 	"github.com/vladmsnk/doorward/schema"
 )
 
@@ -43,10 +41,10 @@ var now = time.Date(2026, 10, 30, 10, 30, 0, 0, time.UTC)
 // point and a signer to mint grants with.
 type box struct {
 	t      testing.TB
-	st     *postgres.Store
+	st     *sql.Persister
 	v      *schema.Validator
-	signer *keys.Signer
-	gw     *gateway.Gateway
+	signer *jwk.Signer
+	reg    *driver.RegistryDefault
 	srv    *httptest.Server
 
 	// The ledger answers as plain JSON, or as event streams when sse is set.
@@ -56,24 +54,14 @@ type box struct {
 
 func newBox(t testing.TB) *box {
 	t.Helper()
-	dsn := os.Getenv("DOORWARD_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("DOORWARD_TEST_POSTGRES_DSN not set")
-	}
 	ctx := context.Background()
-	st, err := postgres.Open(ctx, dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
-	if _, err := st.Pool().Exec(ctx, "TRUNCATE documents, consents, grants, decisions, approvals, counters, signing_keys, secrets"); err != nil {
-		t.Fatal(err)
-	}
-	v, err := schema.NewValidator()
-	if err != nil {
-		t.Fatal(err)
-	}
-	b := &box{t: t, st: st, v: v}
+	clock := func() time.Time { return now }
+	reg := testhelpers.NewRegistry(t, func(c *config.DefaultProvider) {
+		c.PDPID, c.GatewayID = "doorward-test", "gateway-test"
+	}, func(r *driver.RegistryDefault) { r.WithClock(clock) })
+	st := reg.Persister().(*sql.Persister)
+	v := reg.Validator()
+	b := &box{t: t, st: st, v: v, reg: reg}
 	b.ledger = &demoledger.Server{APIKey: apiKey}
 	b.ledgerSSE = &demoledger.Server{APIKey: apiKey, SSE: true}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -110,35 +98,17 @@ func newBox(t testing.TB) *box {
 		}
 	}
 
-	mk, _ := sealer.Generate()
-	sl, _ := sealer.Parse(mk)
-	sealed, err := sl.Seal([]byte(apiKey), admin.SecretPurpose(keyRef))
+	sealed, err := reg.Sealer().Seal([]byte(apiKey), configuration.SecretPurpose(keyRef))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := st.Secrets().Put(ctx, keyRef, sealed, "test"); err != nil {
 		t.Fatal(err)
 	}
-	km := keys.New(st.Keys(), sl)
-	b.signer, err = km.Ensure(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	clock := func() time.Time { return now }
-	cfg := &config.Cache{Store: st, Validator: v}
-	p := &pdp.PDP{
-		Store:    st,
-		Config:   cfg,
-		Verifier: &grant.Verifier{Keys: km, Status: grant.StoreStatus{Store: st, Config: pdp.StatusConfig(cfg), Now: clock}, Validator: v, Now: clock},
-		ID:       "doorward-test", Version: "test",
-		Now: clock,
-	}
-	b.gw = &gateway.Gateway{
-		Config: cfg, PDP: p, Verifier: p.Verifier, Secrets: st.Secrets(), Sealer: sl,
-		ID:  "gateway-test",
-		Log: slog.New(slog.NewTextHandler(io.Discard, nil)),
-	}
-	b.srv = httptest.NewServer(b.gw.Handler())
+	b.signer = reg.KeyRing().Signer()
+	mux := http.NewServeMux()
+	reg.GatewayHandler().SetPublicRoutes(mux)
+	b.srv = httptest.NewServer(mux)
 	t.Cleanup(b.srv.Close)
 	return b
 }
@@ -174,7 +144,7 @@ func (b *box) mint(id string, edits ...func(*v0.Grant)) string {
 		e(&g)
 	}
 	g.ID, g.IssuedAt, g.Expiry = id, now.Add(-time.Minute).Unix(), now.Add(14*time.Minute).Unix()
-	if err := b.st.Grants().Create(context.Background(), store.GrantRecord{Grant: g, Agent: g.Actor.Subject}); err != nil {
+	if err := b.st.Grants().Create(context.Background(), grant.Record{Grant: g, Agent: g.Actor.Subject}); err != nil {
 		b.t.Fatal(err)
 	}
 	tok, err := grant.Sign(b.signer, g)
@@ -428,7 +398,7 @@ func TestGateway(t *testing.T) {
 	if r := b.rpc(rec, 6, "ping", nil, map[string]string{"Origin": "https://evil.example"}); r.status != 403 {
 		t.Errorf("foreign origin: %d %s", r.status, r.body)
 	}
-	b.gw.Origins = []string{"https://inspector.example"}
+	b.reg.Config().GatewayOrigins = "https://inspector.example"
 	if r := b.rpc(rec, 6, "ping", nil, map[string]string{"Origin": "https://inspector.example"}); r.status != 200 {
 		t.Errorf("allowed origin: %d %s", r.status, r.body)
 	}

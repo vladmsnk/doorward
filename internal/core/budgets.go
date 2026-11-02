@@ -8,7 +8,7 @@ import (
 	"time"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
-	"github.com/vladmsnk/doorward/internal/store"
+	"github.com/vladmsnk/doorward/internal/budget"
 )
 
 // Budget is one budget an allowed call draws on, and how much.
@@ -16,12 +16,12 @@ type Budget struct {
 	Limit v0.Limit
 	// Draw is what to take: the counter's key, the amount and the
 	// budget's max, as exact decimals.
-	Draw store.Draw
+	Draw budget.Draw
 }
 
 // Budgets works out which of a grant's budgets a call draws on (B4). It
 // changes nothing: budgets are drawn only for a call that passed every other
-// check, all at once, through store.Allow.
+// check, all at once, as the store settles the decision.
 //
 // A count budget draws 1. A sum budget draws the value of its field, which
 // must be present, a number and not negative: a call that cannot be
@@ -57,34 +57,35 @@ func Budgets(g v0.Grant, call Call, now time.Time) ([]Budget, *v0.Reason) {
 		if err != nil {
 			return nil, &v0.Reason{Code: v0.ReasonLimitExceeded, Message: err.Error()}
 		}
-		out = append(out, Budget{Limit: l, Draw: store.Draw{Key: key, Amount: amount, Max: decimal(l.Max)}})
+		out = append(out, Budget{Limit: l, Draw: budget.Draw{Key: key, Amount: amount, Max: decimal(l.Max)}})
 	}
 	return out, nil
 }
 
 // Draws are the store draws of a call's budgets.
-func Draws(budgets []Budget) []store.Draw {
-	out := make([]store.Draw, len(budgets))
+func Draws(budgets []Budget) []budget.Draw {
+	out := make([]budget.Draw, len(budgets))
 	for i, b := range budgets {
 		out[i] = b.Draw
 	}
 	return out
 }
 
-// LimitsCheck turns the outcome of store.Allow into the limits check and
-// what the decision record lists as drawn. err is Allow's error.
+// LimitsCheck turns the outcome of drawing the budgets into the limits
+// check and what the decision record lists as drawn. err is the store's
+// refusal, if it refused.
 //
 // After a best-effort draw (observe mode), budgets without room are marked
 // exhausted in drawn: the check fails for the first of them, and the uses
 // list what the others drew.
-func LimitsCheck(budgets []Budget, drawn []store.Drawn, err error) (v0.Check, *v0.Reason, []v0.LimitUse) {
-	var ex *store.ExhaustedError
-	var kept []store.Drawn
+func LimitsCheck(budgets []Budget, drawn []budget.Drawn, err error) (v0.Check, *v0.Reason, []v0.LimitUse) {
+	var ex *budget.ExhaustedError
+	var kept []budget.Drawn
 	var keptBudgets []Budget
 	for i, d := range drawn {
 		if d.Exhausted {
 			if ex == nil {
-				ex = &store.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: d.Remaining}
+				ex = &budget.ExhaustedError{Key: d.Key, Amount: d.Amount, Remaining: d.Remaining}
 			}
 			continue
 		}
@@ -121,7 +122,7 @@ func LimitsCheck(budgets []Budget, drawn []store.Drawn, err error) (v0.Check, *v
 func budgetKey(g v0.Grant, l v0.Limit, now time.Time) (string, error) {
 	switch l.Per {
 	case "", v0.PerGrant:
-		return store.GrantKey(g.ID, l.Name), nil
+		return budget.GrantKey(g.ID, l.Name), nil
 	case v0.PerDay, v0.PerMonth:
 		if g.Consent == "" {
 			return "", fmt.Errorf("budget %s runs per %s of a consent, and the grant rests on none", l.Name, l.Per)
@@ -130,7 +131,7 @@ func budgetKey(g v0.Grant, l v0.Limit, now time.Time) (string, error) {
 		if l.Per == v0.PerMonth {
 			layout = "2006-01"
 		}
-		return store.ConsentKey(g.Consent, l.Name, now.UTC().Format(layout)), nil
+		return budget.ConsentKey(g.Consent, l.Name, now.UTC().Format(layout)), nil
 	}
 	return "", fmt.Errorf("budget %s runs per %q, which is not a period", l.Name, l.Per)
 }
