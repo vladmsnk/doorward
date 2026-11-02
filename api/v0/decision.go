@@ -56,8 +56,9 @@ type Action struct {
 	Properties map[string]any `json:"properties,omitempty"`
 }
 
-// Principal is who acted and who answers for it, from the verified grant:
-// exactly one of User and Owner is set.
+// Principal is who acted and who answers for it, from a grant whose
+// signature held, whether or not a later check refused it: exactly one of
+// User and Owner is set.
 type Principal struct {
 	Agent string `json:"agent"`
 	User  string `json:"user,omitempty"`

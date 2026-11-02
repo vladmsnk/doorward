@@ -800,3 +800,54 @@ func TestConfigurationSnapshot(t *testing.T) {
 		t.Errorf("after the repair: %s", a.raw)
 	}
 }
+
+// A grant refused after its signature held still says whose it was: the
+// agent, its user or owning team, and the grant. A grant whose signature
+// fails names nothing, since nothing in it can be believed.
+func TestRefusedGrantsNameTheirAgent(t *testing.T) {
+	b := newBox(t)
+	refused := func(name string, a answer, code v0.ReasonCode) v0.Decision {
+		t.Helper()
+		if a.resp.Decision || len(a.resp.Context.Reasons) == 0 || a.resp.Context.Reasons[0].Code != code {
+			t.Fatalf("%s: %s", name, a.raw)
+		}
+		d := b.record(a.resp.Context.ID)
+		doc, _ := json.Marshal(d)
+		if err := b.v.Check(schema.Decision, doc); err != nil {
+			t.Errorf("%s: the record breaks the contract: %v", name, err)
+		}
+		return d
+	}
+	named := func(name string, d v0.Decision, want v0.Principal, grantID string) {
+		t.Helper()
+		if d.Principal == nil || *d.Principal != want || d.Grant == nil || d.Grant.ID != grantID {
+			t.Errorf("%s: principal %+v, grant %+v; want %+v, %s", name, d.Principal, d.Grant, want, grantID)
+		}
+	}
+	entry := map[string]any{"account_id": "acc_EU_448120", "amount": 10.0, "memo": "m"}
+	owner := v0.Principal{Agent: "reconciler", Owner: "finance-platform"}
+
+	rec := b.mint("grant/reconcile.json", "grt_reconciler_attrib_0001", nil)
+	d := refused("another resource", b.ask(rec, pepToken, "https://elsewhere.example/mcp", "post_entry", entry, nil), v0.ReasonAudienceMismatch)
+	named("another resource", d, owner, "grt_reconciler_attrib_0001")
+
+	// The status check failed, so the owner comes from the agent itself.
+	if err := b.st.Grants().Revoke(context.Background(), "grt_reconciler_attrib_0001", now); err != nil {
+		t.Fatal(err)
+	}
+	d = refused("revoked", b.ask(rec, pepToken, ledger, "post_entry", entry, nil), v0.ReasonGrantRevoked)
+	named("revoked", d, owner, "grt_reconciler_attrib_0001")
+
+	alice := b.mint("grant/pay-invoice.json", "grt_alice_attrib_000000001", nil)
+	d = refused("for a user, another resource", b.ask(alice, pepToken, ledger, "list_unmatched", nil, nil), v0.ReasonAudienceMismatch)
+	named("for a user, another resource", d, v0.Principal{Agent: "invoice-assistant", User: "alice@example.com"}, "grt_alice_attrib_000000001")
+	if d.Grant.Consent == "" {
+		t.Error("a user's refused grant names its consent")
+	}
+
+	forged := rec[:len(rec)-6] + "AAAAAA"
+	d = refused("bad signature", b.ask(forged, pepToken, ledger, "post_entry", entry, nil), v0.ReasonGrantSignatureInvalid)
+	if d.Principal != nil || d.Grant != nil {
+		t.Errorf("a forged grant names %+v, %+v", d.Principal, d.Grant)
+	}
+}

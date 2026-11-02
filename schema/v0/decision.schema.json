@@ -32,7 +32,7 @@
       "additionalProperties": false
     },
     "principal": {
-      "description": "Who acted and who answers for it, as established from the verified grant: the user who consented, or the owning team of a service agent. Absent when no grant could be verified.",
+      "description": "Who acted and who answers for it, as established from the grant: the user who consented, or the owning team of a service agent. Also set when the grant's signature held but a later check refused it (revoked, another resource, expired). Absent when the signature could not be verified, or a service agent's owner is unknown.",
       "type": "object",
       "required": ["agent"],
       "properties": {
@@ -44,7 +44,7 @@
       "oneOf": [{ "required": ["user"] }, { "required": ["owner"] }]
     },
     "grant": {
-      "description": "The grant the decision was made against, copied at decision time so the record reads on its own without the journal.",
+      "description": "The grant the decision was made against, copied at decision time so the record reads on its own without the journal. Set whenever the grant's signature held, refused or not.",
       "type": "object",
       "required": ["id", "mandate"],
       "properties": {
