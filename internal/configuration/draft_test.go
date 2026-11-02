@@ -157,7 +157,7 @@ const demoTools = `[
  {"name":"list_unmatched","title":"Unmatched payments","description":"Payments of one day that no invoice matches yet.",
   "inputSchema":{"type":"object","properties":{"day":{"type":"string"}},"required":["day"]},"annotations":{"readOnlyHint":true}},
  {"name":"post_entry","title":"Post a ledger entry","description":"Posts one entry to an account.",
-  "inputSchema":{"type":"object","properties":{"account_id":{"type":"string"},"amount":{"type":"number"},"memo":{"type":"string"}},"required":["account_id","amount"]}},
+  "inputSchema":{"type":"object","properties":{"account_id":{"type":"string","x-mcp-header":"Account"},"amount":{"type":"number"},"memo":{"type":"string"}},"required":["account_id","amount"]}},
  {"name":"write_off","title":"Write off a payment","description":"Writes a payment off the books.",
   "inputSchema":{"type":"object","properties":{"payment_id":{"type":"string"},"amount":{"type":"number"},"reason":{"type":"string"}},"required":["payment_id","amount","reason"]},
   "annotations":{"destructiveHint":true}},
@@ -308,5 +308,36 @@ func TestDraftOperationCutsALongDescription(t *testing.T) {
 	op, _, _ = configuration.DraftOperation(mcp.Tool{Name: "t", Title: "Only a title"})
 	if op.Description != "Only a title" {
 		t.Errorf("description: %q", op.Description)
+	}
+}
+
+func TestParamsOfMirroredHeaders(t *testing.T) {
+	got, notes := configuration.ParamsOf(json.RawMessage(`{"type":"object","$defs":{"R":{"type":"string"}},"properties":{
+		"region":{"type":"string","x-mcp-header":"Region"},
+		"tenant":{"type":"object","properties":{"id":{"type":"integer","x-mcp-header":"Tenant-Id"},"on":{"type":"boolean","x-mcp-header":"On"}}},
+		"zone":{"$ref":"#/$defs/R","x-mcp-header":"Zone"},
+		"amount":{"type":"number","x-mcp-header":"Amount"},
+		"again":{"type":"string","x-mcp-header":"region"},
+		"bad":{"type":"string","x-mcp-header":"Not A Token"},
+		"items":{"type":"array","x-mcp-header":"Items"},
+		"via":{"anyOf":[{"type":"object","properties":{"deep":{"type":"string","x-mcp-header":"Deep"}}},{"type":"null"}]}}}`))
+	// Properties are read in name order: /again takes the name first.
+	want := map[string]string{"/again": "region", "/tenant/id": "Tenant-Id", "/tenant/on": "On", "/zone": "Zone",
+		"/amount": "", "/region": "", "/bad": "", "/via/deep": ""}
+	for ptr, h := range want {
+		if p, ok := got[ptr]; !ok || p.Header != h {
+			t.Errorf("%s: %+v, want header %q", ptr, p, h)
+		}
+	}
+	for _, msg := range []string{
+		"/region: its x-mcp-header is invalid, so MCP clients leave the tool out: Region mirrors /again already",
+		`/bad: its x-mcp-header is invalid, so MCP clients leave the tool out: "Not A Token" is not a header name`,
+		"/amount: its x-mcp-header is invalid, so MCP clients leave the tool out: it is on a number",
+		"/items: its x-mcp-header is invalid, so MCP clients leave the tool out: it is on an argument that is not",
+		"/via/deep: its x-mcp-header is invalid, so MCP clients leave the tool out: the argument is not reachable through properties alone",
+	} {
+		if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, msg) }) {
+			t.Errorf("no note %q in:\n%s", msg, strings.Join(notes, "\n"))
+		}
 	}
 }

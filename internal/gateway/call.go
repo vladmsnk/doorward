@@ -10,6 +10,7 @@ import (
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
 	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/core"
 	"github.com/vladmsnk/doorward/internal/pdp"
 	"github.com/vladmsnk/doorward/internal/x"
 )
@@ -23,6 +24,10 @@ func (h *Handler) toolsCall(w http.ResponseWriter, r *http.Request, snap *config
 	}
 	if err := json.Unmarshal(msg.Params, &params); err != nil || params.Name == "" {
 		writeRPCError(w, http.StatusOK, msg.ID, -32602, "tools/call needs params.name")
+		return
+	}
+	if err := checkParamHeaders(r.Header, core.Operation(man.Manifest, params.Name), params.Arguments, modern); err != nil {
+		writeRPCError(w, http.StatusBadRequest, msg.ID, codeHeaderMismatch, "Header mismatch: "+err.Error())
 		return
 	}
 	req := v0.EvaluationRequest{

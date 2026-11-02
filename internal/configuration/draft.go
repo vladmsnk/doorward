@@ -218,6 +218,10 @@ func paramChanges(was, now map[string]v0.Param) []string {
 			out = append(out, fmt.Sprintf("%s removed", ptr))
 		case w.Type != n.Type:
 			out = append(out, fmt.Sprintf("%s is now %s, was %s", ptr, n.Type, w.Type))
+		case w.Header != n.Header && n.Header == "":
+			out = append(out, fmt.Sprintf("%s is no longer mirrored in a header", ptr))
+		case w.Header != n.Header:
+			out = append(out, fmt.Sprintf("%s is now mirrored in Mcp-Param-%s", ptr, n.Header))
 		}
 	}
 	return out
@@ -230,6 +234,12 @@ func paramChanges(was, now map[string]v0.Param) []string {
 // alternatives of one type counts as that type. What cannot be a param (an
 // array, a value of several types, a reference outside the schema) is left
 // out, and said why.
+//
+// A property's x-mcp-header becomes the param's header. MCP clients drop a
+// tool whose annotation breaks the protocol's rules (a name that is not a
+// header token, one used twice, one on a number or a non-scalar, one not
+// reachable through properties alone), so such an annotation is left out
+// with a note.
 func ParamsOf(raw json.RawMessage) (map[string]v0.Param, []string) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -238,12 +248,12 @@ func ParamsOf(raw json.RawMessage) (map[string]v0.Param, []string) {
 	if err := json.Unmarshal(raw, &root); err != nil {
 		return nil, []string{"its input schema is not JSON, so it has no params"}
 	}
-	w := &schemaWalk{root: root, params: map[string]v0.Param{}}
+	w := &schemaWalk{root: root, params: map[string]v0.Param{}, headers: map[string]string{}}
 	s, err := w.resolve(root)
 	if err != nil {
 		return nil, []string{fmt.Sprintf("its input schema cannot be read (%v), so it has no params", err)}
 	}
-	w.object(s, "", 0)
+	w.object(s, "", 0, direct(root))
 	if len(w.params) == 0 {
 		w.params = nil
 	}
@@ -255,30 +265,94 @@ type schemaWalk struct {
 	params  map[string]v0.Param
 	skipped []string
 	full    bool
+	// headers are the x-mcp-header names taken so far, by lower case.
+	headers map[string]string
 }
 
-// object walks an object schema's properties, in name order.
-func (w *schemaWalk) object(s map[string]any, at string, depth int) {
+// object walks an object schema's properties, in name order. static says
+// the object was reached through properties alone, as x-mcp-header must be.
+func (w *schemaWalk) object(s map[string]any, at string, depth int, static bool) {
 	props, _ := s["properties"].(map[string]any)
 	for _, name := range slices.Sorted(maps.Keys(props)) {
 		ptr := at + "/" + strings.NewReplacer("~", "~0", "/", "~1").Replace(name)
 		t, obj, why := w.property(props[name])
+		header, annotated := mcpHeader(props[name])
+		if annotated && (t == "" || t == "object") {
+			w.badHeader(ptr, "it is on an argument that is not a string, an integer or a boolean")
+		}
 		switch {
 		case t == "":
 			w.skipped = append(w.skipped, fmt.Sprintf("argument %s is not a param: %s", ptr, why))
 		case t == "object" && depth+1 >= maxDepth:
 			w.skipped = append(w.skipped, fmt.Sprintf("argument %s is not a param: objects nest deeper than %d", ptr, maxDepth))
 		case t == "object":
-			w.object(obj, ptr, depth+1)
+			w.object(obj, ptr, depth+1, static && direct(props[name]))
 		case len(w.params) >= maxParams:
 			if !w.full {
 				w.skipped = append(w.skipped, fmt.Sprintf("it has more than %d arguments; the rest are not params", maxParams))
 				w.full = true
 			}
 		default:
-			w.params[ptr] = v0.Param{Type: v0.ParamType(t)}
+			p := v0.Param{Type: v0.ParamType(t)}
+			if annotated {
+				p.Header = w.header(ptr, header, t, static)
+			}
+			w.params[ptr] = p
 		}
 	}
+}
+
+// headerToken is an HTTP field name (RFC 9110 token), as x-mcp-header and
+// the manifest's header must be.
+var headerToken = regexp.MustCompile("^[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}$")
+
+// mcpHeader reads a property's x-mcp-header annotation, if it has one.
+func mcpHeader(v any) (string, bool) {
+	m, _ := v.(map[string]any)
+	h, ok := m["x-mcp-header"]
+	if !ok {
+		return "", false
+	}
+	name, _ := h.(string)
+	return name, true
+}
+
+// header checks one x-mcp-header and returns the name the param keeps, or
+// "" when the annotation breaks the protocol's rules.
+func (w *schemaWalk) header(ptr, name, typ string, static bool) string {
+	switch {
+	case !headerToken.MatchString(name):
+		w.badHeader(ptr, fmt.Sprintf("%q is not a header name", name))
+	case !static:
+		w.badHeader(ptr, "the argument is not reachable through properties alone")
+	case typ == "number":
+		w.badHeader(ptr, "it is on a number, which may not be mirrored")
+	case w.headers[strings.ToLower(name)] != "":
+		w.badHeader(ptr, fmt.Sprintf("%s mirrors %s already", name, w.headers[strings.ToLower(name)]))
+	default:
+		w.headers[strings.ToLower(name)] = ptr
+		return name
+	}
+	return ""
+}
+
+func (w *schemaWalk) badHeader(ptr, why string) {
+	w.skipped = append(w.skipped, fmt.Sprintf("argument %s: its x-mcp-header is invalid, so MCP clients leave the tool out: %s", ptr, why))
+}
+
+// direct reports whether a schema is reached as it is, not through a
+// reference or a combination of schemas.
+func direct(v any) bool {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, k := range []string{"$ref", "allOf", "anyOf", "oneOf"} {
+		if _, has := m[k]; has {
+			return false
+		}
+	}
+	return true
 }
 
 func (w *schemaWalk) property(v any) (string, map[string]any, string) {

@@ -37,7 +37,7 @@ func Budgets(g v0.Grant, call Call, now time.Time) ([]Budget, *v0.Reason) {
 		}
 		amount := "1"
 		if l.Kind == v0.LimitSum {
-			v, present := lookup(call.Arguments, l.Field)
+			v, present := Lookup(call.Arguments, l.Field)
 			if !present || v == nil {
 				return nil, &v0.Reason{Code: v0.ReasonFieldMissing, Field: l.Field,
 					Message: fmt.Sprintf("budget %s adds up %s, which the call does not carry", l.Name, l.Field)}

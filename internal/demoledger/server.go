@@ -92,8 +92,9 @@ var tools = []map[string]any{
 	{
 		"name": "post_entry", "title": "Post a ledger entry",
 		"description": "Posts one entry to an account.",
+		// A 2026-07-28 client mirrors the account in Mcp-Param-Account.
 		"inputSchema": map[string]any{"type": "object", "properties": map[string]any{
-			"account_id": map[string]any{"type": "string"}, "amount": map[string]any{"type": "number"}, "memo": map[string]any{"type": "string"}},
+			"account_id": map[string]any{"type": "string", "x-mcp-header": "Account"}, "amount": map[string]any{"type": "number"}, "memo": map[string]any{"type": "string"}},
 			"required": []string{"account_id", "amount"}},
 	},
 	{

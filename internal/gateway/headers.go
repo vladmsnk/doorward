@@ -4,9 +4,16 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/core"
 )
 
 // From revision 2026-07-28 on, a Streamable HTTP request mirrors parts of
@@ -141,4 +148,77 @@ func quote(s string) string {
 		s = s[:80] + "…"
 	}
 	return fmt.Sprintf("%q", s)
+}
+
+// checkParamHeaders compares a tools/call's Mcp-Param-* headers with its
+// arguments, through the manifest's record of which argument each header
+// mirrors. A header the manifest does not declare cannot be checked, so it
+// is refused rather than forwarded unchecked. Under 2026-07-28 a declared
+// argument given without its header is refused too, as the revision asks
+// of every server that reads the body. op is nil for a tool the manifest
+// does not declare, which the decision point refuses anyway.
+func checkParamHeaders(h http.Header, op *v0.Operation, args map[string]any, modern bool) error {
+	if op == nil {
+		return nil
+	}
+	declared := make(map[string]string) // header name in lower case, pointer
+	for ptr, p := range op.Params {
+		if p.Header != "" {
+			declared[strings.ToLower(p.Header)] = ptr
+		}
+	}
+	seen := make(map[string]bool)
+	for name, values := range h {
+		key, ok := strings.CutPrefix(strings.ToLower(name), "mcp-param-")
+		if !ok {
+			continue
+		}
+		ptr, ok := declared[key]
+		if !ok {
+			return fmt.Errorf("%s is not declared for %s in the manifest, so doorward cannot check it against the arguments", name, op.Name)
+		}
+		if len(values) != 1 {
+			return fmt.Errorf("the %s header is given %d times", name, len(values))
+		}
+		got, err := decodeHeader(values[0])
+		if err != nil {
+			return fmt.Errorf("%s: %w", name, err)
+		}
+		want, present := core.Lookup(args, ptr)
+		if !present || want == nil {
+			return fmt.Errorf("%s is given, but the arguments have no %s", name, ptr)
+		}
+		if !sameValue(got, want, op.Params[ptr].Type) {
+			return fmt.Errorf("%s header value %s does not match argument %s", name, quote(got), ptr)
+		}
+		seen[key] = true
+	}
+	if modern {
+		for _, key := range slices.Sorted(maps.Keys(declared)) {
+			ptr := declared[key]
+			if v, present := core.Lookup(args, ptr); present && v != nil && !seen[key] {
+				return fmt.Errorf("the Mcp-Param-%s header is missing; the arguments give %s", op.Params[ptr].Header, ptr)
+			}
+		}
+	}
+	return nil
+}
+
+// sameValue compares a header's text with the argument it mirrors, as the
+// transport writes one: a string as it is, an integer in decimal (compared
+// as a number), a boolean as true or false.
+func sameValue(header string, arg any, t v0.ParamType) bool {
+	switch t {
+	case v0.ParamString:
+		s, ok := arg.(string)
+		return ok && s == header
+	case v0.ParamInteger:
+		n, ok := arg.(float64)
+		f, err := strconv.ParseFloat(header, 64)
+		return ok && err == nil && !math.IsInf(f, 0) && f == n
+	case v0.ParamBoolean:
+		b, ok := arg.(bool)
+		return ok && header == strconv.FormatBool(b)
+	}
+	return false
 }
