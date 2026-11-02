@@ -19,6 +19,7 @@ import (
 
 	"github.com/vladmsnk/doorward/internal/approval"
 	"github.com/vladmsnk/doorward/internal/configuration"
+	"github.com/vladmsnk/doorward/internal/consent"
 	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/gateway"
 	"github.com/vladmsnk/doorward/internal/grant"
@@ -65,6 +66,12 @@ func (r *RegistryDefault) WithPersister(p persistence.Persister) *RegistryDefaul
 	return r
 }
 
+// WithValidator uses v instead of loading the schemas again.
+func (r *RegistryDefault) WithValidator(v *schema.Validator) *RegistryDefault {
+	r.validator = v
+	return r
+}
+
 // WithLogger sets the logger; the default is slog's.
 func (r *RegistryDefault) WithLogger(l *slog.Logger) *RegistryDefault {
 	r.log = l
@@ -100,11 +107,13 @@ func (r *RegistryDefault) Open(ctx context.Context) error {
 		}
 		r.persister = p
 	}
-	v, err := schema.NewValidator()
-	if err != nil {
-		return err
+	if r.validator == nil {
+		v, err := schema.NewValidator()
+		if err != nil {
+			return err
+		}
+		r.validator = v
 	}
-	r.validator = v
 	if r.conf.MasterKey != "" {
 		sl, err := sealer.Parse(r.conf.MasterKey)
 		if err != nil {
@@ -159,6 +168,7 @@ func (r *RegistryDefault) ConfigurationManager() configuration.Manager {
 }
 func (r *RegistryDefault) SecretManager() configuration.SecretManager { return r.persister.Secrets() }
 func (r *RegistryDefault) GrantManager() grant.Manager                { return r.persister.Grants() }
+func (r *RegistryDefault) ConsentManager() consent.Manager            { return r.persister.Consents() }
 func (r *RegistryDefault) JournalManager() journal.Manager            { return r.persister.Decisions() }
 func (r *RegistryDefault) KeyManager() jwk.Manager                    { return r.persister.Keys() }
 func (r *RegistryDefault) ApprovalManager() approval.Manager          { return r.persister.Approvals() }

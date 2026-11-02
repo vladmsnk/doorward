@@ -31,6 +31,7 @@ type registry interface {
 	grant.ManagerProvider
 	pdp.InternalRegistry
 	gateway.InternalRegistry
+	grant.IssuerRegistry
 }
 
 var _ registry = (*RegistryDefault)(nil)

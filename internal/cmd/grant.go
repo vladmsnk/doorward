@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"context"
@@ -15,12 +15,9 @@ import (
 	"github.com/vladmsnk/doorward/internal/budget"
 	"github.com/vladmsnk/doorward/internal/configuration"
 	"github.com/vladmsnk/doorward/internal/core"
+	"github.com/vladmsnk/doorward/internal/driver"
+	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/grant"
-	"github.com/vladmsnk/doorward/internal/ids"
-	"github.com/vladmsnk/doorward/internal/jwk"
-	"github.com/vladmsnk/doorward/internal/persistence"
-	"github.com/vladmsnk/doorward/internal/persistence/sql"
-	"github.com/vladmsnk/doorward/internal/policy"
 	"github.com/vladmsnk/doorward/internal/sealer"
 	"github.com/vladmsnk/doorward/internal/x"
 	"github.com/vladmsnk/doorward/schema"
@@ -91,8 +88,7 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		}
 		bound = core.Call{Resource: *aud, Action: *action, Arguments: args}
 	}
-	sl, err := sealer.Parse(*masterKey)
-	if err != nil {
+	if _, err := sealer.Parse(*masterKey); err != nil {
 		fmt.Fprintf(stderr, "doorward grant mint: --master-key or DOORWARD_MASTER_KEY: %v\n", err)
 		return 2
 	}
@@ -110,31 +106,10 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	if g.Confirmation != nil {
-		return fail("claims: cnf binds the grant to a key, but the box does not check proofs of possession yet, so it issues Bearer grants; remove cnf")
-	}
 	now := time.Now()
-	if *issuer != "" {
-		g.Issuer = *issuer
-	}
-	g.IssuedAt, g.Expiry = now.Unix(), now.Add(*ttl).Unix()
-	g.ID = ids.At(ids.Grant, now)
-	// One entry per operation, carrying all of its bounds, as every grant
-	// the box issues has it.
-	perms, err := policy.OnePerOperation(core.Permissions(g.AuthorizationDetails))
-	if err != nil {
-		return fail("claims: %v", err)
-	}
-	g.AuthorizationDetails = core.Details(perms)
-	// Check the result as a verifier will.
-	claims, err := json.Marshal(g)
-	if err != nil {
+	if g, err = grant.Prepare(v, g, *issuer, now, *ttl); err != nil {
 		return fail("%v", err)
 	}
-	if g, err = schema.Decode[v0.Grant](v, claims); err != nil {
-		return fail("claims: %v", err)
-	}
-
 	rec := grant.Record{Grant: g, Agent: g.Actor.Subject}
 	if *singleUse {
 		if bound.Resource == "" {
@@ -151,13 +126,13 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 	}
 
 	ctx := context.Background()
-	st, code, ok := openStore(ctx, *dsn, "grant mint", stderr)
+	reg, code, ok := openRegistry(ctx, &config.DefaultProvider{DSN: *dsn, MasterKey: *masterKey}, v, "grant mint", stderr)
 	if !ok {
 		return code
 	}
-	defer func() { _ = st.Close() }()
-
-	if err := mintable(ctx, st, v, g); err != nil {
+	defer func() { _ = reg.Close() }()
+	iss := grant.NewIssuer(reg)
+	if err := iss.Admissible(ctx, g); err != nil {
 		return fail("%v", err)
 	}
 	if *consentFile != "" {
@@ -168,12 +143,12 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 		if c.ID != g.Consent {
 			return fail("consent %s is not the one the grant names (%q)", c.ID, g.Consent)
 		}
-		if err := st.Consents().Create(ctx, c); err != nil && !errors.Is(err, x.ErrConflict) {
+		if err := reg.ConsentManager().Create(ctx, c); err != nil && !errors.Is(err, x.ErrConflict) {
 			return fail("consent %s: %v", c.ID, err)
 		}
 	}
 	if g.Consent != "" {
-		until, err := consentFits(ctx, st, v, g, now)
+		until, err := iss.ConsentUntil(ctx, g, now)
 		if err != nil {
 			return fail("%v", err)
 		}
@@ -183,155 +158,17 @@ func runGrantMint(args []string, stdout, stderr io.Writer) int {
 			rec.Grant = g
 		}
 	}
-	signer, err := jwk.NewKeyRing(st.Keys(), sl).Ensure(ctx)
-	if err != nil {
-		return fail("signing key: %v", err)
-	}
-	tok, err := grant.Sign(signer, g)
+	tok, kid, err := iss.Issue(ctx, rec)
 	if err != nil {
 		return fail("%v", err)
-	}
-	if err := st.Grants().Create(ctx, rec); err != nil {
-		return fail("recording %s: %v", g.ID, err)
 	}
 	fmt.Fprintln(stdout, tok)
 	if rec.SingleUse {
 		fmt.Fprintf(stderr, "single-use: only %s at %s with these arguments, action hash %s\n", bound.Action, bound.Resource, rec.ActionHash)
 	}
 	fmt.Fprintf(stderr, "minted %s for %s via agent %s under mandate %s, key %s, expires %s\n",
-		g.ID, g.Subject, g.Actor.Subject, g.Mandate, signer.KID, time.Unix(g.Expiry, 0).UTC().Format(time.RFC3339))
+		g.ID, g.Subject, g.Actor.Subject, g.Mandate, kid, time.Unix(g.Expiry, 0).UTC().Format(time.RFC3339))
 	return 0
-}
-
-// mintable refuses what the token service would: an agent that is not
-// registered or is suspended, a mandate that does not exist or is disabled,
-// a grant wider than the mandate. Building the grant from the mandate and
-// the agent is the token service's job; this only checks the result.
-func mintable(ctx context.Context, st persistence.Persister, v *schema.Validator, g v0.Grant) error {
-	doc, err := st.Documents().Current(ctx, v0.KindAgent, g.Actor.Subject)
-	if errors.Is(err, x.ErrNotFound) {
-		return fmt.Errorf("agent %s is not registered; PUT it through the Admin API first", g.Actor.Subject)
-	}
-	if err != nil {
-		return err
-	}
-	var a v0.Agent
-	if err := json.Unmarshal(doc.Doc, &a); err != nil {
-		return err
-	}
-	if a.Spec.Status == v0.AgentSuspended {
-		return fmt.Errorf("agent %s is suspended", g.Actor.Subject)
-	}
-	md, err := st.Documents().Current(ctx, v0.KindMandate, g.Mandate)
-	if errors.Is(err, x.ErrNotFound) {
-		return fmt.Errorf("mandate %s does not exist", g.Mandate)
-	}
-	if err != nil {
-		return err
-	}
-	if md.Disabled {
-		return fmt.Errorf("mandate %s is disabled", g.Mandate)
-	}
-	return grantWithin(ctx, st, v, g, md, fmt.Sprintf("mandate %s", g.Mandate))
-}
-
-// consentFits checks that a user grant rests on a recorded, active,
-// unexpired consent given to this agent for this mandate, and lies within
-// the mandate as the user saw it when consenting. It returns when the
-// consent expires: the grant must not outlive it.
-func consentFits(ctx context.Context, st persistence.Persister, v *schema.Validator, g v0.Grant, now time.Time) (time.Time, error) {
-	c, err := st.Consents().Get(ctx, g.Consent)
-	if errors.Is(err, x.ErrNotFound) {
-		return time.Time{}, fmt.Errorf("consent %s is not recorded; a grant to a user rests on one: pass --consent FILE", g.Consent)
-	}
-	if err != nil {
-		return time.Time{}, err
-	}
-	switch {
-	case c.Agent != g.Actor.Subject:
-		return time.Time{}, fmt.Errorf("consent %s was given to agent %s, not %s", c.ID, c.Agent, g.Actor.Subject)
-	case c.Mandate != g.Mandate:
-		return time.Time{}, fmt.Errorf("consent %s is for mandate %s, not %s", c.ID, c.Mandate, g.Mandate)
-	case c.Status != v0.ConsentActive:
-		return time.Time{}, fmt.Errorf("consent %s is %s", c.ID, c.Status)
-	case !now.Before(c.ExpiresAt.Time):
-		return time.Time{}, fmt.Errorf("consent %s expired at %s", c.ID, c.ExpiresAt.UTC().Format(v0.TimestampLayout))
-	}
-	seen, err := st.Documents().ByDigest(ctx, v0.KindMandate, g.Mandate, c.MandateVersion)
-	if errors.Is(err, x.ErrNotFound) {
-		return time.Time{}, fmt.Errorf("consent %s names version %s of mandate %s, which the box does not have", c.ID, c.MandateVersion, g.Mandate)
-	}
-	if err != nil {
-		return time.Time{}, err
-	}
-	// The mandate may have changed since: the grant must lie within what
-	// the user agreed to, as well as within the mandate as it is now.
-	who := fmt.Sprintf("mandate %s as consented to in %s (version %d)", g.Mandate, c.ID, seen.Version)
-	if err := grantWithin(ctx, st, v, g, seen, who); err != nil {
-		return time.Time{}, err
-	}
-	return c.ExpiresAt.Time, nil
-}
-
-// grantWithin checks a grant's permissions and budgets against one version
-// of its mandate.
-func grantWithin(ctx context.Context, st persistence.Persister, v *schema.Validator, g v0.Grant, md configuration.Document, who string) error {
-	m, err := schema.Decode[v0.Mandate](v, md.Doc)
-	if err != nil {
-		return fmt.Errorf("%s: %w", who, err)
-	}
-	declared, err := declaredParams(ctx, st, v)
-	if err != nil {
-		return err
-	}
-	problems := policy.Within(core.Permissions(g.AuthorizationDetails), "the grant", m.Spec.Permissions, who, declared)
-	for _, ml := range m.Spec.Limits {
-		found := false
-		for _, gl := range g.Limits {
-			if gl.Name != ml.Name {
-				continue
-			}
-			found = true
-			if gl.Kind != ml.Kind || gl.Field != ml.Field || gl.Max > ml.Max {
-				problems = append(problems, fmt.Sprintf("the grant's limit %s is looser than %s's", gl.Name, who))
-			}
-		}
-		if !found {
-			problems = append(problems, fmt.Sprintf("the grant lacks limit %s, which %s sets", ml.Name, who))
-		}
-	}
-	if len(problems) > 0 {
-		return fmt.Errorf("the grant goes beyond %s: %s", who, strings.Join(problems, "; "))
-	}
-	return nil
-}
-
-// declaredParams says which arguments each operation has, from the enabled
-// manifests.
-func declaredParams(ctx context.Context, st persistence.Persister, v *schema.Validator) (policy.Declared, error) {
-	docs, err := st.Documents().List(ctx, v0.KindManifest)
-	if err != nil {
-		return nil, err
-	}
-	byAud := make(map[string]v0.Manifest)
-	for _, d := range docs {
-		if d.Disabled {
-			continue
-		}
-		m, err := schema.Decode[v0.Manifest](v, d.Doc)
-		if err != nil {
-			return nil, fmt.Errorf("manifest %s: %w", d.Name, err)
-		}
-		byAud[m.Spec.Audience] = m
-	}
-	return func(location, action, field string) bool {
-		op := core.Operation(byAud[location], action)
-		if op == nil {
-			return true // an unknown operation: treat every bound as applying
-		}
-		_, ok := op.Params[field]
-		return ok
-	}, nil
 }
 
 func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -387,15 +224,17 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 		return 1
 	}
 	ctx := context.Background()
-	st, code, ok := openStore(ctx, *dsn, "grant verify", stderr)
+	reg, code, ok := openRegistry(ctx, &config.DefaultProvider{DSN: *dsn}, v, "grant verify", stderr)
 	if !ok {
 		return code
 	}
-	defer func() { _ = st.Close() }()
+	defer func() { _ = reg.Close() }()
+	st := reg.Persister()
 
+	// The command reads agents and mandates from the store as they stand,
+	// without a snapshot; looking up public keys needs no master key.
 	verifier := &grant.Verifier{
-		// Looking up public keys needs no master key.
-		Keys:      jwk.NewKeyRing(st.Keys(), nil),
+		Keys:      reg.KeyRing(),
 		Status:    grant.StoreStatus{Store: st},
 		Validator: v,
 		Issuer:    *issuer,
@@ -446,7 +285,7 @@ func runGrantVerify(args []string, stdin io.Reader, stdout, stderr io.Writer) in
 
 // spendCall draws an allowed call's budgets and spends its single-use grant,
 // all at once, and adds the limits check to the result.
-func spendCall(ctx context.Context, st persistence.Persister, r *grant.Result, call core.Call) ([]v0.LimitUse, error) {
+func spendCall(ctx context.Context, st budget.Allower, r *grant.Result, call core.Call) ([]v0.LimitUse, error) {
 	now := time.Now()
 	budgets, reason := core.Budgets(*r.Grant, call, now)
 	if reason != nil {
@@ -576,7 +415,7 @@ func readArgs(s string) (map[string]any, error) {
 }
 
 // manifestFor finds the enabled manifest whose audience is aud.
-func manifestFor(ctx context.Context, st persistence.Persister, v *schema.Validator, aud string) (v0.Manifest, error) {
+func manifestFor(ctx context.Context, st configuration.Store, v *schema.Validator, aud string) (v0.Manifest, error) {
 	docs, err := st.Documents().List(ctx, v0.KindManifest)
 	if err != nil {
 		return v0.Manifest{}, err
@@ -614,17 +453,22 @@ func readRecord[T schema.Document](v *schema.Validator, name string, kind schema
 	return schema.Decode[T](v, src[0].JSON)
 }
 
-func openStore(ctx context.Context, dsn, cmd string, stderr io.Writer) (*sql.Persister, int, bool) {
-	if dsn == "" {
+// openRegistry opens the box's registry for a command: the database the
+// settings name, and the master key when they give one.
+func openRegistry(ctx context.Context, conf *config.DefaultProvider, v *schema.Validator, cmd string, stderr io.Writer) (*driver.RegistryDefault, int, bool) {
+	if conf.DSN == "" {
 		fmt.Fprintf(stderr, "doorward %s: --db or DOORWARD_DB is required\n", cmd)
 		return nil, 2, false
 	}
-	st, err := sql.Open(ctx, dsn)
-	if err != nil {
+	reg := driver.New(conf)
+	if v != nil {
+		reg.WithValidator(v)
+	}
+	if err := reg.Open(ctx); err != nil {
 		fmt.Fprintf(stderr, "doorward %s: %v\n", cmd, err)
 		return nil, 1, false
 	}
-	return st, 0, true
+	return reg, 0, true
 }
 
 // parseFlags parses and reports whether to go on, and if not, the exit code.

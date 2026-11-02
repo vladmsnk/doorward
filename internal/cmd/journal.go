@@ -1,4 +1,4 @@
-package main
+package cmd
 
 import (
 	"bufio"
@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	v0 "github.com/vladmsnk/doorward/api/v0"
+	"github.com/vladmsnk/doorward/internal/driver/config"
 	"github.com/vladmsnk/doorward/internal/journal"
 	"github.com/vladmsnk/doorward/schema"
 )
@@ -44,14 +45,14 @@ func runJournalExport(args []string, stdout, stderr io.Writer) int {
 		return code
 	}
 	ctx := context.Background()
-	st, code, ok := openStore(ctx, *dsn, "journal export", stderr)
+	reg, code, ok := openRegistry(ctx, &config.DefaultProvider{DSN: *dsn}, nil, "journal export", stderr)
 	if !ok {
 		return code
 	}
-	defer func() { _ = st.Close() }()
+	defer func() { _ = reg.Close() }()
 	w := bufio.NewWriter(stdout)
 	defer func() { _ = w.Flush() }()
-	if err := journal.Export(ctx, st.Decisions(), *from, w); err != nil {
+	if err := journal.Export(ctx, reg.JournalManager(), *from, w); err != nil {
 		fmt.Fprintf(stderr, "doorward journal export: %v\n", err)
 		return 1
 	}
