@@ -43,8 +43,9 @@ func filterTools(res *http.Response, rw *rewrite) error {
 	return nil
 }
 
-// rewriteToolList filters result.tools in a JSON-RPC response for rw.id;
-// anything else is returned as it came.
+// rewriteToolList filters result.tools in a JSON-RPC response for rw.id,
+// and marks the list private: it is the caller's grant's, not the
+// server's. Anything else is returned as it came.
 func rewriteToolList(data []byte, rw *rewrite) []byte {
 	var msg struct {
 		ID     json.RawMessage `json:"id"`
@@ -76,6 +77,9 @@ func rewriteToolList(data []byte, rw *rewrite) []byte {
 	}
 	result := msg.Result
 	result["tools"], _ = json.Marshal(kept)
+	if _, ok := result["cacheScope"]; ok || rw.private {
+		result["cacheScope"] = json.RawMessage(`"private"`)
+	}
 	whole["result"], _ = json.Marshal(result)
 	out, err := json.Marshal(whole)
 	if err != nil {

@@ -8,9 +8,9 @@ it can read. The server behind the gateway keeps its own credential, which
 the agent never holds.
 
 The gateway implements the Streamable HTTP transport of the MCP
-specification, revision 2025-11-25, and the parts of its authorization
-section a resource server owns: Bearer tokens, audience checks, the 401
-challenge, and 403 `insufficient_scope`. It is deliberately thin: it does
+specification, revisions 2025-11-25 and 2026-07-28, and the parts of its
+authorization section a resource server owns: Bearer tokens, audience
+checks, the 401 challenge, and 403 `insufficient_scope`. It is deliberately thin: it does
 not convert APIs to MCP, federate servers or search tools. Any other
 gateway can do the same by calling the
 [evaluation endpoint](decision-point.md#decision-point).
@@ -53,8 +53,9 @@ other message is handled by what it is:
 | Message | What the gateway does |
 |---|---|
 | `tools/call` | Asks the decision point, in process, exactly as a gateway would over the evaluation API. **Allowed**: forwarded, with the upstream credential, and the answer streamed back. **Refused**: a tool execution error (`isError: true`) whose text carries the reason, so the model can correct itself; the server never hears of it. **Held**: a tool error naming the approval request, to be retried unchanged once a person approves. A tool the grant lacks gets `403` with `error="insufficient_scope"` and, as the scope, the mandates the caller could obtain to run it: enabled, for the same kind of principal as its grant, ones its agent may request (open ones, or those it lists once verified), and only when the agent's own ceiling allows the tool. When there are none, the refusal is a plain tool error, so a client is never sent to ask for what it cannot get. |
-| `tools/list` | Forwarded; the server's list is filtered to the tools the grant allows and the manifest declares, in plain JSON or inside the event stream. A tool the server offers but no manifest declares is never shown. |
-| `initialize`, `ping`, notifications, responses, resources, prompts, `GET` (listening stream), `DELETE` (session end) | Forwarded unchanged once the grant verifies. Session IDs and protocol versions are the server's. |
+| `tools/list` | Forwarded; the server's list is filtered to the tools the grant allows and the manifest declares, in plain JSON or inside the event stream. A tool the server offers but no manifest declares is never shown. The filtered list is the grant's, so it is marked `cacheScope: "private"` and no shared cache keeps it for others. |
+| `initialize` or `server/discover`, `ping`, `subscriptions/listen`, notifications, responses, `GET` (listening stream), `DELETE` (session end) | Forwarded unchanged once the grant verifies. Session IDs and protocol versions are the server's. |
+| Anything else: `resources/*`, `prompts/*`, `logging/*`, `sampling/*`, … | Refused with `-32601`, under 2026-07-28 with HTTP `404`: the manifest describes tools, so the gateway cannot decide on anything else. |
 
 The gateway never passes the agent's grant upstream, and it forwards only
 the headers the MCP transport defines (`MCP-Protocol-Version`, the
@@ -64,8 +65,8 @@ the headers the MCP transport defines (`MCP-Protocol-Version`, the
 identity such as an `X-Forwarded-*` header, is dropped; the upstream
 credential is set in its place.
 
-It takes one JSON-RPC message per request, as the 2025-11-25 transport
-requires; a batch is refused with `-32600`. A request whose `Origin` is
+It takes one JSON-RPC message per request, as the transport requires; a
+batch is refused with `-32600`. A request whose `Origin` is
 neither the gateway's own host nor one of `--gateway-origins` gets `403`.
 
 ## Reading the message the same way the server does
@@ -80,15 +81,28 @@ gateway refuses any message in which an object has two member names equal
 ignoring case, at any depth, with `-32600`, so the two readings cannot
 diverge.
 
+Revision 2026-07-28 mirrors parts of the body into headers, for
+intermediaries to route on: `MCP-Protocol-Version` repeats the version in
+the body's `_meta`, `Mcp-Method` the method, and `Mcp-Name` the tool's name,
+plainly or as `=?base64?…?=`. The gateway forwards these headers and decides
+on the body, so a header that says something else is the same split: one
+reading here, another wherever the header is read. A request whose headers
+do not match its body, gives one twice, or, under 2026-07-28, leaves out
+one the revision requires, is refused with HTTP `400` and `-32020`
+(`HeaderMismatch`) before anything is decided; an older client that sends
+the headers is held to the same.
+
 For the same reason the gateway decides only on what the manifest
 describes, which is tools. It passes through the protocol's own lifecycle
-(`initialize`, `ping`, `notifications/*`, and a client's response to a
-server-initiated request) once the grant verifies, and refuses every other
-method, `resources/*`, `prompts/*`, `logging/*`, `sampling/*` and the rest,
-with `-32601` rather than forward it undecided.
+(`initialize` or `server/discover`, `ping`, the `subscriptions/listen`
+stream, `notifications/*`, and a client's response to a server-initiated
+request) once the grant verifies, and refuses every other method,
+`resources/*`, `prompts/*`, `logging/*`, `sampling/*` and the rest, with
+`-32601` rather than forward it undecided.
 
 Results the gateway writes itself carry the decision under `_meta`, under
-the key `dev.doorward/decision`:
+the key `dev.doorward/decision`, and, under 2026-07-28, `resultType:
+"complete"`:
 
 ```json
 {"jsonrpc":"2.0","id":7,"result":{
@@ -255,15 +269,22 @@ the 401 (C3), the authorization server and consent page themselves (C4,
 C6), and the approval page a held call waits on (C9) follow on the
 [roadmap](ROADMAP.md).
 
-The import reads tools only: a server's resources and prompts pass through
-the gateway undecided, as they do now.
+The import reads tools only; resources and prompts stay refused at the
+gateway.
+
+Two parts of revision 2026-07-28 wait. Headers a tool's schema has mirrored
+from its arguments (`Mcp-Param-*`, from `x-mcp-header`) are forwarded
+without being checked against the arguments; checking them needs the
+manifest to record which argument each one mirrors, the next step. And a
+call that a server answers with a request for more input (multi round-trip
+requests) is decided, and counted against budgets, at each round.
 
 Two hardening steps also wait on later work. The `Origin` check still
 trusts the request's `Host` header, so a browser request whose `Host` and
 `Origin` both carry an attacker's name passes it; every request still needs
 a valid grant, which a cross-site page cannot obtain, and C3 adds the
 gateway's own public URL to check against. And the gateway does not yet tie
-a server's MCP session to the grant that opened it, so a server that keys
-state on its session ID alone, rather than on the per-call decision, leaves
-that state reachable by another grant that learns the ID; MCP removes
-protocol-level sessions in revision 2026-07-28.
+a server's MCP session to the grant that opened it, so under the older
+revisions a server that keys state on its session ID alone, rather than on
+the per-call decision, leaves that state reachable by another grant that
+learns the ID; revision 2026-07-28 has no sessions.

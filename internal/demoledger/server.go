@@ -17,8 +17,12 @@ import (
 	"sync"
 )
 
-// Protocol versions the server speaks, newest first.
-var versions = []string{"2025-11-25", "2025-06-18", "2025-03-26"}
+// Protocol versions the server speaks, newest first: 2026-07-28, where
+// every request carries its version, and the handshake-based ones before.
+var versions = []string{"2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"}
+
+// modern is the first version without the handshake.
+const modern = "2026-07-28"
 
 // Server is the demo ledger.
 type Server struct {
@@ -50,6 +54,8 @@ type Seen struct {
 	Method     string
 	Credential string // "api key", "other bearer", "none"
 	Tool       string
+	// Version is the MCP-Protocol-Version header, if any.
+	Version string
 	// Extra holds headers the gateway should never forward, so a test can
 	// confirm they were stripped. Empty when none arrived.
 	Extra map[string]string
@@ -151,7 +157,8 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.respond(w, nil, nil, &rpcError{-32700, "parse error"})
 		return
 	}
-	seen := Seen{Method: msg.Method, Credential: cred, Extra: extra}
+	seen := Seen{Method: msg.Method, Credential: cred, Extra: extra, Version: r.Header.Get("MCP-Protocol-Version")}
+	isModern := seen.Version >= modern
 	if len(msg.ID) == 0 { // a notification or a response: accepted
 		s.note(seen)
 		w.WriteHeader(http.StatusAccepted)
@@ -163,8 +170,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			ProtocolVersion string `json:"protocolVersion"`
 		}
 		_ = json.Unmarshal(msg.Params, &p)
-		v := versions[0]
-		for _, known := range versions {
+		// The handshake belongs to the versions before 2026-07-28.
+		v := versions[1]
+		for _, known := range versions[1:] {
 			if known == p.ProtocolVersion {
 				v = known
 			}
@@ -176,12 +184,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "demo-ledger", "version": "0.1"},
 		}, nil)
+	case "server/discover":
+		s.note(seen)
+		s.respond(w, msg.ID, complete(map[string]any{
+			"supportedVersions": versions,
+			"capabilities":      map[string]any{"tools": map[string]any{}},
+			"_meta":             map[string]any{"io.modelcontextprotocol/serverInfo": map[string]any{"name": "demo-ledger", "version": "0.1"}},
+			"ttlMs":             300000, "cacheScope": "public",
+		}), nil)
 	case "ping":
 		s.note(seen)
 		s.respond(w, msg.ID, map[string]any{}, nil)
 	case "tools/list":
 		s.note(seen)
 		page, rerr := s.toolPage(msg.Params)
+		if page != nil && isModern {
+			page["ttlMs"], page["cacheScope"] = 300000, "public"
+			page = complete(page)
+		}
 		s.respond(w, msg.ID, page, rerr)
 	case "tools/call":
 		var p struct {
@@ -195,11 +215,20 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		seen.Tool = p.Name
 		s.note(seen)
 		result, rerr := s.call(p.Name, p.Arguments)
+		if result != nil && isModern {
+			result = complete(result)
+		}
 		s.respond(w, msg.ID, result, rerr)
 	default:
 		s.note(seen)
 		s.respond(w, msg.ID, nil, &rpcError{-32601, "method not found: " + msg.Method})
 	}
+}
+
+// complete marks a result as final, as every result is from 2026-07-28.
+func complete(result map[string]any) map[string]any {
+	result["resultType"] = "complete"
+	return result
 }
 
 type rpcError struct {

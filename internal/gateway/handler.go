@@ -115,9 +115,14 @@ func (h *Handler) post(w http.ResponseWriter, r *http.Request, snap *configurati
 		writeRPCError(w, http.StatusBadRequest, nil, -32700, "the body is not a JSON-RPC message")
 		return
 	}
+	modern, err := checkHeaders(r.Header, msg)
+	if err != nil {
+		writeRPCError(w, http.StatusBadRequest, msg.ID, codeHeaderMismatch, "Header mismatch: "+err.Error())
+		return
+	}
 	switch msg.Method {
 	case "tools/call":
-		h.toolsCall(w, r, snap, man, token, msg, body)
+		h.toolsCall(w, r, snap, man, token, msg, body, modern)
 	case "tools/list":
 		res, err := h.r.GrantVerifier().Verify(r.Context(), token, man.Spec.Audience)
 		if err != nil {
@@ -130,20 +135,26 @@ func (h *Handler) post(w http.ResponseWriter, r *http.Request, snap *configurati
 		allowed := func(tool string) bool {
 			return policy.Allows(core.Permissions(res.Grant.AuthorizationDetails), man.Spec.Audience, tool) && core.Operation(man.Manifest, tool) != nil
 		}
-		h.proxy(w, r, snap, man, &rewrite{id: msg.ID, filter: allowed, body: body})
+		h.proxy(w, r, snap, man, &rewrite{id: msg.ID, filter: allowed, body: body, private: modern})
 	default:
 		// The manifest describes tools, nothing else, so the gateway can
 		// decide only on tools. It passes through the protocol's own
-		// housekeeping (initialize, ping, notifications, and a client's
-		// response to a server-initiated request) and refuses everything
-		// else it cannot reason about, rather than forward it undecided:
-		// resources, prompts, logging, sampling, completion.
+		// housekeeping (initialize or server/discover, ping, the
+		// subscription stream, notifications, and a client's response to a
+		// server-initiated request) and refuses everything else it cannot
+		// reason about, rather than forward it undecided: resources,
+		// prompts, logging, sampling, completion.
 		if !passthrough(msg.Method) {
 			if len(msg.ID) == 0 {
 				w.WriteHeader(http.StatusAccepted)
 				return
 			}
-			writeRPCError(w, http.StatusOK, msg.ID, -32601, fmt.Sprintf("doorward exposes only the tools this manifest describes; %q is not available through the gateway", msg.Method))
+			// A modern revision answers an unknown method with 404.
+			status := http.StatusOK
+			if modern {
+				status = http.StatusNotFound
+			}
+			writeRPCError(w, status, msg.ID, -32601, fmt.Sprintf("doorward exposes only the tools this manifest describes; %q is not available through the gateway", msg.Method))
 			return
 		}
 		res, err := h.r.GrantVerifier().Verify(r.Context(), token, man.Spec.Audience)
@@ -159,11 +170,12 @@ func (h *Handler) post(w http.ResponseWriter, r *http.Request, snap *configurati
 }
 
 // passthrough is the set of methods that carry no decision of their own
-// and may be forwarded once the grant verifies: the protocol's lifecycle
-// and a client's response (no method) to a server-initiated request.
+// and may be forwarded once the grant verifies: the protocol's lifecycle,
+// the stream of change notifications, and a client's response (no method)
+// to a server-initiated request.
 func passthrough(method string) bool {
 	switch method {
-	case "initialize", "ping", "":
+	case "initialize", "server/discover", "ping", "subscriptions/listen", "":
 		return true
 	default:
 		return strings.HasPrefix(method, "notifications/")

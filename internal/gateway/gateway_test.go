@@ -191,6 +191,10 @@ func (b *box) send(method, path, token string, body []byte, header map[string]st
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	for k, v := range header {
+		if v == "" {
+			req.Header.Del(k) // leave it out
+			continue
+		}
 		req.Header.Set(k, v)
 	}
 	res, err := http.DefaultClient.Do(req)
@@ -615,4 +619,117 @@ func TestGatewayStepUpNamesOnlyMandatesTheAgentCanGet(t *testing.T) {
 	}
 	// Above its ceiling: write_off is critical, the agent stops at write.
 	refused("above the ceiling", b.tool(helper, "write_off", map[string]any{"payment_id": "p", "amount": 1.0, "reason": "x"}))
+}
+
+// modern posts one 2026-07-28 request: the version in the body's _meta and
+// in the header, the method and name mirrored in headers. header, applied
+// last, changes or ("") removes any of them.
+func (b *box) modern(token string, method string, params map[string]any, header map[string]string) reply {
+	b.t.Helper()
+	if params == nil {
+		params = map[string]any{}
+	}
+	params["_meta"] = map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28"}
+	h := map[string]string{"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": method}
+	if name, ok := params["name"].(string); ok {
+		h["Mcp-Name"] = name
+	}
+	for k, v := range header {
+		h[k] = v
+	}
+	return b.rpc(token, 9, method, params, h)
+}
+
+func rpcErrorCode(r reply) float64 {
+	e, _ := r.msg["error"].(map[string]any)
+	code, _ := e["code"].(float64)
+	return code
+}
+
+func rpcErrorMessage(r reply) string {
+	e, _ := r.msg["error"].(map[string]any)
+	msg, _ := e["message"].(string)
+	return msg
+}
+
+// A 2026-07-28 client: no handshake, its version and the mirrored headers
+// on every request. The gateway decides as before, keeps its answers in
+// the revision's shape, and refuses headers that say something other than
+// the body.
+func TestGatewayModernRevision(t *testing.T) {
+	b := newBox(t)
+	rec := b.mint("grt_reconciler_modern_0001")
+	call := func(name string, args map[string]any) map[string]any {
+		return map[string]any{"name": name, "arguments": args}
+	}
+
+	r := b.modern(rec, "server/discover", nil, nil)
+	if versions, _ := r.result()["supportedVersions"].([]any); r.status != 200 || len(versions) == 0 || versions[0] != "2026-07-28" {
+		t.Fatalf("server/discover: %d %s", r.status, r.body)
+	}
+
+	// The list is the grant's, so it is private, whatever the server said.
+	r = b.modern(rec, "tools/list", nil, nil)
+	if got := strings.Join(r.tools(), " "); r.status != 200 || got != "list_unmatched post_entry write_off" ||
+		r.result()["cacheScope"] != "private" || r.result()["ttlMs"] != 300000.0 || r.result()["resultType"] != "complete" {
+		t.Fatalf("tools/list: %d %s", r.status, r.body)
+	}
+
+	if text, _, isErr := b.modern(rec, "tools/call", call("post_entry", entry(240.5)), nil).toolError(); isErr || !strings.HasPrefix(text, "posted ent_") {
+		t.Fatalf("post_entry: %s", text)
+	}
+	if seen := b.ledger.Requests(); seen[len(seen)-1].Version != "2026-07-28" {
+		t.Errorf("the ledger saw version %q", seen[len(seen)-1].Version)
+	}
+	// The gateway's own answers carry the revision's resultType.
+	r = b.modern(rec, "tools/call", call("post_entry", entry(5000)), nil)
+	if _, meta, isErr := r.toolError(); !isErr || meta["outcome"] != "deny" || r.result()["resultType"] != "complete" {
+		t.Errorf("refusal: %s", r.body)
+	}
+	// A name in base64, as a client must send one that is not plain ASCII.
+	r = b.modern(rec, "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Name": "=?base64?cG9zdF9lbnRyeQ==?="})
+	if _, _, isErr := r.toolError(); r.status != 200 || isErr {
+		t.Errorf("encoded name: %d %s", r.status, r.body)
+	}
+
+	before := len(b.ledger.Requests())
+	for _, tc := range []struct {
+		name   string
+		method string
+		params map[string]any
+		header map[string]string
+		want   string
+	}{
+		{"another tool in the header", "tools/call", call("write_off", map[string]any{"payment_id": "p", "amount": 1.0, "reason": "x"}),
+			map[string]string{"Mcp-Name": "list_unmatched"}, `Mcp-Name header value "list_unmatched" does not match body value "write_off"`},
+		{"another method in the header", "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Method": "tools/list"}, "Mcp-Method header value"},
+		{"no name header", "tools/call", call("post_entry", entry(1)), map[string]string{"Mcp-Name": ""}, "the Mcp-Name header is missing"},
+		{"no method header", "tools/list", nil, map[string]string{"Mcp-Method": ""}, "the Mcp-Method header is missing"},
+		{"another version in the header", "tools/list", nil, map[string]string{"MCP-Protocol-Version": "2025-11-25"}, "MCP-Protocol-Version header value"},
+		{"no version header", "tools/list", nil, map[string]string{"MCP-Protocol-Version": ""}, "the MCP-Protocol-Version header is missing"},
+	} {
+		r := b.modern(rec, tc.method, tc.params, tc.header)
+		if r.status != 400 || rpcErrorCode(r) != -32020 || !strings.Contains(rpcErrorMessage(r), tc.want) {
+			t.Errorf("%s: %d %s", tc.name, r.status, r.body)
+		}
+	}
+	// An older client's headers, when it sends them, must agree too: the
+	// gateway forwards them.
+	r = b.rpc(rec, 9, "tools/call", call("write_off", map[string]any{"payment_id": "p", "amount": 1.0, "reason": "x"}), map[string]string{"Mcp-Name": "list_unmatched"})
+	if r.status != 400 || rpcErrorCode(r) != -32020 {
+		t.Errorf("older client, mismatched header: %d %s", r.status, r.body)
+	}
+	if len(b.ledger.Requests()) != before {
+		t.Error("a request whose headers disagree with its body reached the ledger")
+	}
+
+	// What the manifest cannot describe: 404, as the revision answers an
+	// unknown method. The subscription stream is the server's.
+	if r := b.modern(rec, "resources/list", nil, nil); r.status != 404 || rpcErrorCode(r) != -32601 {
+		t.Errorf("resources/list: %d %s", r.status, r.body)
+	}
+	b.modern(rec, "subscriptions/listen", map[string]any{"notifications": map[string]any{"toolsListChanged": true}}, nil)
+	if seen := b.ledger.Requests(); seen[len(seen)-1].Method != "subscriptions/listen" {
+		t.Errorf("subscriptions/listen did not reach the server: %+v", seen[len(seen)-1])
+	}
 }
