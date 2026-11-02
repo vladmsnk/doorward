@@ -43,9 +43,9 @@ type Follower struct {
 	once sync.Once
 }
 
-// New returns a follower that writes records from seq `from` on to w. Run
-// starts it.
-func New(src Manager, w io.Writer, from uint64, poll time.Duration, log *slog.Logger) *Follower {
+// NewFollower returns a follower that writes records from seq `from` on
+// to w. Run starts it.
+func NewFollower(src Manager, w io.Writer, from uint64, poll time.Duration, log *slog.Logger) *Follower {
 	if poll <= 0 {
 		poll = DefaultPoll
 	}

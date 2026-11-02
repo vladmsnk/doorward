@@ -129,7 +129,7 @@ func newBox(t testing.TB, opts ...func(*pdp.PDP)) *box {
 	}
 	clock := func() time.Time { return now }
 	b := &box{t: t, st: st, v: v, signer: signer, journal: &syncBuffer{}}
-	b.follower = journal.New(st.Decisions(), b.journal, 0, 10*time.Millisecond, nil)
+	b.follower = journal.NewFollower(st.Decisions(), b.journal, 0, 10*time.Millisecond, nil)
 	fctx, fcancel := context.WithCancel(ctx)
 	go b.follower.Run(fctx)
 	t.Cleanup(fcancel)
@@ -732,7 +732,7 @@ func TestJournalFollowsEveryInstance(t *testing.T) {
 	if err != nil || from != 3 {
 		t.Fatalf("Resume: %d %v", from, err)
 	}
-	resumed := journal.New(b.st.Decisions(), f, from, time.Hour, nil)
+	resumed := journal.NewFollower(b.st.Decisions(), f, from, time.Hour, nil)
 	if err := resumed.Drain(ctx); err != nil {
 		t.Fatal(err)
 	}
